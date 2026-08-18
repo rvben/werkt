@@ -17,6 +17,7 @@ This is an executable MVP, not yet a production sandbox.
 - ntfy subscriptions using its streaming JSON API
 - A language-neutral execution contract with local-process and Husker backends
 - Bearer-protected management API for external agents and operators
+- Responsive management workspace at `/app/`, backed only by that public API
 - Filtered inventory, automation detail, pause/resume, manual runs, and audit history
 - Explicit runtime secret mapping without persisted secret values
 - Python, Rust, and Go examples
@@ -45,6 +46,8 @@ export PYTHON_HELLO_WEBHOOK_SECRET='development-webhook-secret-change-me'
 export PYTHON_HELLO_EMAIL_TOKEN='development-email-token-change-me-now'
 go run ./cmd/werkt serve -workers 2
 ```
+
+Open [http://localhost:8080/app/](http://localhost:8080/app/) to use the management workspace. If `WERKT_MANAGEMENT_TOKEN` is set, connect with the same token used by API clients; it remains scoped to the browser tab. The workspace does not have a privileged control path and attributes its mutations as `workspace:operator`.
 
 Invoke its webhook from another terminal:
 
@@ -98,7 +101,7 @@ curl -H "Authorization: Bearer $WERKT_MANAGEMENT_TOKEN" \
   http://localhost:8080/api/v1/automations/go-hello/runs
 ```
 
-See [docs/management-api.md](docs/management-api.md) for the full agent-facing contract.
+See [docs/management-api.md](docs/management-api.md) for the full agent-facing contract and the workspace/API relationship.
 
 Deploying the Rust example runs its `cargo build --release` build command once. With the Husker backend, that build runs in the manifest's disposable `rust:1.88-bookworm` build VM; the resulting workspace becomes the immutable artifact:
 
