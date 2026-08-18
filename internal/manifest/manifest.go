@@ -22,6 +22,8 @@ import (
 const Filename = "automation.yaml"
 
 var identifier = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var headerName = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 
 func Load(directory string) (domain.Manifest, error) {
 	file, err := os.Open(filepath.Join(directory, Filename))
@@ -72,19 +74,43 @@ func Validate(value domain.Manifest) error {
 		seen[trigger.ID] = struct{}{}
 		switch trigger.Type {
 		case "schedule":
+			problems = append(problems, unexpectedTriggerConfig(path, trigger.Config, "cron", "timezone")...)
 			expression, _ := trigger.Config["cron"].(string)
 			if expression == "" {
 				problems = append(problems, path+".config.cron is required")
 			} else if _, err := cron.ParseStandard(expression); err != nil {
 				problems = append(problems, path+".config.cron is invalid: "+err.Error())
 			}
-			if timezone, _ := trigger.Config["timezone"].(string); timezone != "" {
+			if raw, exists := trigger.Config["timezone"]; exists {
+				timezone, valid := raw.(string)
+				if !valid {
+					problems = append(problems, path+".config.timezone must be a string")
+					break
+				}
 				if _, err := time.LoadLocation(timezone); err != nil {
 					problems = append(problems, path+".config.timezone is invalid")
 				}
 			}
-		case "webhook", "email":
+		case "webhook":
+			problems = append(problems, unexpectedTriggerConfig(path, trigger.Config, "secretEnv", "signatureHeader")...)
+			secretEnv, _ := trigger.Config["secretEnv"].(string)
+			if !validSecretReference(secretEnv) {
+				problems = append(problems, path+".config.secretEnv must name a non-WERKT environment variable")
+			}
+			if raw, exists := trigger.Config["signatureHeader"]; exists {
+				signatureHeader, valid := raw.(string)
+				if !valid || signatureHeader == "" || !headerName.MatchString(signatureHeader) {
+					problems = append(problems, path+".config.signatureHeader is invalid")
+				}
+			}
+		case "email":
+			problems = append(problems, unexpectedTriggerConfig(path, trigger.Config, "tokenEnv")...)
+			tokenEnv, _ := trigger.Config["tokenEnv"].(string)
+			if !validSecretReference(tokenEnv) {
+				problems = append(problems, path+".config.tokenEnv must name a non-WERKT environment variable")
+			}
 		case "ntfy":
+			problems = append(problems, unexpectedTriggerConfig(path, trigger.Config, "server", "topic", "tokenEnv")...)
 			server, _ := trigger.Config["server"].(string)
 			topic, _ := trigger.Config["topic"].(string)
 			if server == "" {
@@ -92,6 +118,9 @@ func Validate(value domain.Manifest) error {
 			}
 			if topic == "" {
 				problems = append(problems, path+".config.topic is required")
+			}
+			if tokenEnv, _ := trigger.Config["tokenEnv"].(string); tokenEnv != "" && !validSecretReference(tokenEnv) {
+				problems = append(problems, path+".config.tokenEnv must name a non-WERKT environment variable")
 			}
 		default:
 			problems = append(problems, path+".type must be schedule, webhook, email, or ntfy")
@@ -108,8 +137,25 @@ func Validate(value domain.Manifest) error {
 		problems = append(problems, "runtime.build must start with an executable")
 	}
 	for key := range value.Runtime.Environment {
+		if !environmentName.MatchString(key) {
+			problems = append(problems, "runtime.environment contains invalid variable name "+key)
+		}
 		if strings.HasPrefix(key, "WERKT_") {
 			problems = append(problems, "runtime.environment cannot override reserved WERKT_ variables")
+		}
+	}
+	for target, source := range value.Runtime.Secrets {
+		if !environmentName.MatchString(target) {
+			problems = append(problems, "runtime.secrets contains invalid target variable name "+target)
+		}
+		if strings.HasPrefix(target, "WERKT_") {
+			problems = append(problems, "runtime.secrets cannot override reserved WERKT_ variables")
+		}
+		if !validSecretReference(source) {
+			problems = append(problems, "runtime.secrets source for "+target+" must name a non-WERKT environment variable")
+		}
+		if _, exists := value.Runtime.Environment[target]; exists {
+			problems = append(problems, "runtime.secrets target "+target+" duplicates runtime.environment")
 		}
 	}
 	if value.Execution.Timeout != "" {
@@ -128,6 +174,25 @@ func Validate(value domain.Manifest) error {
 		return errors.New(strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+func unexpectedTriggerConfig(path string, config map[string]any, allowed ...string) []string {
+	allowedKeys := make(map[string]struct{}, len(allowed))
+	for _, key := range allowed {
+		allowedKeys[key] = struct{}{}
+	}
+	var problems []string
+	for key := range config {
+		if _, exists := allowedKeys[key]; !exists {
+			problems = append(problems, path+".config."+key+" is not supported")
+		}
+	}
+	sort.Strings(problems)
+	return problems
+}
+
+func validSecretReference(value string) bool {
+	return environmentName.MatchString(value) && !strings.HasPrefix(value, "WERKT_")
 }
 
 func CanonicalJSON(value domain.Manifest) ([]byte, error) {

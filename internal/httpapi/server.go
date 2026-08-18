@@ -3,9 +3,11 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/mail"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +27,10 @@ import (
 
 const maxWebhookBody = 2 << 20
 const maxEmailBody = 12 << 20
+const minimumIngressSecretBytes = 32
+const defaultWebhookSignatureHeader = "X-Werkt-Signature"
+const webhookTimestampHeader = "X-Werkt-Timestamp"
+const webhookSignatureTolerance = 5 * time.Minute
 
 //go:embed openapi.yaml
 var openAPIFS embed.FS
@@ -37,6 +44,7 @@ type Server struct {
 type Store interface {
 	Ping(context.Context) error
 	IngestEvent(context.Context, string, string, string, string, time.Time, json.RawMessage, map[string]any) (string, bool, error)
+	GetTriggerIngressPolicy(context.Context, string, string, string) (database.TriggerIngressPolicy, error)
 	ListAutomations(context.Context, database.AutomationFilter) ([]database.AutomationSummary, error)
 	GetAutomation(context.Context, string) (database.AutomationDetail, error)
 	SetAutomationEnabled(context.Context, string, bool, string) (bool, error)
@@ -70,6 +78,31 @@ func New(store Store, address, managementToken string) *Server {
 }
 
 func (s *Server) email(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Cache-Control", "no-store")
+	policy, ok := s.triggerIngressPolicy(response, request, "email")
+	if !ok {
+		return
+	}
+	var config struct {
+		TokenEnv string `json:"tokenEnv"`
+	}
+	if err := json.Unmarshal(policy.Config, &config); err != nil || config.TokenEnv == "" {
+		slog.Error("email trigger has invalid credential configuration", "automation", request.PathValue("automation"), "trigger", request.PathValue("trigger"))
+		writeError(response, http.StatusServiceUnavailable, "trigger credential unavailable")
+		return
+	}
+	token, ok := ingressSecret(response, config.TokenEnv)
+	if !ok {
+		return
+	}
+	provided, found := strings.CutPrefix(request.Header.Get("Authorization"), "Bearer ")
+	expectedHash := sha256.Sum256(token)
+	providedHash := sha256.Sum256([]byte(provided))
+	if !found || subtle.ConstantTimeCompare(expectedHash[:], providedHash[:]) != 1 {
+		response.Header().Set("WWW-Authenticate", `Bearer realm="werkt-email-ingress"`)
+		writeError(response, http.StatusUnauthorized, "invalid trigger credential")
+		return
+	}
 	raw, err := io.ReadAll(http.MaxBytesReader(response, request.Body, maxEmailBody))
 	if err != nil {
 		writeError(response, http.StatusBadRequest, "invalid or oversized email")
@@ -96,6 +129,10 @@ func (s *Server) email(response http.ResponseWriter, request *http.Request) {
 	externalID := message.Header.Get("Message-Id")
 	if externalID == "" {
 		externalID = request.Header.Get("Idempotency-Key")
+	}
+	if externalID == "" {
+		writeError(response, http.StatusBadRequest, "Message-Id or Idempotency-Key is required")
+		return
 	}
 	occurredAt := time.Now().UTC()
 	if parsed, err := message.Header.Date(); err == nil {
@@ -150,9 +187,57 @@ func (s *Server) openAPI(response http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) webhook(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Cache-Control", "no-store")
+	policy, ok := s.triggerIngressPolicy(response, request, "webhook")
+	if !ok {
+		return
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(response, request.Body, maxWebhookBody))
 	if err != nil {
 		writeError(response, http.StatusBadRequest, "invalid or oversized request body")
+		return
+	}
+	var config struct {
+		SecretEnv       string `json:"secretEnv"`
+		SignatureHeader string `json:"signatureHeader"`
+	}
+	if err := json.Unmarshal(policy.Config, &config); err != nil || config.SecretEnv == "" {
+		slog.Error("webhook trigger has invalid credential configuration", "automation", request.PathValue("automation"), "trigger", request.PathValue("trigger"))
+		writeError(response, http.StatusServiceUnavailable, "trigger credential unavailable")
+		return
+	}
+	secret, ok := ingressSecret(response, config.SecretEnv)
+	if !ok {
+		return
+	}
+	header := config.SignatureHeader
+	if header == "" {
+		header = defaultWebhookSignatureHeader
+	}
+	idempotencyKey := request.Header.Get("Idempotency-Key")
+	if idempotencyKey == "" {
+		writeError(response, http.StatusBadRequest, "Idempotency-Key is required")
+		return
+	}
+	if len(idempotencyKey) > 255 {
+		writeError(response, http.StatusBadRequest, "Idempotency-Key cannot exceed 255 bytes")
+		return
+	}
+	timestampValue := request.Header.Get(webhookTimestampHeader)
+	timestampSeconds, timestampErr := strconv.ParseInt(timestampValue, 10, 64)
+	timestamp := time.Unix(timestampSeconds, 0)
+	age := time.Since(timestamp)
+	if timestampErr != nil || age < -webhookSignatureTolerance || age > webhookSignatureTolerance {
+		writeError(response, http.StatusUnauthorized, "invalid or stale trigger timestamp")
+		return
+	}
+	provided, found := strings.CutPrefix(request.Header.Get(header), "sha256=")
+	providedDigest, decodeErr := hex.DecodeString(provided)
+	expectedDigest := hmac.New(sha256.New, secret)
+	_, _ = io.WriteString(expectedDigest, timestampValue+"."+idempotencyKey+".")
+	_, _ = expectedDigest.Write(body)
+	if !found || decodeErr != nil || len(providedDigest) != sha256.Size || !hmac.Equal(expectedDigest.Sum(nil), providedDigest) {
+		writeError(response, http.StatusUnauthorized, "invalid trigger signature")
 		return
 	}
 	data := json.RawMessage(body)
@@ -179,6 +264,31 @@ func (s *Server) webhook(response http.ResponseWriter, request *http.Request) {
 		status = http.StatusOK
 	}
 	writeJSON(response, status, map[string]any{"runId": runID, "created": created})
+}
+
+func (s *Server) triggerIngressPolicy(response http.ResponseWriter, request *http.Request, triggerType string) (database.TriggerIngressPolicy, bool) {
+	policy, err := s.store.GetTriggerIngressPolicy(
+		request.Context(), request.PathValue("automation"), request.PathValue("trigger"), triggerType,
+	)
+	if errors.Is(err, database.ErrTriggerNotFound) {
+		writeError(response, http.StatusNotFound, "enabled trigger not found")
+		return database.TriggerIngressPolicy{}, false
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "read trigger policy")
+		return database.TriggerIngressPolicy{}, false
+	}
+	return policy, true
+}
+
+func ingressSecret(response http.ResponseWriter, environmentVariable string) ([]byte, bool) {
+	secret, exists := os.LookupEnv(environmentVariable)
+	if !exists || len(secret) < minimumIngressSecretBytes {
+		slog.Error("trigger credential is missing or too short", "environmentVariable", environmentVariable, "minimumBytes", minimumIngressSecretBytes)
+		writeError(response, http.StatusServiceUnavailable, "trigger credential unavailable")
+		return nil, false
+	}
+	return []byte(secret), true
 }
 
 func (s *Server) automations(response http.ResponseWriter, request *http.Request) {

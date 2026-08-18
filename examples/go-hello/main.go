@@ -17,9 +17,10 @@ func main() {
 	}
 	fmt.Printf("{\"message\":\"Go received an event\",\"eventId\":%q}\n", envelope["id"])
 	result := map[string]any{
-		"language": "go",
-		"trigger":  envelope["trigger"],
-		"received": envelope["data"],
+		"language":         "go",
+		"trigger":          envelope["trigger"],
+		"received":         envelope["data"],
+		"secretConfigured": os.Getenv("EXAMPLE_SERVICE_TOKEN") != "",
 	}
 	encoded, err := json.Marshal(result)
 	if err != nil {

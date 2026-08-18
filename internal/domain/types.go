@@ -47,6 +47,7 @@ type Runtime struct {
 	Build       []string          `yaml:"build,omitempty" json:"build,omitempty"`
 	Command     []string          `yaml:"command" json:"command"`
 	Environment map[string]string `yaml:"environment,omitempty" json:"environment,omitempty"`
+	Secrets     map[string]string `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 }
 
 type Execution struct {

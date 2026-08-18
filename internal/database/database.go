@@ -22,6 +22,7 @@ var (
 	ErrRunLeaseLost       = errors.New("run lease ownership was lost")
 	ErrAutomationNotFound = errors.New("automation not found")
 	ErrRunNotFound        = errors.New("run not found")
+	ErrTriggerNotFound    = errors.New("enabled trigger not found")
 )
 
 //go:embed migrations/*.sql
@@ -79,6 +80,10 @@ type AuditEvent struct {
 	Actor        string          `json:"actor"`
 	Details      json.RawMessage `json:"details"`
 	CreatedAt    time.Time       `json:"createdAt"`
+}
+
+type TriggerIngressPolicy struct {
+	Config json.RawMessage
 }
 
 func Open(ctx context.Context, databaseURL string) (*Store, error) {
@@ -245,6 +250,21 @@ func (s *Store) IngestEvent(ctx context.Context, automationID, triggerID, expect
 		return "", false, err
 	}
 	return runID, created, nil
+}
+
+func (s *Store) GetTriggerIngressPolicy(ctx context.Context, automationID, triggerID, expectedType string) (TriggerIngressPolicy, error) {
+	var policy TriggerIngressPolicy
+	err := s.pool.QueryRow(ctx, `
+		SELECT t.config
+		FROM triggers t
+		JOIN automations a ON a.id = t.automation_id AND a.active_revision_id = t.revision_id
+		WHERE t.automation_id = $1 AND t.id = $2 AND t.type = $3
+			AND t.enabled = true AND a.enabled = true`, automationID, triggerID, expectedType).
+		Scan(&policy.Config)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return TriggerIngressPolicy{}, ErrTriggerNotFound
+	}
+	return policy, err
 }
 
 func enqueueEvent(ctx context.Context, tx pgx.Tx, automationID, triggerID, expectedType, externalID string, occurredAt time.Time, data json.RawMessage, metadata map[string]any) (string, bool, error) {

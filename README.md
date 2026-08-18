@@ -12,12 +12,13 @@ This is an executable MVP, not yet a production sandbox.
 - Immutable deployment artifacts
 - PostgreSQL-backed events, run queue, retries, worker leases, and concurrency policies
 - Cron schedules with IANA time zones
-- Webhook triggers with idempotency keys
-- RFC 5322 email ingestion for mail-provider or forwarding integrations
+- HMAC-authenticated webhook triggers with idempotency keys
+- Bearer-authenticated RFC 5322 email ingestion
 - ntfy subscriptions using its streaming JSON API
 - A language-neutral execution contract with local-process and Husker backends
 - Bearer-protected management API for external agents and operators
 - Filtered inventory, automation detail, pause/resume, manual runs, and audit history
+- Explicit runtime secret mapping without persisted secret values
 - Python, Rust, and Go examples
 - HTTP endpoints for health, automations, hooks, and run history
 - CLI commands for validation, deployment, serving, and inspection
@@ -40,23 +41,32 @@ go run ./cmd/werkt deploy ./examples/python-hello
 Start the control plane and two local workers:
 
 ```bash
+export PYTHON_HELLO_WEBHOOK_SECRET='development-webhook-secret-change-me'
+export PYTHON_HELLO_EMAIL_TOKEN='development-email-token-change-me-now'
 go run ./cmd/werkt serve -workers 2
 ```
 
 Invoke its webhook from another terminal:
 
 ```bash
+payload='{"name":"Ruben"}'
+timestamp="$(date +%s)"
+idempotency_key='getting-started-1'
+signature="$(printf '%s' "$timestamp.$idempotency_key.$payload" | openssl dgst -sha256 -hmac "$PYTHON_HELLO_WEBHOOK_SECRET" -hex | awk '{print $2}')"
 curl -i \
   -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: getting-started-1' \
-  -d '{"name":"Ruben"}' \
+  -H "Idempotency-Key: $idempotency_key" \
+  -H "X-Werkt-Timestamp: $timestamp" \
+  -H "X-Werkt-Signature: sha256=$signature" \
+  --data-binary "$payload" \
   http://localhost:8080/api/v1/hooks/python-hello/incoming
 ```
 
 An email provider or forwarding service can post a raw message to an `email` trigger:
 
 ```bash
-curl --data-binary $'Message-Id: <example-1@example.com>\nFrom: sender@example.com\nTo: automations@example.com\nSubject: Hello\n\nEmail body' \
+curl -H "Authorization: Bearer $PYTHON_HELLO_EMAIL_TOKEN" \
+  --data-binary $'Message-Id: <example-1@example.com>\nFrom: sender@example.com\nTo: automations@example.com\nSubject: Hello\n\nEmail body' \
   http://localhost:8080/api/v1/email/python-hello/mail
 ```
 
@@ -94,7 +104,14 @@ Deploying the Rust example runs its `cargo build --release` build command once. 
 
 ```bash
 go run ./cmd/werkt deploy ./examples/rust-hello
-curl -d '{"from":"rust"}' http://localhost:8080/api/v1/hooks/rust-hello/incoming
+export RUST_HELLO_WEBHOOK_SECRET='development-rust-secret-change-me-now'
+payload='{"from":"rust"}'
+timestamp="$(date +%s)"
+idempotency_key='rust-example-1'
+signature="$(printf '%s' "$timestamp.$idempotency_key.$payload" | openssl dgst -sha256 -hmac "$RUST_HELLO_WEBHOOK_SECRET" -hex | awk '{print $2}')"
+curl -H "Idempotency-Key: $idempotency_key" -H "X-Werkt-Timestamp: $timestamp" \
+  -H "X-Werkt-Signature: sha256=$signature" --data-binary "$payload" \
+  http://localhost:8080/api/v1/hooks/rust-hello/incoming
 ```
 
 ## Automation package
@@ -115,10 +132,14 @@ triggers:
       timezone: Europe/Amsterdam
   - id: incoming
     type: webhook
+    config:
+      secretEnv: PROCESS_ALERT_WEBHOOK_SECRET
 runtime:
   language: python
   image: python:3.13-alpine
   command: [python3, main.py]
+  secrets:
+    INCIDENT_API_TOKEN: PROCESS_ALERT_INCIDENT_API_TOKEN
 execution:
   timeout: 5m
   retries: 3
@@ -126,6 +147,8 @@ execution:
 ```
 
 `runtime.language` is descriptive. The actual contract is `runtime.command`, so any executable language works. `runtime.image` names the Husker rootfs catalog entry or OCI reference that provides that command. When `runtime.build` is present, `runtime.buildImage` can select a separate toolchain image; otherwise the runtime image is reused. Both image fields are ignored by the local process executor. A daemon-wide `WERKT_HUSKER_ROOTFS` can be used as a fallback.
+
+Trigger credentials and `runtime.secrets` contain environment-variable references only. Values are resolved at ingress or immediately before a run and never stored in PostgreSQL. See [docs/security.md](docs/security.md) for signing, token, and isolation details.
 
 ## Process protocol
 
@@ -181,7 +204,7 @@ The event envelope is stable across every trigger and runtime:
 | `WERKT_HUSKER_PROVISION_TIMEOUT` | `2m` |
 | `WERKT_HUSKER_CLEANUP_TIMEOUT` | `30s` |
 
-An ntfy trigger accepts `server`, `topic`, and an optional `tokenEnv`. The token is read from the control-plane environment and is not stored in the manifest.
+Webhook `secretEnv`, email `tokenEnv`, ntfy `tokenEnv`, and runtime secret references are read from the control-plane environment and are not stored as values in the manifest or database.
 
 ## Running through Husker
 
@@ -195,4 +218,4 @@ See [docs/execution.md](docs/execution.md) for the complete boundary and failure
 
 ## Current trust boundary
 
-The `process` executor runs builds and deployed commands as child processes on the control-plane host and is for trusted local development only. The `husker` executor isolates both builds and runtime code in separate microVMs, but Husker is currently a single-host, single-trust-domain system rather than a hostile multi-tenant service. Secret injection, signed artifacts, dependency caches, and stronger outbound allowlists remain production-hardening work.
+The `process` executor runs builds and deployed commands as child processes on the control-plane host and is for trusted local development only. Runtime children receive an allowlisted base environment plus explicit secret mappings, but local build commands still inherit the host environment. The `husker` executor isolates both builds and runtime code in separate microVMs, but Husker is currently a single-host, single-trust-domain system rather than a hostile multi-tenant service. A dedicated secret backend with rotation and log redaction, signed artifacts, dependency caches, and stronger outbound allowlists remain production-hardening work.
