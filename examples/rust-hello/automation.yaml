@@ -1,0 +1,34 @@
+apiVersion: werkt.dev/v1
+kind: Automation
+
+metadata:
+  name: rust-hello
+  project: examples
+  folder: getting-started
+  description: Demonstrates the same process protocol from a compiled Rust binary.
+  labels: [rust, example]
+
+triggers:
+  - id: incoming
+    type: webhook
+
+  - id: ntfy-example
+    type: ntfy
+    enabled: false
+    config:
+      server: https://ntfy.sh
+      topic: replace-with-a-private-topic
+
+runtime:
+  language: rust
+  image: debian:bookworm-slim
+  buildImage: rust:1.88-bookworm
+  build: [cargo, build, --release]
+  command: [./target/release/rust-hello]
+  environment:
+    RUST_BACKTRACE: "1"
+
+execution:
+  timeout: 30s
+  retries: 1
+  concurrency: allow

@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: automations
+      POSTGRES_USER: automations
+      POSTGRES_PASSWORD: automations
+    ports:
+      - "54329:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U automations"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    volumes:
+      - automation-postgres:/var/lib/postgresql/data
+
+volumes:
+  automation-postgres:
