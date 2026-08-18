@@ -11,6 +11,7 @@ type Config struct {
 	DatabaseURL            string
 	DataDir                string
 	ListenAddress          string
+	ManagementToken        string
 	WorkerPoll             time.Duration
 	SchedulerPoll          time.Duration
 	ShutdownPeriod         time.Duration
@@ -33,7 +34,8 @@ func Load() Config {
 	return Config{
 		DatabaseURL:            env("WERKT_DATABASE_URL", "postgres://automations:automations@localhost:54329/automations?sslmode=disable"),
 		DataDir:                env("WERKT_DATA_DIR", filepath.Join(".", "data")),
-		ListenAddress:          env("WERKT_LISTEN_ADDR", ":8080"),
+		ListenAddress:          env("WERKT_LISTEN_ADDR", "127.0.0.1:8080"),
+		ManagementToken:        os.Getenv("WERKT_MANAGEMENT_TOKEN"),
 		WorkerPoll:             durationEnv("WERKT_WORKER_POLL", 500*time.Millisecond),
 		SchedulerPoll:          durationEnv("WERKT_SCHEDULER_POLL", time.Second),
 		ShutdownPeriod:         durationEnv("WERKT_SHUTDOWN_PERIOD", 10*time.Second),

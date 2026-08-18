@@ -16,6 +16,8 @@ This is an executable MVP, not yet a production sandbox.
 - RFC 5322 email ingestion for mail-provider or forwarding integrations
 - ntfy subscriptions using its streaming JSON API
 - A language-neutral execution contract with local-process and Husker backends
+- Bearer-protected management API for external agents and operators
+- Filtered inventory, automation detail, pause/resume, manual runs, and audit history
 - Python, Rust, and Go examples
 - HTTP endpoints for health, automations, hooks, and run history
 - CLI commands for validation, deployment, serving, and inspection
@@ -64,6 +66,29 @@ Inspect runs:
 go run ./cmd/werkt runs
 curl http://localhost:8080/api/v1/runs
 ```
+
+For a non-local deployment, configure a management token:
+
+```bash
+export WERKT_MANAGEMENT_TOKEN='replace-with-a-secret'
+curl -H "Authorization: Bearer $WERKT_MANAGEMENT_TOKEN" \
+  'http://localhost:8080/api/v1/automations?project=examples&enabled=true'
+```
+
+Pause an automation without disabling manual diagnosis, then queue an idempotent manual run:
+
+```bash
+curl -X PATCH -H "Authorization: Bearer $WERKT_MANAGEMENT_TOKEN" \
+  -H 'X-Werkt-Actor: agent:operator' -H 'Content-Type: application/json' \
+  -d '{"enabled":false}' http://localhost:8080/api/v1/automations/go-hello
+
+curl -H "Authorization: Bearer $WERKT_MANAGEMENT_TOKEN" \
+  -H 'X-Werkt-Actor: agent:operator' -H 'Idempotency-Key: diagnostic-1' \
+  -H 'Content-Type: application/json' -d '{"reason":"diagnostic"}' \
+  http://localhost:8080/api/v1/automations/go-hello/runs
+```
+
+See [docs/management-api.md](docs/management-api.md) for the full agent-facing contract.
 
 Deploying the Rust example runs its `cargo build --release` build command once. With the Husker backend, that build runs in the manifest's disposable `rust:1.88-bookworm` build VM; the resulting workspace becomes the immutable artifact:
 
@@ -137,7 +162,8 @@ The event envelope is stable across every trigger and runtime:
 |---|---|
 | `WERKT_DATABASE_URL` | `postgres://automations:automations@localhost:54329/automations?sslmode=disable` |
 | `WERKT_DATA_DIR` | `./data` |
-| `WERKT_LISTEN_ADDR` | `:8080` |
+| `WERKT_LISTEN_ADDR` | `127.0.0.1:8080` |
+| `WERKT_MANAGEMENT_TOKEN` | empty; disables management authentication for local development |
 | `WERKT_WORKER_POLL` | `500ms` |
 | `WERKT_SCHEDULER_POLL` | `1s` |
 | `WERKT_SHUTDOWN_PERIOD` | `10s` |

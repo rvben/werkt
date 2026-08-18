@@ -136,7 +136,10 @@ func serve(arguments []string) error {
 	go service.NewScheduler(store, configuration.SchedulerPoll).Run(ctx)
 	go service.NewNtfyReconciler(store).Run(ctx)
 
-	api := httpapi.New(store, configuration.ListenAddress)
+	if configuration.ManagementToken == "" {
+		slog.Warn("management API authentication is disabled; set WERKT_MANAGEMENT_TOKEN outside local development")
+	}
+	api := httpapi.New(store, configuration.ListenAddress, configuration.ManagementToken)
 	serverErrors := make(chan error, 1)
 	go func() {
 		slog.Info("control plane listening", "address", configuration.ListenAddress, "workers", *workers)
@@ -203,7 +206,7 @@ func listAutomations(arguments []string) error {
 		return err
 	}
 	defer store.Close()
-	values, err := store.ListAutomations(ctx)
+	values, err := store.ListAutomations(ctx, database.AutomationFilter{})
 	if err != nil {
 		return err
 	}

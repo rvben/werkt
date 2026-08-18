@@ -1,0 +1,330 @@
+openapi: 3.1.0
+info:
+  title: Werkt API
+  version: 1.0.0
+  description: Agent-facing management API and trigger ingress for Werkt automations.
+servers:
+  - url: http://127.0.0.1:8080
+paths:
+  /healthz:
+    get:
+      operationId: health
+      responses:
+        "200":
+          description: Control plane and database are available.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: {type: string, const: ok}
+                required: [status]
+        "503": {$ref: "#/components/responses/Error"}
+  /api/v1/automations:
+    get:
+      operationId: listAutomations
+      security: [{BearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Project"}
+        - {$ref: "#/components/parameters/Folder"}
+        - {$ref: "#/components/parameters/Label"}
+        - name: q
+          in: query
+          schema: {type: string}
+        - name: enabled
+          in: query
+          schema: {type: boolean}
+      responses:
+        "200":
+          description: Organized automation inventory.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/AutomationSummary"}
+        "401": {$ref: "#/components/responses/Error"}
+  /api/v1/automations/{automation}:
+    parameters:
+      - {$ref: "#/components/parameters/AutomationID"}
+    get:
+      operationId: getAutomation
+      security: [{BearerAuth: []}]
+      responses:
+        "200":
+          description: Active manifest, effective triggers, and revision history.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AutomationDetail"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+    patch:
+      operationId: setAutomationEnabled
+      security: [{BearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Actor"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                enabled: {type: boolean}
+              required: [enabled]
+      responses:
+        "200":
+          description: Updated lifecycle state.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  automation: {$ref: "#/components/schemas/AutomationDetail"}
+                  changed: {type: boolean}
+                required: [automation, changed]
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /api/v1/automations/{automation}/runs:
+    post:
+      operationId: queueManualRun
+      security: [{BearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/AutomationID"}
+        - {$ref: "#/components/parameters/Actor"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      requestBody:
+        description: JSON event data, limited to 2 MiB.
+        content:
+          application/json:
+            schema: {}
+      responses:
+        "202": {$ref: "#/components/responses/RunQueued"}
+        "200": {$ref: "#/components/responses/RunQueued"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /api/v1/runs:
+    get:
+      operationId: listRuns
+      security: [{BearerAuth: []}]
+      parameters:
+        - name: automation
+          in: query
+          schema: {type: string}
+        - name: status
+          in: query
+          schema: {type: string, enum: [queued, running, succeeded, failed]}
+        - {$ref: "#/components/parameters/Limit"}
+      responses:
+        "200":
+          description: Runs newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/Run"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+  /api/v1/runs/{run}:
+    get:
+      operationId: getRun
+      security: [{BearerAuth: []}]
+      parameters:
+        - name: run
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: One run.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Run"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /api/v1/audit:
+    get:
+      operationId: listAuditEvents
+      security: [{BearerAuth: []}]
+      parameters:
+        - name: automation
+          in: query
+          schema: {type: string}
+        - {$ref: "#/components/parameters/Limit"}
+      responses:
+        "200":
+          description: Audit events newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/AuditEvent"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+  /api/v1/hooks/{automation}/{trigger}:
+    post:
+      operationId: ingestWebhook
+      parameters:
+        - {$ref: "#/components/parameters/AutomationID"}
+        - {$ref: "#/components/parameters/TriggerID"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      requestBody:
+        description: JSON or raw event body, limited to 2 MiB.
+        content:
+          application/json:
+            schema: {}
+      responses:
+        "202": {$ref: "#/components/responses/RunQueued"}
+        "200": {$ref: "#/components/responses/RunQueued"}
+        "400": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /api/v1/email/{automation}/{trigger}:
+    post:
+      operationId: ingestEmail
+      parameters:
+        - {$ref: "#/components/parameters/AutomationID"}
+        - {$ref: "#/components/parameters/TriggerID"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      requestBody:
+        required: true
+        description: RFC 5322 message, limited to 12 MiB.
+        content:
+          message/rfc822:
+            schema: {type: string, format: binary}
+      responses:
+        "202": {$ref: "#/components/responses/RunQueued"}
+        "200": {$ref: "#/components/responses/RunQueued"}
+        "400": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    AutomationID:
+      name: automation
+      in: path
+      required: true
+      schema: {type: string}
+    TriggerID:
+      name: trigger
+      in: path
+      required: true
+      schema: {type: string}
+    Actor:
+      name: X-Werkt-Actor
+      in: header
+      description: Caller-supplied audit attribution; defaults to api.
+      schema: {type: string, maxLength: 255}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      schema: {type: string}
+    Project:
+      name: project
+      in: query
+      schema: {type: string}
+    Folder:
+      name: folder
+      in: query
+      schema: {type: string}
+    Label:
+      name: label
+      in: query
+      schema: {type: string}
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 500, default: 100}
+  responses:
+    Error:
+      description: Request failed.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    RunQueued:
+      description: Run was newly queued or an idempotent retry found the existing run.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              runId: {type: string}
+              created: {type: boolean}
+            required: [runId, created]
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: {type: string}
+      required: [error]
+    AutomationSummary:
+      type: object
+      properties:
+        id: {type: string}
+        project: {type: string}
+        folder: {type: string}
+        description: {type: string}
+        labels: {type: array, items: {type: string}}
+        enabled: {type: boolean}
+        activeRevisionId: {type: string}
+        updatedAt: {type: string, format: date-time}
+      required: [id, project, labels, enabled, activeRevisionId, updatedAt]
+    AutomationDetail:
+      allOf:
+        - {$ref: "#/components/schemas/AutomationSummary"}
+        - type: object
+          properties:
+            manifest: {type: object, additionalProperties: true}
+            triggers:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: {type: string}
+                  type: {type: string}
+                  enabled: {type: boolean}
+                  config: {type: object, additionalProperties: true}
+                  nextFireAt: {type: string, format: date-time}
+                required: [id, type, enabled, config]
+            revisions:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: {type: string}
+                  contentHash: {type: string}
+                  active: {type: boolean}
+                  createdAt: {type: string, format: date-time}
+                required: [id, contentHash, active, createdAt]
+          required: [manifest, triggers, revisions]
+    Run:
+      type: object
+      properties:
+        id: {type: string}
+        automationId: {type: string}
+        revisionId: {type: string}
+        eventId: {type: string}
+        status: {type: string, enum: [queued, running, succeeded, failed]}
+        attempt: {type: integer}
+        maxAttempts: {type: integer}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        finishedAt: {type: string, format: date-time}
+        logs: {type: string}
+        error: {type: string}
+        result: {}
+      required: [id, automationId, revisionId, eventId, status, attempt, maxAttempts, createdAt]
+    AuditEvent:
+      type: object
+      properties:
+        id: {type: string}
+        action: {type: string}
+        automationId: {type: string}
+        actor: {type: string}
+        details: {type: object, additionalProperties: true}
+        createdAt: {type: string, format: date-time}
+      required: [id, action, automationId, actor, details, createdAt]
