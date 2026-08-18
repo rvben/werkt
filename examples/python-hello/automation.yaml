@@ -17,9 +17,13 @@ triggers:
 
   - id: incoming
     type: webhook
+    config:
+      secretEnv: PYTHON_HELLO_WEBHOOK_SECRET
 
   - id: mail
     type: email
+    config:
+      tokenEnv: PYTHON_HELLO_EMAIL_TOKEN
 
 runtime:
   language: python

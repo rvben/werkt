@@ -17,7 +17,9 @@ func TestProcessRunnerUsesLanguageNeutralContract(t *testing.T) {
 		t.Skip("shell fixture is POSIX-specific")
 	}
 	directory := t.TempDir()
-	script := []byte("#!/bin/sh\nset -eu\necho running\nprintf '{\"ok\":true}' > \"$WERKT_RESULT_PATH\"\n")
+	t.Setenv("EXAMPLE_RUNTIME_SECRET", "runtime-secret-value")
+	t.Setenv("WERKT_MANAGEMENT_TOKEN", "must-not-be-inherited")
+	script := []byte("#!/bin/sh\nset -eu\ntest \"$SERVICE_TOKEN\" = runtime-secret-value\ntest -z \"${WERKT_MANAGEMENT_TOKEN+x}\"\necho running\nprintf '{\"ok\":true}' > \"$WERKT_RESULT_PATH\"\n")
 	path := filepath.Join(directory, "run.sh")
 	if err := os.WriteFile(path, script, 0o700); err != nil {
 		t.Fatal(err)
@@ -27,7 +29,11 @@ func TestProcessRunnerUsesLanguageNeutralContract(t *testing.T) {
 		Run:          domain.Run{ID: "run_test", AutomationID: "example", RevisionID: "rev_test"},
 		ArtifactPath: directory,
 		Manifest: domain.Manifest{
-			Runtime:   domain.Runtime{Language: "shell", Command: []string{"./run.sh"}},
+			Runtime: domain.Runtime{
+				Language: "shell",
+				Command:  []string{"./run.sh"},
+				Secrets:  map[string]string{"SERVICE_TOKEN": "EXAMPLE_RUNTIME_SECRET"},
+			},
 			Execution: domain.Execution{Timeout: "5s"},
 		},
 		Event: domain.EventEnvelope{ID: "evt_test", Data: eventData},

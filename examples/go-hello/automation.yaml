@@ -11,6 +11,8 @@ metadata:
 triggers:
   - id: incoming
     type: webhook
+    config:
+      secretEnv: GO_HELLO_WEBHOOK_SECRET
 
 runtime:
   language: go
@@ -18,6 +20,8 @@ runtime:
   buildImage: golang:1.26-bookworm
   build: [go, build, -o, go-hello, .]
   command: [./go-hello]
+  secrets:
+    EXAMPLE_SERVICE_TOKEN: GO_HELLO_SERVICE_TOKEN
 
 execution:
   timeout: 30s

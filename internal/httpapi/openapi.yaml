@@ -166,10 +166,25 @@ paths:
   /api/v1/hooks/{automation}/{trigger}:
     post:
       operationId: ingestWebhook
+      security: [{WebhookHMAC: []}]
       parameters:
         - {$ref: "#/components/parameters/AutomationID"}
         - {$ref: "#/components/parameters/TriggerID"}
-        - {$ref: "#/components/parameters/IdempotencyKey"}
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Unique replay key, included in the signed message.
+          schema: {type: string, maxLength: 255}
+        - name: X-Werkt-Timestamp
+          in: header
+          required: true
+          description: Current Unix timestamp in seconds; accepted within five minutes and included in the signed message.
+          schema: {type: string, pattern: "^[0-9]+$"}
+        - name: X-Werkt-Signature
+          in: header
+          required: true
+          description: HMAC-SHA256 of <timestamp>.<idempotency-key>.<exact body> as sha256=<lowercase hex>. A trigger may configure a different header name.
+          schema: {type: string}
       requestBody:
         description: JSON or raw event body, limited to 2 MiB.
         content:
@@ -179,10 +194,13 @@ paths:
         "202": {$ref: "#/components/responses/RunQueued"}
         "200": {$ref: "#/components/responses/RunQueued"}
         "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
   /api/v1/email/{automation}/{trigger}:
     post:
       operationId: ingestEmail
+      security: [{EmailIngressBearer: []}]
       parameters:
         - {$ref: "#/components/parameters/AutomationID"}
         - {$ref: "#/components/parameters/TriggerID"}
@@ -197,12 +215,23 @@ paths:
         "202": {$ref: "#/components/responses/RunQueued"}
         "200": {$ref: "#/components/responses/RunQueued"}
         "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
 components:
   securitySchemes:
     BearerAuth:
       type: http
       scheme: bearer
+    WebhookHMAC:
+      type: apiKey
+      in: header
+      name: X-Werkt-Signature
+      description: Per-trigger HMAC-SHA256 signature; secret value is resolved from the manifest's secretEnv reference.
+    EmailIngressBearer:
+      type: http
+      scheme: bearer
+      description: Per-trigger bearer token resolved from the manifest's tokenEnv reference.
   parameters:
     AutomationID:
       name: automation

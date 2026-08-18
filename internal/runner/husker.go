@@ -138,6 +138,10 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 	if strings.TrimSpace(rootFS) == "" {
 		return Result{}, errors.New("runtime.image or the husker rootfs fallback is required")
 	}
+	runtimeValues, err := resolveRuntimeEnvironment(run.Manifest.Runtime)
+	if err != nil {
+		return Result{}, err
+	}
 	artifact, err := archiveDirectory(run.ArtifactPath)
 	if err != nil {
 		return Result{}, fmt.Errorf("package automation artifact: %w", err)
@@ -203,6 +207,7 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 			run,
 			eventPath,
 			resultPath,
+			runtimeValues,
 		),
 		Timeout: durationSeconds(runtimeTimeout),
 	})
@@ -493,11 +498,7 @@ func durationSeconds(value time.Duration) uint64 {
 	return uint64((value + time.Second - 1) / time.Second)
 }
 
-func runtimeEnvironmentMap(run domain.RunnableRun, eventPath, resultPath string) map[string]string {
-	values := make(map[string]string, len(run.Manifest.Runtime.Environment)+5)
-	for key, value := range run.Manifest.Runtime.Environment {
-		values[key] = value
-	}
+func runtimeEnvironmentMap(run domain.RunnableRun, eventPath, resultPath string, values map[string]string) map[string]string {
 	values["WERKT_AUTOMATION_ID"] = run.AutomationID
 	values["WERKT_REVISION_ID"] = run.RevisionID
 	values["WERKT_RUN_ID"] = run.ID

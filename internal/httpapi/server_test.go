@@ -2,9 +2,13 @@ package httpapi
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +27,7 @@ type fakeStore struct {
 	manualExternalID string
 	manualActor      string
 	ingested         bool
+	ingressConfig    json.RawMessage
 }
 
 func (s *fakeStore) Ping(context.Context) error { return nil }
@@ -30,6 +35,14 @@ func (s *fakeStore) Ping(context.Context) error { return nil }
 func (s *fakeStore) IngestEvent(context.Context, string, string, string, string, time.Time, json.RawMessage, map[string]any) (string, bool, error) {
 	s.ingested = true
 	return "run_hook", true, nil
+}
+
+func (s *fakeStore) GetTriggerIngressPolicy(context.Context, string, string, string) (database.TriggerIngressPolicy, error) {
+	config := s.ingressConfig
+	if len(config) == 0 {
+		config = json.RawMessage(`{"secretEnv":"TEST_WEBHOOK_SECRET","tokenEnv":"TEST_EMAIL_TOKEN"}`)
+	}
+	return database.TriggerIngressPolicy{Config: config}, nil
 }
 
 func (s *fakeStore) ListAutomations(_ context.Context, filter database.AutomationFilter) ([]database.AutomationSummary, error) {
@@ -78,6 +91,8 @@ func (s *fakeStore) ListAuditEvents(context.Context, string, int) ([]database.Au
 }
 
 func TestManagementRoutesRequireBearerTokenButTriggerIngressDoesNot(t *testing.T) {
+	const webhookSecret = "test-webhook-secret-at-least-32-bytes"
+	t.Setenv("TEST_WEBHOOK_SECRET", webhookSecret)
 	store := &fakeStore{}
 	server := New(store, ":0", "management-secret")
 
@@ -94,7 +109,12 @@ func TestManagementRoutesRequireBearerTokenButTriggerIngressDoesNot(t *testing.T
 		t.Fatal("unauthenticated request reached the store")
 	}
 
-	request = httptest.NewRequest(http.MethodPost, "/api/v1/hooks/example/incoming", strings.NewReader(`{"ok":true}`))
+	body := []byte(`{"ok":true}`)
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/hooks/example/incoming", strings.NewReader(string(body)))
+	request.Header.Set("Idempotency-Key", "hook-test-1")
+	request.Header.Set("X-Werkt-Timestamp", timestamp)
+	request.Header.Set("X-Werkt-Signature", webhookSignature(webhookSecret, timestamp, "hook-test-1", body))
 	response = httptest.NewRecorder()
 	server.server.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusAccepted {
@@ -102,6 +122,74 @@ func TestManagementRoutesRequireBearerTokenButTriggerIngressDoesNot(t *testing.T
 	}
 	if !store.ingested {
 		t.Fatal("public trigger ingress did not reach the store")
+	}
+}
+
+func TestTriggerIngressRejectsInvalidCredentials(t *testing.T) {
+	const webhookSecret = "test-webhook-secret-at-least-32-bytes"
+	const emailToken = "test-email-token-at-least-32-bytes-long"
+	t.Setenv("TEST_WEBHOOK_SECRET", webhookSecret)
+	t.Setenv("TEST_EMAIL_TOKEN", emailToken)
+	store := &fakeStore{}
+	server := New(store, ":0", "")
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/example/incoming", strings.NewReader(`{"ok":true}`))
+	request.Header.Set("Idempotency-Key", "invalid-hook-test")
+	request.Header.Set("X-Werkt-Timestamp", strconv.FormatInt(time.Now().Unix(), 10))
+	request.Header.Set("X-Werkt-Signature", "sha256=00")
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || store.ingested {
+		t.Fatalf("webhook status=%d ingested=%v", response.Code, store.ingested)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/email/example/mail", strings.NewReader("From: sender@example.com\nTo: automation@example.com\n\nhello"))
+	request.Header.Set("Authorization", "Bearer wrong-token")
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || store.ingested {
+		t.Fatalf("email status=%d ingested=%v", response.Code, store.ingested)
+	}
+}
+
+func TestWebhookRejectsStaleSignatureAndMissingIdempotencyKey(t *testing.T) {
+	const webhookSecret = "test-webhook-secret-at-least-32-bytes"
+	t.Setenv("TEST_WEBHOOK_SECRET", webhookSecret)
+	store := &fakeStore{}
+	server := New(store, ":0", "")
+	body := []byte(`{"ok":true}`)
+
+	staleTimestamp := strconv.FormatInt(time.Now().Add(-10*time.Minute).Unix(), 10)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/example/incoming", strings.NewReader(string(body)))
+	request.Header.Set("Idempotency-Key", "stale-hook-test")
+	request.Header.Set("X-Werkt-Timestamp", staleTimestamp)
+	request.Header.Set("X-Werkt-Signature", webhookSignature(webhookSecret, staleTimestamp, "stale-hook-test", body))
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || store.ingested {
+		t.Fatalf("stale webhook status=%d ingested=%v", response.Code, store.ingested)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/hooks/example/incoming", strings.NewReader(string(body)))
+	request.Header.Set("X-Werkt-Timestamp", strconv.FormatInt(time.Now().Unix(), 10))
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || store.ingested {
+		t.Fatalf("missing-idempotency webhook status=%d ingested=%v", response.Code, store.ingested)
+	}
+}
+
+func TestAuthenticatedEmailIngress(t *testing.T) {
+	const emailToken = "test-email-token-at-least-32-bytes-long"
+	t.Setenv("TEST_EMAIL_TOKEN", emailToken)
+	store := &fakeStore{}
+	server := New(store, ":0", "")
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/email/example/mail", strings.NewReader("Message-Id: <test@example.com>\nFrom: sender@example.com\nTo: automation@example.com\nSubject: test\n\nhello"))
+	request.Header.Set("Authorization", "Bearer "+emailToken)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || !store.ingested {
+		t.Fatalf("status=%d ingested=%v body=%s", response.Code, store.ingested, response.Body.String())
 	}
 }
 
@@ -215,4 +303,11 @@ func TestOpenAPIContractIsPublicAndDocumentsManagementRoutes(t *testing.T) {
 			t.Errorf("OpenAPI path %q is missing", path)
 		}
 	}
+}
+
+func webhookSignature(secret, timestamp, idempotencyKey string, body []byte) string {
+	digest := hmac.New(sha256.New, []byte(secret))
+	_, _ = digest.Write([]byte(timestamp + "." + idempotencyKey + "."))
+	_, _ = digest.Write(body)
+	return "sha256=" + hex.EncodeToString(digest.Sum(nil))
 }

@@ -11,6 +11,8 @@ metadata:
 triggers:
   - id: incoming
     type: webhook
+    config:
+      secretEnv: RUST_HELLO_WEBHOOK_SECRET
 
   - id: ntfy-example
     type: ntfy

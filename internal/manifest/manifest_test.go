@@ -3,6 +3,7 @@ package manifest_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rvben/werkt/internal/domain"
@@ -98,7 +99,7 @@ func TestValidateRejectsReservedRuntimeEnvironment(t *testing.T) {
 		APIVersion: "werkt.dev/v1",
 		Kind:       "Automation",
 		Metadata:   domain.Metadata{Name: "example", Project: "personal"},
-		Triggers:   []domain.Trigger{{ID: "hook", Type: "webhook"}},
+		Triggers:   []domain.Trigger{{ID: "hook", Type: "schedule", Config: map[string]any{"cron": "0 * * * *"}}},
 		Runtime: domain.Runtime{
 			Language:    "python",
 			Command:     []string{"python3", "main.py"},
@@ -107,5 +108,35 @@ func TestValidateRejectsReservedRuntimeEnvironment(t *testing.T) {
 	}
 	if err := manifest.Validate(value); err == nil {
 		t.Fatal("Validate() error = nil, want reserved environment error")
+	}
+}
+
+func TestValidateRequiresIngressCredentialReferencesAndValidatesRuntimeSecrets(t *testing.T) {
+	value := domain.Manifest{
+		APIVersion: "werkt.dev/v1",
+		Kind:       "Automation",
+		Metadata:   domain.Metadata{Name: "secure-example", Project: "personal"},
+		Triggers: []domain.Trigger{
+			{ID: "hook", Type: "webhook", Config: map[string]any{"secretEnv": "EXAMPLE_WEBHOOK_SECRET"}},
+			{ID: "mail", Type: "email", Config: map[string]any{"tokenEnv": "EXAMPLE_EMAIL_TOKEN"}},
+		},
+		Runtime: domain.Runtime{
+			Language: "python",
+			Command:  []string{"python3", "main.py"},
+			Secrets:  map[string]string{"SERVICE_TOKEN": "EXAMPLE_SERVICE_TOKEN"},
+		},
+	}
+	if err := manifest.Validate(value); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	value.Triggers[0].Config = nil
+	value.Runtime.Secrets["MANAGEMENT_TOKEN"] = "WERKT_MANAGEMENT_TOKEN"
+	err := manifest.Validate(value)
+	if err == nil {
+		t.Fatal("Validate() error = nil")
+	}
+	if !strings.Contains(err.Error(), "config.secretEnv") || !strings.Contains(err.Error(), "non-WERKT environment variable") {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }

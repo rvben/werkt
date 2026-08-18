@@ -43,6 +43,10 @@ func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) 
 	}
 	ctx, cancel := context.WithTimeout(parent, run.Manifest.Execution.TimeoutDuration())
 	defer cancel()
+	runtimeValues, err := resolveRuntimeEnvironment(run.Manifest.Runtime)
+	if err != nil {
+		return Result{}, err
+	}
 
 	runDirectory, err := os.MkdirTemp("", "werkt-run-")
 	if err != nil {
@@ -61,7 +65,7 @@ func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) 
 
 	command := exec.CommandContext(ctx, run.Manifest.Runtime.Command[0], run.Manifest.Runtime.Command[1:]...)
 	command.Dir = run.ArtifactPath
-	command.Env = append(os.Environ(), runtimeEnvironment(run, eventPath, resultPath)...)
+	command.Env = append(inheritedRuntimeEnvironment(), runtimeEnvironment(run, eventPath, resultPath, runtimeValues)...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
@@ -86,11 +90,7 @@ func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) 
 	return Result{Output: resultJSON, Logs: logs}, nil
 }
 
-func runtimeEnvironment(run domain.RunnableRun, eventPath, resultPath string) []string {
-	values := make(map[string]string, len(run.Manifest.Runtime.Environment)+5)
-	for key, value := range run.Manifest.Runtime.Environment {
-		values[key] = value
-	}
+func runtimeEnvironment(run domain.RunnableRun, eventPath, resultPath string, values map[string]string) []string {
 	reserved := map[string]string{
 		"WERKT_AUTOMATION_ID": run.AutomationID,
 		"WERKT_REVISION_ID":   run.RevisionID,
@@ -111,6 +111,17 @@ func runtimeEnvironment(run domain.RunnableRun, eventPath, resultPath string) []
 		result = append(result, key+"="+values[key])
 	}
 	return result
+}
+
+func inheritedRuntimeEnvironment() []string {
+	keys := []string{"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR", "SYSTEMROOT"}
+	values := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if value, exists := os.LookupEnv(key); exists {
+			values = append(values, key+"="+value)
+		}
+	}
+	return values
 }
 
 func environment(values map[string]string) []string {

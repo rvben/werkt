@@ -15,7 +15,7 @@ X-Werkt-Actor: agent:operator
 
 `X-Werkt-Actor` is recorded in the audit trail but is attribution supplied by the authenticated caller, not a separate identity proof. If omitted, it is recorded as `api`. When `WERKT_MANAGEMENT_TOKEN` is empty, management authentication is disabled for local development and Werkt emits a startup warning. Werkt binds to `127.0.0.1:8080` by default; explicitly configure both a token and `WERKT_LISTEN_ADDR` before exposing it beyond the host.
 
-Health checks and trigger ingress (`/hooks/...` and `/email/...`) do not accept the management token as authority and remain outside this middleware.
+Health checks and trigger ingress (`/hooks/...` and `/email/...`) do not accept the management token as authority and remain outside this middleware. Trigger ingress has independent per-trigger credentials described in [security.md](security.md).
 
 ## Automations
 
