@@ -1,0 +1,6 @@
+{
+  "files": ["internal/httpapi/workspace/index.html"],
+  "insertBefore": "</body>",
+  "commentSyntax": "html",
+  "cspChecked": true
+}
