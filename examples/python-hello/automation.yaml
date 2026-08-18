@@ -1,0 +1,32 @@
+apiVersion: werkt.dev/v1
+kind: Automation
+
+metadata:
+  name: python-hello
+  project: examples
+  folder: getting-started
+  description: Demonstrates schedule and webhook triggers with Python.
+  labels: [python, example]
+
+triggers:
+  - id: every-minute
+    type: schedule
+    config:
+      cron: "* * * * *"
+      timezone: Europe/Amsterdam
+
+  - id: incoming
+    type: webhook
+
+  - id: mail
+    type: email
+
+runtime:
+  language: python
+  image: python:3.13-alpine
+  command: [python3, main.py]
+
+execution:
+  timeout: 30s
+  retries: 2
+  concurrency: forbid

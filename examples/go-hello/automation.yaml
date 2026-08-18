@@ -1,0 +1,24 @@
+apiVersion: werkt.dev/v1
+kind: Automation
+
+metadata:
+  name: go-hello
+  project: examples
+  folder: getting-started
+  description: Demonstrates the raw protocol from a Go binary.
+  labels: [go, example]
+
+triggers:
+  - id: incoming
+    type: webhook
+
+runtime:
+  language: go
+  image: debian:bookworm-slim
+  buildImage: golang:1.26-bookworm
+  build: [go, build, -o, go-hello, .]
+  command: [./go-hello]
+
+execution:
+  timeout: 30s
+  retries: 1

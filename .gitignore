@@ -1,0 +1,9 @@
+.DS_Store
+.env
+/bin/
+/data/
+/dist/
+**/__pycache__/
+**/.pytest_cache/
+**/target/
+*.log
