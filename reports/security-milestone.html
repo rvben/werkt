@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Werkt — Trigger security milestone</title>
+  <style>
+    :root {
+      --ink: oklch(0.19 0.018 45);
+      --muted: oklch(0.48 0.025 45);
+      --faint: oklch(0.68 0.018 45);
+      --line: oklch(0.89 0.012 50);
+      --surface: oklch(0.975 0.006 55);
+      --paper: oklch(1 0 0);
+      --primary: oklch(0.61 0.19 43);
+      --primary-soft: oklch(0.95 0.035 55);
+      --success: oklch(0.46 0.12 151);
+      --success-soft: oklch(0.96 0.025 151);
+      --teal: oklch(0.38 0.085 205);
+      --teal-soft: oklch(0.96 0.018 205);
+      --code: oklch(0.16 0.022 240);
+      --code-muted: oklch(0.72 0.025 220);
+      --code-line: oklch(0.29 0.025 225);
+      --code-accent: oklch(0.78 0.13 68);
+      --max: 1160px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 16px;
+      line-height: 1.6;
+      text-rendering: optimizeLegibility;
+    }
+
+    a { color: var(--teal); text-underline-offset: 0.2em; }
+    a:hover { color: var(--primary); }
+    code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+
+    .skip-link {
+      position: fixed;
+      z-index: 10;
+      top: 0.75rem;
+      left: 0.75rem;
+      transform: translateY(-180%);
+      padding: 0.55rem 0.8rem;
+      background: var(--ink);
+      color: var(--paper);
+    }
+
+    .skip-link:focus { transform: translateY(0); }
+
+    .shell {
+      width: min(calc(100% - 2.5rem), var(--max));
+      margin-inline: auto;
+    }
+
+    .topbar {
+      border-bottom: 1px solid var(--line);
+      background: var(--paper);
+    }
+
+    .topbar-inner {
+      min-height: 68px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1.5rem;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.7rem;
+      color: var(--ink);
+      font-weight: 780;
+      letter-spacing: -0.035em;
+      font-size: 1.18rem;
+    }
+
+    .brand-mark {
+      width: 18px;
+      height: 18px;
+      border: 5px solid var(--primary);
+      border-right-width: 2px;
+      transform: skew(-8deg);
+    }
+
+    .top-meta {
+      display: flex;
+      gap: 1rem;
+      color: var(--muted);
+      font-size: 0.78rem;
+      letter-spacing: 0.045em;
+      text-transform: uppercase;
+    }
+
+    .intro {
+      display: grid;
+      grid-template-columns: minmax(0, 1.45fr) minmax(260px, 0.55fr);
+      gap: clamp(2rem, 7vw, 7rem);
+      padding-block: clamp(4rem, 9vw, 8rem);
+      align-items: end;
+    }
+
+    .eyebrow {
+      margin: 0 0 1.1rem;
+      color: var(--primary);
+      font-size: 0.78rem;
+      font-weight: 760;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+
+    h1 {
+      max-width: 15ch;
+      margin-bottom: 1.6rem;
+      font-size: clamp(2.8rem, 6.2vw, 6.1rem);
+      font-weight: 780;
+      line-height: 0.98;
+      letter-spacing: -0.062em;
+    }
+
+    .lede {
+      max-width: 66ch;
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: clamp(1.05rem, 1.7vw, 1.3rem);
+      line-height: 1.55;
+    }
+
+    .verdict {
+      border-top: 4px solid var(--success);
+      padding-top: 1.25rem;
+    }
+
+    .verdict strong {
+      display: block;
+      margin-bottom: 0.55rem;
+      color: var(--success);
+      font-size: 1.45rem;
+      letter-spacing: -0.025em;
+    }
+
+    .verdict p { margin-bottom: 0.8rem; color: var(--muted); }
+    .verdict .mono { color: var(--ink); font-size: 0.82rem; }
+
+    .section {
+      border-top: 1px solid var(--line);
+      padding-block: clamp(3.5rem, 7vw, 6.5rem);
+    }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: 0.35fr 1fr;
+      gap: 2rem;
+      margin-bottom: clamp(2rem, 5vw, 4rem);
+    }
+
+    .section-number {
+      color: var(--primary);
+      font-size: 0.78rem;
+      font-weight: 760;
+      letter-spacing: 0.12em;
+    }
+
+    h2 {
+      margin-bottom: 0.8rem;
+      font-size: clamp(2rem, 4vw, 3.7rem);
+      line-height: 1.04;
+      letter-spacing: -0.05em;
+    }
+
+    .section-copy { max-width: 64ch; color: var(--muted); }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      border-block: 1px solid var(--line);
+    }
+
+    .flow-step {
+      position: relative;
+      min-height: 190px;
+      padding: 1.4rem 1.2rem 1.4rem 0;
+    }
+
+    .flow-step + .flow-step {
+      border-left: 1px solid var(--line);
+      padding-left: 1.2rem;
+    }
+
+    .flow-step + .flow-step::before {
+      content: "→";
+      position: absolute;
+      top: 1.15rem;
+      left: -0.58rem;
+      width: 1.1rem;
+      background: var(--paper);
+      color: var(--primary);
+      text-align: center;
+      font-weight: 800;
+    }
+
+    .flow-index {
+      display: block;
+      margin-bottom: 2.6rem;
+      color: var(--faint);
+      font-size: 0.74rem;
+    }
+
+    .flow-step strong { display: block; margin-bottom: 0.45rem; line-height: 1.25; }
+    .flow-step p { margin: 0; color: var(--muted); font-size: 0.88rem; line-height: 1.5; }
+
+    .signature {
+      margin-top: 2rem;
+      padding: 1rem 1.2rem;
+      border-left: 4px solid var(--primary);
+      background: var(--primary-soft);
+      overflow-x: auto;
+      color: var(--ink);
+      font-size: 0.88rem;
+      white-space: nowrap;
+    }
+
+    .boundary {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.94rem;
+    }
+
+    .boundary th, .boundary td {
+      padding: 1.15rem 1rem;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .boundary th {
+      color: var(--muted);
+      font-size: 0.72rem;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+    }
+
+    .boundary td:first-child { width: 22%; font-weight: 720; }
+
+    .boundary caption { display: none; }
+
+    .tag {
+      display: inline-block;
+      padding: 0.2rem 0.48rem;
+      border-radius: 4px;
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.055em;
+      text-transform: uppercase;
+    }
+
+    .tag.good { background: var(--success-soft); color: var(--success); }
+    .tag.transient { background: var(--teal-soft); color: var(--teal); }
+
+    .controls {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      column-gap: clamp(2rem, 6vw, 6rem);
+    }
+
+    .control {
+      display: grid;
+      grid-template-columns: 1.8rem 1fr;
+      gap: 0.8rem;
+      padding-block: 1.15rem;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .check {
+      width: 1.35rem;
+      height: 1.35rem;
+      margin-top: 0.13rem;
+      border-radius: 50%;
+      background: var(--success);
+      color: var(--paper);
+      font-size: 0.74rem;
+      font-weight: 900;
+      line-height: 1.35rem;
+      text-align: center;
+    }
+
+    .control strong { display: block; margin-bottom: 0.2rem; }
+    .control p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+
+    .evidence-wrap {
+      display: grid;
+      grid-template-columns: minmax(0, 1.3fr) minmax(240px, 0.7fr);
+      gap: clamp(1.5rem, 4vw, 4rem);
+      align-items: start;
+    }
+
+    .terminal {
+      overflow: hidden;
+      border-radius: 10px;
+      background: var(--code);
+      color: var(--paper);
+      box-shadow: 0 20px 50px oklch(0.2 0.02 240 / 0.16);
+    }
+
+    .terminal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--code-line);
+      color: var(--code-muted);
+      font-size: 0.73rem;
+    }
+
+    .terminal-body {
+      margin: 0;
+      padding: 1.35rem;
+      overflow-x: auto;
+      font-size: clamp(0.72rem, 1.2vw, 0.85rem);
+      line-height: 1.85;
+      white-space: pre;
+    }
+
+    .terminal .ok { color: var(--code-accent); }
+    .terminal .dim { color: var(--code-muted); }
+
+    .evidence-notes { border-top: 4px solid var(--teal); padding-top: 1.2rem; }
+    .evidence-notes h3 { font-size: 1.25rem; letter-spacing: -0.025em; }
+    .evidence-notes p { color: var(--muted); }
+    .evidence-notes ul { margin: 1.5rem 0 0; padding-left: 1.15rem; }
+    .evidence-notes li { margin-bottom: 0.75rem; }
+
+    .test-list { border-top: 1px solid var(--line); }
+
+    .test-row {
+      display: grid;
+      grid-template-columns: minmax(160px, 0.8fr) minmax(0, 1.5fr) auto;
+      gap: 1.5rem;
+      align-items: baseline;
+      padding: 1.05rem 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .test-row code { font-size: 0.82rem; overflow-wrap: anywhere; }
+    .test-row p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+    .pass { color: var(--success); font-size: 0.74rem; font-weight: 800; letter-spacing: 0.08em; }
+
+    .handoff {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: clamp(2rem, 7vw, 7rem);
+      padding-block: clamp(3rem, 7vw, 6rem);
+      border-top: 1px solid var(--line);
+    }
+
+    .handoff h2 { max-width: 11ch; }
+    .handoff-copy { color: var(--muted); }
+
+    .next {
+      border-left: 4px solid var(--primary);
+      padding-left: 1.4rem;
+    }
+
+    .next .eyebrow { margin-bottom: 0.65rem; }
+    .next h3 { margin-bottom: 0.6rem; font-size: 1.5rem; letter-spacing: -0.035em; }
+    .next p { margin-bottom: 1.2rem; color: var(--muted); }
+
+    .links { display: flex; flex-wrap: wrap; gap: 0.7rem 1.2rem; font-size: 0.88rem; }
+
+    footer {
+      padding-block: 1.5rem 2.5rem;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.78rem;
+    }
+
+    .footer-inner { display: flex; justify-content: space-between; gap: 1rem; }
+
+    @media (max-width: 820px) {
+      .intro, .section-head, .evidence-wrap, .handoff { grid-template-columns: 1fr; }
+      .intro { align-items: start; }
+      .verdict { max-width: 420px; }
+      .flow { grid-template-columns: 1fr; }
+      .flow-step { min-height: auto; padding: 1.2rem 0; }
+      .flow-step + .flow-step { border-left: 0; border-top: 1px solid var(--line); padding-left: 0; }
+      .flow-step + .flow-step::before { content: "↓"; top: -0.65rem; left: 1rem; }
+      .flow-index { margin-bottom: 0.8rem; }
+      .controls { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 600px) {
+      .shell { width: min(calc(100% - 1.5rem), var(--max)); }
+      .topbar-inner { min-height: 58px; }
+      .top-meta span:first-child { display: none; }
+      h1 { font-size: clamp(2.7rem, 15vw, 4.5rem); }
+      .boundary { display: block; overflow-x: auto; white-space: nowrap; }
+      .boundary caption {
+        display: table-caption;
+        padding-bottom: 0.75rem;
+        color: var(--muted);
+        font-size: 0.78rem;
+        text-align: left;
+        white-space: normal;
+      }
+      .signature { white-space: normal; overflow-wrap: anywhere; }
+      .terminal-body { padding: 1rem; font-size: 0.59rem; }
+      .test-row { grid-template-columns: 1fr auto; gap: 0.35rem 1rem; }
+      .test-row p { grid-column: 1 / -1; }
+      .footer-inner { flex-direction: column; }
+    }
+
+    @media print {
+      .shell { width: 100%; }
+      .section, .handoff { break-inside: avoid; }
+      .terminal { box-shadow: none; }
+      a { color: inherit; text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to report</a>
+
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Werkt</div>
+      <div class="top-meta"><span>Engineering report</span><span>18 Aug 2026</span></div>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="shell intro" aria-labelledby="report-title">
+      <div>
+        <p class="eyebrow">Security milestone · External ingress</p>
+        <h1 id="report-title">Triggers are authenticated. Secrets stay references.</h1>
+        <p class="lede">Werkt now accepts webhook and email events through per-trigger credentials, binds webhook signatures to time and replay identity, and injects runtime secrets into Python, Rust, Go, or any executable automation without persisting their values.</p>
+      </div>
+      <aside class="verdict" aria-label="Verification verdict">
+        <strong>Verified end to end</strong>
+        <p>Live HTTP, real PostgreSQL, process execution, and Husker request construction all passed.</p>
+        <div class="mono">commit 29745f0</div>
+      </aside>
+    </section>
+
+    <section class="section">
+      <div class="shell">
+        <div class="section-head">
+          <div class="section-number">01 / INGRESS</div>
+          <div>
+            <h2>Trust is checked before work is queued.</h2>
+            <p class="section-copy">The trigger manifest stores only the environment variable name. At request time, Werkt loads the active trigger policy, resolves the credential in memory, verifies the request, then delegates to the existing durable and idempotent event path.</p>
+          </div>
+        </div>
+
+        <div class="flow" aria-label="Authenticated webhook flow">
+          <div class="flow-step"><span class="flow-index mono">01</span><strong>Receive bytes</strong><p>Keep the exact request body intact for signing.</p></div>
+          <div class="flow-step"><span class="flow-index mono">02</span><strong>Load active policy</strong><p>Disabled automations and triggers fail closed.</p></div>
+          <div class="flow-step"><span class="flow-index mono">03</span><strong>Resolve reference</strong><p>Credential value comes from the control-plane environment.</p></div>
+          <div class="flow-step"><span class="flow-index mono">04</span><strong>Verify request</strong><p>Constant-time HMAC or bearer comparison before parsing.</p></div>
+          <div class="flow-step"><span class="flow-index mono">05</span><strong>Queue once</strong><p>The signed replay key returns the original run on retry.</p></div>
+        </div>
+
+        <div class="signature mono" aria-label="Webhook signature formula">HMAC-SHA256(secret, timestamp + "." + idempotency-key + "." + exact-body)</div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="shell">
+        <div class="section-head">
+          <div class="section-number">02 / BOUNDARY</div>
+          <div>
+            <h2>References cross storage. Values do not.</h2>
+            <p class="section-copy">This gives AI-authored automations a small, language-neutral contract while keeping control-plane credentials separate from deployment manifests and build environments.</p>
+          </div>
+        </div>
+
+        <table class="boundary">
+          <caption>Swipe horizontally to inspect every boundary column.</caption>
+          <thead>
+            <tr><th>Data</th><th>Where it exists</th><th>Persistence</th><th>Enforcement</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Credential reference</td><td><code>automation.yaml</code> and revision JSON</td><td><span class="tag">Stored</span></td><td>Strict environment-name validation</td></tr>
+            <tr><td>Webhook / email value</td><td>Control-plane memory during verification</td><td><span class="tag transient">Transient</span></td><td>Minimum 32 bytes; constant-time check</td></tr>
+            <tr><td>Runtime secret value</td><td>Attempt environment or fresh Husker VM</td><td><span class="tag transient">Transient</span></td><td>Resolved immediately before execution</td></tr>
+            <tr><td>Runtime secret in build</td><td>Nowhere</td><td><span class="tag good">Never supplied</span></td><td>Build and runtime environments are separate</td></tr>
+            <tr><td><code>WERKT_*</code> control secrets</td><td>Control plane only</td><td><span class="tag good">Blocked</span></td><td>Cannot be mapped by a manifest</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="shell">
+        <div class="section-head">
+          <div class="section-number">03 / CONTROLS</div>
+          <div>
+            <h2>Small controls, composed deliberately.</h2>
+            <p class="section-copy">No one check carries the whole boundary. Authentication, freshness, idempotency, manifest validation, environment isolation, and fail-closed resolution work together.</p>
+          </div>
+        </div>
+
+        <div class="controls">
+          <div class="control"><span class="check" aria-hidden="true">✓</span><div><strong>Replay-bound webhook HMAC</strong><p>Timestamp, idempotency key, and exact body are signed together.</p></div></div>
+          <div class="control"><span class="check" aria-hidden="true">✓</span><div><strong>Five-minute freshness window</strong><p>Stale and future-dated signatures are rejected with 401.</p></div></div>
+          <div class="control"><span class="check" aria-hidden="true">✓</span><div><strong>Per-trigger email bearer</strong><p>The message is parsed only after its token passes verification.</p></div></div>
+          <div class="control"><span class="check" aria-hidden="true">✓</span><div><strong>Required replay identity</strong><p>Webhook keys and email Message-Ids prevent duplicate runs.</p></div></div>
+          <div class="control"><span class="check" aria-hidden="true">✓</span><div><strong>Minimal process environment</strong><p>Runtime children no longer inherit the full host environment.</p></div></div>
+          <div class="control"><span class="check" aria-hidden="true">✓</span><div><strong>Fail before isolation starts</strong><p>Missing runtime secrets fail before a process or VM is created.</p></div></div>
+          <div class="control"><span class="check" aria-hidden="true">✓</span><div><strong>Strict manifest keys</strong><p>Unknown trigger configuration and invalid variable names are rejected.</p></div></div>
+          <div class="control"><span class="check" aria-hidden="true">✓</span><div><strong>Contract documented</strong><p>README, OpenAPI, examples, and the security boundary agree.</p></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="shell">
+        <div class="section-head">
+          <div class="section-number">04 / LIVE PROOF</div>
+          <div>
+            <h2>The happy path and the hostile path both ran.</h2>
+            <p class="section-copy">A compiled Werkt server was exercised against PostgreSQL on a disposable Docker volume. The test used real signed bytes, a real replay, an authenticated RFC 5322 email, and an actual Go child process.</p>
+          </div>
+        </div>
+
+        <div class="evidence-wrap">
+          <div class="terminal" role="region" aria-label="Live verification output" tabindex="0">
+            <div class="terminal-head"><span>live-security-smoke</span><span>process + postgres</span></div>
+            <pre class="terminal-body"><span class="dim">GET  /healthz</span>                         <span class="ok">200 ok</span>
+<span class="dim">POST /hooks · unsigned</span>                 <span class="ok">401 rejected</span>
+<span class="dim">POST /hooks · signed</span>                   <span class="ok">202 run_a520…</span>
+<span class="dim">POST /hooks · exact replay</span>             <span class="ok">200 same run</span>
+<span class="dim">POST /email · wrong bearer</span>             <span class="ok">401 rejected</span>
+<span class="dim">POST /email · correct bearer</span>           <span class="ok">202 run_f98a…</span>
+<span class="dim">SELECT live run status</span>                 <span class="ok">2 succeeded</span>
+<span class="dim">SELECT secrets in revisions</span>            <span class="ok">0 values</span>
+<span class="dim">SELECT secrets in results/logs/errors</span>   <span class="ok">0 values</span></pre>
+          </div>
+
+          <aside class="evidence-notes">
+            <h3>What the run proved</h3>
+            <p>The Go automation received its mapped secret and reported only a boolean presence signal. The management token was absent from the child. The Python automation consumed the authenticated email successfully.</p>
+            <ul>
+              <li><strong>Replay:</strong> <code>created: false</code> and the original run ID.</li>
+              <li><strong>Isolation:</strong> no management or runtime secret appeared in API output.</li>
+              <li><strong>Persistence:</strong> direct database scans found no credential values.</li>
+            </ul>
+          </aside>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="shell">
+        <div class="section-head">
+          <div class="section-number">05 / VERIFICATION</div>
+          <div>
+            <h2>Checked across every supported runtime path.</h2>
+            <p class="section-copy">The verification matrix covers the Go control plane, PostgreSQL lifecycle, Husker request boundary, all example manifests, and the Python, Rust, and Go example toolchains.</p>
+          </div>
+        </div>
+
+        <div class="test-list" role="list">
+          <div class="test-row" role="listitem"><code>go test -race ./...</code><p>Full control-plane suite with the race detector.</p><span class="pass">PASS</span></div>
+          <div class="test-row" role="listitem"><code>go vet ./...</code><p>Static correctness checks across all Go packages.</p><span class="pass">PASS</span></div>
+          <div class="test-row" role="listitem"><code>TestManagementLifecycleIntegration</code><p>Real PostgreSQL deploy, pause/resume, policy, audit, queue, and non-persistence checks.</p><span class="pass">PASS</span></div>
+          <div class="test-row" role="listitem"><code>werkt validate examples/*</code><p>Python, Rust, and Go manifests accepted under the stricter schema.</p><span class="pass">3 / 3</span></div>
+          <div class="test-row" role="listitem"><code>cargo test</code><p>Rust SDK and Rust example compile and test cleanly.</p><span class="pass">PASS</span></div>
+          <div class="test-row" role="listitem"><code>go test ./...</code><p>Go automation example compiles under its own module.</p><span class="pass">PASS</span></div>
+          <div class="test-row" role="listitem"><code>python -m unittest</code><p>Python SDK contract test plus example bytecode compilation.</p><span class="pass">PASS</span></div>
+          <div class="test-row" role="listitem"><code>git diff --check</code><p>Patch hygiene and whitespace validation.</p><span class="pass">PASS</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="shell handoff">
+      <div>
+        <p class="eyebrow">Delivered</p>
+        <h2>One coherent security milestone.</h2>
+        <p class="handoff-copy"><span class="mono">29745f0</span> · <strong>feat(security): authenticate triggers and inject runtime secrets</strong><br>20 files changed · 574 insertions · 37 deletions</p>
+        <div class="links">
+          <a href="../docs/security.md">Security boundary</a>
+          <a href="../internal/httpapi/openapi.yaml">OpenAPI contract</a>
+          <a href="../README.md">Project README</a>
+        </div>
+      </div>
+      <aside class="next">
+        <p class="eyebrow">Recommended next</p>
+        <h3>Give external agents a deployment workspace.</h3>
+        <p>Build the first focused management surface around automation inventory, deployment revisions, trigger health, and run diagnosis. The backend now has enough authenticated primitives to support that UI without inventing a second control path.</p>
+        <span class="tag">Next milestone</span>
+      </aside>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell footer-inner"><span>Werkt engineering report</span><span>Generated from verified local results · Europe/Amsterdam</span></div>
+  </footer>
+</body>
+</html>
