@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f8f7f5">
+  <title>Werkt — Management workspace milestone</title>
+  <style>
+    :root {
+      --ink: #211d1b;
+      --ink-soft: #514a46;
+      --muted: #756d68;
+      --faint: #9e9691;
+      --line: #e4dfdb;
+      --line-strong: #cec6c0;
+      --canvas: #f8f7f5;
+      --paper: #ffffff;
+      --selected: #fff0e7;
+      --orange: #d34b00;
+      --orange-deep: #9b3800;
+      --green: #197446;
+      --green-pale: #e6f6ed;
+      --red: #b52b2b;
+      --red-pale: #ffeded;
+      --blue: #176c80;
+      --code: #182329;
+      --code-text: #e4eeee;
+      --space-1: .25rem;
+      --space-2: .5rem;
+      --space-3: .75rem;
+      --space-4: 1rem;
+      --space-5: 1.5rem;
+      --space-6: 2rem;
+      --space-7: 3rem;
+      --space-8: 4.5rem;
+      --radius-sm: .25rem;
+      --radius-md: .5rem;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; background: var(--canvas); }
+    body {
+      margin: 0;
+      min-width: 20rem;
+      background: var(--canvas);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      font-size: 1rem;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; }
+    code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .tabular { font-variant-numeric: tabular-nums; }
+    .skip-link {
+      position: fixed;
+      z-index: 50;
+      top: 1rem;
+      left: 1rem;
+      transform: translateY(-180%);
+      padding: .6rem .85rem;
+      background: var(--ink);
+      color: white;
+      border-radius: var(--radius-sm);
+    }
+    .skip-link:focus { transform: none; }
+    :focus-visible { outline: 2px solid var(--orange); outline-offset: 3px; }
+
+    .top-rule { height: .5rem; background: var(--orange); }
+    .report-nav {
+      position: sticky;
+      z-index: 20;
+      top: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-5);
+      min-height: 3.75rem;
+      padding: 0 max(1rem, calc((100vw - 78rem) / 2));
+      border-bottom: 1px solid var(--line);
+      background: rgb(248 247 245 / .94);
+      backdrop-filter: blur(12px);
+    }
+    .brand { display: flex; align-items: center; gap: .55rem; font-weight: 800; text-decoration: none; }
+    .brand-mark { width: .9rem; height: .9rem; border: .24rem solid var(--orange); border-right-width: .1rem; transform: skew(-8deg); }
+    .report-nav nav { display: flex; gap: var(--space-5); }
+    .report-nav nav a { color: var(--muted); font-size: .8125rem; font-weight: 650; text-decoration: none; }
+    .report-nav nav a:hover { color: var(--orange-deep); }
+
+    main { overflow: hidden; }
+    .wrap { width: min(78rem, calc(100% - 2rem)); margin-inline: auto; }
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(18rem, .8fr);
+      gap: var(--space-8);
+      padding-block: clamp(4rem, 9vw, 8rem) var(--space-8);
+      border-bottom: 1px solid var(--line-strong);
+    }
+    .hero-copy { max-width: 50rem; }
+    .kicker { margin: 0 0 var(--space-4); color: var(--orange-deep); font-weight: 750; }
+    h1, h2, h3, p { text-wrap: pretty; }
+    h1 { max-width: 13ch; margin: 0; font-size: clamp(2.8rem, 7vw, 5.6rem); line-height: .95; letter-spacing: -.065em; }
+    .lede { max-width: 49rem; margin: var(--space-6) 0 0; color: var(--ink-soft); font-size: clamp(1.1rem, 2vw, 1.45rem); line-height: 1.45; }
+    .hero-meta { align-self: end; border-top: 3px solid var(--ink); }
+    .meta-row { display: grid; grid-template-columns: 7rem 1fr; gap: var(--space-3); padding: .9rem 0; border-bottom: 1px solid var(--line); font-size: .8125rem; }
+    .meta-row dt { color: var(--muted); }
+    .meta-row dd { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
+    .state { display: inline-flex; align-items: center; gap: .45rem; color: var(--green); }
+    .state::before { content: ""; width: .45rem; height: .45rem; border-radius: 50%; background: currentColor; }
+
+    section { scroll-margin-top: 5rem; }
+    .section { display: grid; grid-template-columns: 14rem minmax(0, 1fr); gap: var(--space-7); padding-block: var(--space-8); border-bottom: 1px solid var(--line-strong); }
+    .section-label { position: relative; }
+    .section-label h2 { position: sticky; top: 6rem; margin: 0; font-size: 1rem; }
+    .section-label p { margin: .4rem 0 0; color: var(--muted); font-size: .8125rem; }
+    .section-body > :first-child { margin-top: 0; }
+    .statement { max-width: 43rem; margin: 0 0 var(--space-7); font-size: clamp(1.5rem, 3vw, 2.45rem); line-height: 1.18; letter-spacing: -.035em; font-weight: 720; }
+
+    .outcome-list { border-top: 1px solid var(--ink); }
+    .outcome-row { display: grid; grid-template-columns: 11rem 1fr; gap: var(--space-5); padding: var(--space-5) 0; border-bottom: 1px solid var(--line); }
+    .outcome-row strong { font-size: .875rem; }
+    .outcome-row p { max-width: 52rem; margin: 0; color: var(--ink-soft); }
+
+    .workspace-frame { border: 1px solid var(--line-strong); background: var(--paper); box-shadow: 10px 10px 0 #e9e4e0; }
+    .workspace-top { display: flex; align-items: center; min-height: 3.25rem; border-bottom: 1px solid var(--line); }
+    .workspace-logo { display: flex; align-items: center; gap: .4rem; width: 7rem; padding-inline: .85rem; font-weight: 800; }
+    .workspace-logo .brand-mark { width: .7rem; height: .7rem; border-width: .18rem; border-right-width: .08rem; }
+    .connection { display: flex; align-items: center; gap: .4rem; color: var(--green); font-size: .7rem; font-weight: 700; }
+    .connection i { width: .4rem; height: .4rem; border-radius: 50%; background: currentColor; }
+    .search { width: 15rem; height: 2rem; margin-left: auto; margin-right: .75rem; padding: .4rem .7rem; border: 1px solid var(--line-strong); border-radius: var(--radius-md); color: var(--faint); font-size: .7rem; }
+    .workspace-body { display: grid; grid-template-columns: 4.5rem 14rem minmax(19rem, 1fr) 18rem; min-height: 30rem; }
+    .mini-nav, .mini-inventory, .mini-main, .mini-diagnosis { min-width: 0; padding: var(--space-4); }
+    .mini-nav { display: grid; align-content: start; gap: .55rem; padding-inline: .5rem; border-right: 1px solid var(--line); background: var(--canvas); }
+    .mini-nav span { padding: .65rem .3rem; border-radius: var(--radius-md); color: var(--muted); font-size: .6rem; text-align: center; }
+    .mini-nav span:first-child { background: var(--selected); color: var(--orange-deep); font-weight: 750; }
+    .mini-inventory { border-right: 1px solid var(--line); }
+    .mini-inventory h3, .mini-main h3, .mini-diagnosis h3 { margin: 0; font-size: .9rem; }
+    .mini-copy { margin: .1rem 0 .85rem; color: var(--muted); font-size: .6rem; }
+    .mini-filters { display: flex; gap: .3rem; padding-bottom: .75rem; border-bottom: 1px solid var(--line); }
+    .mini-filters b { padding: .25rem .45rem; border: 1px solid var(--line); border-radius: 1rem; font-size: .55rem; }
+    .mini-filters b:first-child { border-color: var(--ink); background: var(--ink); color: white; }
+    .inventory-entry { display: grid; grid-template-columns: auto 1fr auto; gap: .4rem; align-items: center; margin-top: .45rem; padding: .55rem; border: 1px solid transparent; border-radius: var(--radius-md); font-size: .6rem; }
+    .inventory-entry.selected { border-color: #efbda2; background: var(--selected); }
+    .dot { width: .38rem; height: .38rem; border-radius: 50%; background: var(--green); }
+    .dot.red { background: var(--red); }
+    .dot.gray { background: var(--faint); }
+    .inventory-entry code { color: var(--faint); font-size: .52rem; }
+    .mini-main { padding: var(--space-5); }
+    .mini-breadcrumb { margin-bottom: .7rem; color: var(--muted); font-size: .55rem; }
+    .mini-title { display: flex; align-items: center; gap: .5rem; }
+    .badge { display: inline-flex; align-items: center; gap: .3rem; padding: .2rem .4rem; border-radius: var(--radius-sm); background: var(--green-pale); color: var(--green); font-size: .55rem; font-weight: 750; }
+    .badge.red { background: var(--red-pale); color: var(--red); }
+    .mini-facts { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 1.3rem; border-block: 1px solid var(--line); }
+    .mini-fact { padding: .7rem .5rem .7rem 0; border-right: 1px solid var(--line); }
+    .mini-fact:last-child { padding-left: .5rem; border: 0; }
+    .mini-fact small { display: block; color: var(--muted); font-size: .5rem; }
+    .mini-fact b { display: block; margin-top: .2rem; overflow: hidden; font-size: .6rem; text-overflow: ellipsis; white-space: nowrap; }
+    .mini-table { width: 100%; margin-top: 1.4rem; border-collapse: collapse; font-size: .55rem; }
+    .mini-table th, .mini-table td { padding: .55rem .3rem; border-bottom: 1px solid var(--line); text-align: left; }
+    .mini-table th { color: var(--muted); font-weight: 650; }
+    .mini-diagnosis { border-left: 1px solid var(--line); background: var(--canvas); }
+    .run-id { display: block; margin: .65rem 0; overflow: hidden; font-size: .55rem; text-overflow: ellipsis; }
+    .mini-tabs { display: flex; gap: .8rem; margin: .8rem 0; border-bottom: 1px solid var(--line); }
+    .mini-tabs b { padding-bottom: .45rem; color: var(--muted); font-size: .55rem; }
+    .mini-tabs b:first-child { border-bottom: 2px solid var(--orange); color: var(--orange-deep); }
+    .diagnosis-grid { display: grid; grid-template-columns: 4.6rem 1fr; gap: .5rem; margin-top: 1rem; font-size: .55rem; }
+    .diagnosis-grid dt { color: var(--muted); }
+    .diagnosis-grid dd { margin: 0; overflow-wrap: anywhere; }
+
+    .architecture { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: var(--space-3); align-items: stretch; }
+    .arch-node { min-height: 9rem; padding: var(--space-5); border-top: 3px solid var(--ink); background: var(--paper); }
+    .arch-node.primary { border-color: var(--orange); }
+    .arch-node h3 { margin: 0 0 .5rem; font-size: 1rem; }
+    .arch-node p { margin: 0; color: var(--muted); font-size: .8125rem; }
+    .arch-node code { display: block; margin-top: 1rem; color: var(--orange-deep); font-size: .7rem; }
+    .arrow { display: grid; place-items: center; color: var(--faint); font-size: 1.4rem; }
+    .principle { margin-top: var(--space-5); padding: var(--space-5); border: 1px solid var(--line-strong); background: var(--selected); }
+    .principle strong { color: var(--orange-deep); }
+    .principle p { margin: .35rem 0 0; }
+
+    .evidence { width: 100%; border-collapse: collapse; }
+    .evidence th, .evidence td { padding: 1rem .75rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .evidence th { color: var(--muted); font-size: .75rem; }
+    .evidence td { font-size: .875rem; }
+    .evidence td:first-child { width: 8rem; font-weight: 750; }
+    .pass { display: inline-flex; align-items: center; gap: .4rem; color: var(--green); font-weight: 750; }
+    .pass::before { content: "✓"; display: grid; place-items: center; width: 1.2rem; height: 1.2rem; border-radius: 50%; background: var(--green-pale); font-size: .7rem; }
+    .evidence code { color: var(--ink-soft); font-size: .75rem; }
+
+    .breakpoints { display: grid; grid-template-columns: 1.45fr 1fr .65fr; gap: var(--space-5); align-items: end; }
+    .device { border: 1px solid var(--line-strong); background: var(--paper); box-shadow: 6px 6px 0 #e9e4e0; }
+    .device-bar { display: flex; gap: .25rem; height: 1.7rem; padding: .55rem; border-bottom: 1px solid var(--line); }
+    .device-bar i { width: .35rem; height: .35rem; border-radius: 50%; background: var(--line-strong); }
+    .device-content { display: grid; min-height: 12rem; }
+    .device.desktop .device-content { grid-template-columns: 12% 25% 40% 23%; }
+    .device.tablet .device-content { grid-template-columns: 18% 35% 47%; }
+    .device.mobile .device-content { grid-template-rows: 1fr 2.3rem; min-height: 15rem; }
+    .device-content span { border-right: 1px solid var(--line); }
+    .device-content span:nth-child(2) { background: #fcfbfa; }
+    .device-content span:last-child { border: 0; background: var(--selected); }
+    .device.mobile .device-content span:first-child { background: white; border: 0; }
+    .device.mobile .device-content span:last-child { border-top: 1px solid var(--line); background: var(--selected); }
+    .device figcaption { display: flex; justify-content: space-between; gap: .5rem; padding: .7rem; color: var(--muted); font-size: .7rem; }
+    .device figcaption strong { color: var(--ink); }
+
+    .commit-list { border-top: 1px solid var(--ink); }
+    .commit { display: grid; grid-template-columns: 6.5rem 1fr; gap: var(--space-5); padding: var(--space-5) 0; border-bottom: 1px solid var(--line); }
+    .commit code { color: var(--orange-deep); font-weight: 700; }
+    .commit strong { display: block; }
+    .commit p { margin: .3rem 0 0; color: var(--muted); }
+
+    .next {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 16rem;
+      gap: var(--space-7);
+      padding: var(--space-8);
+      background: var(--ink);
+      color: white;
+    }
+    .next h2 { max-width: 18ch; margin: 0; font-size: clamp(2rem, 4vw, 3.7rem); line-height: 1.02; letter-spacing: -.045em; }
+    .next p { max-width: 46rem; margin: var(--space-5) 0 0; color: #cfc8c3; }
+    .next-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid #5a514c; }
+    .next-list li { padding: .8rem 0; border-bottom: 1px solid #5a514c; color: #e5dfdb; font-size: .8125rem; }
+    .next-list b { display: block; color: #ff8542; }
+
+    footer { display: flex; justify-content: space-between; gap: var(--space-5); padding-block: var(--space-6); color: var(--muted); font-size: .75rem; }
+
+    @media (max-width: 64rem) {
+      .workspace-body { grid-template-columns: 4.5rem 13rem minmax(19rem, 1fr); }
+      .mini-diagnosis { grid-column: 3; grid-row: 1; margin-left: 35%; z-index: 2; box-shadow: -6px 0 0 rgb(33 29 27 / .08); }
+      .architecture { grid-template-columns: 1fr; }
+      .arrow { transform: rotate(90deg); }
+    }
+    @media (max-width: 48rem) {
+      .report-nav nav { display: none; }
+      .hero, .section { grid-template-columns: 1fr; gap: var(--space-6); }
+      .section-label h2 { position: static; }
+      .hero-meta { align-self: auto; }
+      .workspace-frame { overflow-x: auto; }
+      .workspace-top, .workspace-body { min-width: 47rem; }
+      .outcome-row { grid-template-columns: 1fr; gap: .35rem; }
+      .evidence thead { display: none; }
+      .evidence, .evidence tbody, .evidence tr, .evidence td { display: block; width: 100%; }
+      .evidence tr { padding: 1rem 0; border-bottom: 1px solid var(--line); }
+      .evidence td { padding: .25rem 0; border: 0; }
+      .evidence td:first-child { width: auto; }
+      .breakpoints { grid-template-columns: 1fr; align-items: stretch; }
+      .device.desktop .device-content, .device.tablet .device-content { min-height: 10rem; }
+      .next { grid-template-columns: 1fr; padding: var(--space-7) var(--space-5); }
+      footer { display: block; }
+    }
+    @media (max-width: 30rem) {
+      h1 { font-size: 2.7rem; }
+      .meta-row, .commit { grid-template-columns: 1fr; gap: .25rem; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+    }
+    @media print {
+      .top-rule, .report-nav { display: none; }
+      body { background: white; }
+      .hero { padding-top: 2rem; }
+      .section { break-inside: avoid; }
+      .workspace-frame, .device { box-shadow: none; }
+      .next { background: white; color: var(--ink); border: 2px solid var(--ink); }
+      .next p, .next-list li { color: var(--ink-soft); }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to report</a>
+  <div class="top-rule"></div>
+  <header class="report-nav">
+    <a class="brand" href="#content"><span class="brand-mark" aria-hidden="true"></span>Werkt</a>
+    <nav aria-label="Report sections">
+      <a href="#outcome">Outcome</a>
+      <a href="#workspace">Workspace</a>
+      <a href="#evidence">Evidence</a>
+      <a href="#next">Next</a>
+    </nav>
+  </header>
+
+  <main id="content">
+    <div class="wrap">
+      <header class="hero">
+        <div class="hero-copy">
+          <p class="kicker">Management workspace milestone · August 18, 2026</p>
+          <h1>The control plane now has a face.</h1>
+          <p class="lede">Werkt can now be understood and operated from one responsive workspace—without creating a second, privileged path around the agent-facing API.</p>
+        </div>
+        <dl class="hero-meta">
+          <div class="meta-row"><dt>Status</dt><dd><span class="state">Shipped and verified</span></dd></div>
+          <div class="meta-row"><dt>Automations</dt><dd>Python · Rust · Go</dd></div>
+          <div class="meta-row"><dt>Views</dt><dd>Inventory · Runs · Audit · Diagnosis</dd></div>
+          <div class="meta-row"><dt>Target</dt><dd>Desktop · Tablet · Mobile</dd></div>
+          <div class="meta-row"><dt>Branch</dt><dd class="mono">main</dd></div>
+        </dl>
+      </header>
+
+      <section class="section" id="outcome">
+        <div class="section-label"><h2>Outcome</h2><p>What changed</p></div>
+        <div class="section-body">
+          <p class="statement">The operator sees the same system truth an external agent sees: immutable revisions, real triggers, lifecycle state, attempts, logs, output, and audit attribution.</p>
+          <div class="outcome-list">
+            <div class="outcome-row"><strong>Organized inventory</strong><p>Automations are grouped by project and folder, searchable by operational metadata, and filterable by active or paused state. Latest-run health is visible without turning the product into a metric-card dashboard.</p></div>
+            <div class="outcome-row"><strong>Safe intervention</strong><p>Pause and resume are explicit lifecycle mutations. Manual runs carry a visible idempotency key, use the active immutable revision, and work even while an automation is paused for diagnosis.</p></div>
+            <div class="outcome-row"><strong>Failure diagnosis</strong><p>A run opens beside its automation with exact revision, event, timestamps, attempt count, error, logs, and structured output. A missing runtime secret is shown as the concrete configuration failure it is.</p></div>
+            <div class="outcome-row"><strong>One control path</strong><p>The workspace is a static client embedded in the Go binary. It calls the public management API and attributes mutations as <code>workspace:operator</code>; API-only deployments remain first-class.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="workspace">
+        <div class="section-label"><h2>Workspace</h2><p>The shipped topology</p></div>
+        <div class="section-body">
+          <div class="workspace-frame" role="img" aria-label="Diagram of the Werkt workspace with navigation, automation inventory, Go automation detail, and failed-run diagnosis">
+            <div class="workspace-top">
+              <div class="workspace-logo"><span class="brand-mark" aria-hidden="true"></span>Werkt</div>
+              <span class="connection"><i></i>Connected</span>
+              <div class="search">⌕&nbsp;&nbsp;Find an automation</div>
+            </div>
+            <div class="workspace-body">
+              <div class="mini-nav"><span>ϟ<br>Automations</span><span>▷<br>Runs</span><span>♢<br>Audit</span></div>
+              <div class="mini-inventory">
+                <h3>Automations</h3><p class="mini-copy">3 automations</p>
+                <div class="mini-filters"><b>All</b><b>Active</b><b>Paused</b></div>
+                <div class="inventory-entry selected"><i class="dot red"></i><b>go-hello</b><code>rev_246…</code></div>
+                <div class="inventory-entry"><i class="dot"></i><b>python-hello</b><code>rev_81f…</code></div>
+                <div class="inventory-entry"><i class="dot gray"></i><b>rust-hello</b><code>rev_96b…</code></div>
+              </div>
+              <div class="mini-main">
+                <div class="mini-breadcrumb">examples &nbsp;›&nbsp; getting-started &nbsp;›&nbsp; go-hello</div>
+                <div class="mini-title"><h3>go-hello</h3><span class="badge">● Active</span></div>
+                <p class="mini-copy">Demonstrates the raw protocol from a Go binary.</p>
+                <div class="mini-facts">
+                  <div class="mini-fact"><small>Active revision</small><b class="mono">rev_246f7e489…</b></div>
+                  <div class="mini-fact"><small>Runtime</small><b>go · debian:slim</b></div>
+                  <div class="mini-fact"><small>Concurrency</small><b>allow · 30s</b></div>
+                </div>
+                <table class="mini-table"><thead><tr><th>Status</th><th>Attempt</th><th>Run ID</th></tr></thead><tbody><tr><td><span class="badge red">● Failed</span></td><td>2/2</td><td class="mono">run_dfb6a3ea…</td></tr></tbody></table>
+              </div>
+              <div class="mini-diagnosis">
+                <h3>Run diagnosis</h3>
+                <span class="run-id mono">run_dfb6a3ea5b0e65f79250b8a9</span>
+                <span class="badge red">● Failed</span>
+                <div class="mini-tabs"><b>Summary</b><b>Logs</b><b>Output</b></div>
+                <dl class="diagnosis-grid"><dt>Automation</dt><dd>go-hello</dd><dt>Attempts</dt><dd>2 of 2</dd><dt>Error</dt><dd>Runtime secret references unset environment variable.</dd></dl>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="architecture">
+        <div class="section-label"><h2>Architecture</h2><p>The important boundary</p></div>
+        <div class="section-body">
+          <p class="statement">The interface is deliberately thin. Werkt’s API remains the product.</p>
+          <div class="architecture">
+            <div class="arch-node"><h3>Agents and operators</h3><p>External coding agents use HTTP directly. Operators can use the embedded workspace.</p><code>Authorization: Bearer …</code></div>
+            <div class="arrow" aria-hidden="true">→</div>
+            <div class="arch-node primary"><h3>Public management API</h3><p>Inventory, detail, lifecycle mutation, manual runs, run history, and audit.</p><code>/api/v1/*</code></div>
+            <div class="arrow" aria-hidden="true">→</div>
+            <div class="arch-node"><h3>Durable runtime</h3><p>PostgreSQL queue, immutable revisions, worker leases, and local or Husker execution.</p><code>event → run → result</code></div>
+          </div>
+          <div class="principle"><strong>No private admin API.</strong><p>The browser receives no management token from the server. A supplied token stays in tab-scoped storage, and every mutation is visible in the same audit trail an agent reads.</p></div>
+        </div>
+      </section>
+
+      <section class="section" id="evidence">
+        <div class="section-label"><h2>Evidence</h2><p>How it was proven</p></div>
+        <div class="section-body">
+          <table class="evidence">
+            <thead><tr><th>Area</th><th>Result</th><th>Proof</th></tr></thead>
+            <tbody>
+              <tr><td>Go suite</td><td><span class="pass">Passed</span></td><td><code>go test -race ./...</code> across database, HTTP API, manifest, runner, and service packages.</td></tr>
+              <tr><td>Static analysis</td><td><span class="pass">Passed</span></td><td><code>go vet ./...</code>, <code>node --check</code>, and <code>git diff --check</code>.</td></tr>
+              <tr><td>Design audit</td><td><span class="pass">Clean</span></td><td>Impeccable layout and typography detector scopes returned no findings after the design contract was extracted.</td></tr>
+              <tr><td>Language contract</td><td><span class="pass">Passed</span></td><td>Python compiled; Rust tests passed; Go example tests passed; all three manifests validated to deterministic content hashes.</td></tr>
+              <tr><td>Live lifecycle</td><td><span class="pass">Passed</span></td><td>Fresh PostgreSQL data with Python, Rust, and Go deployments; pause, resume, manual run, logs, output, and actor-attributed audit were exercised in-browser.</td></tr>
+              <tr><td>Failure path</td><td><span class="pass">Proven</span></td><td>The Go automation exhausted <span class="tabular">2/2</span> attempts and exposed the exact missing-secret error in diagnosis.</td></tr>
+              <tr><td>Responsive UI</td><td><span class="pass">Passed</span></td><td>Verified at <span class="tabular">1728×1050</span>, <span class="tabular">900×900</span>, and <span class="tabular">390×844</span> with zero horizontal document overflow.</td></tr>
+              <tr><td>Keyboard flow</td><td><span class="pass">Passed</span></td><td>Visible focus, skip navigation, native dialogs, diagnosis focus return, and arrow-key run-detail tabs were verified.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section" id="responsive">
+        <div class="section-label"><h2>Responsive behavior</h2><p>One hierarchy, three forms</p></div>
+        <div class="section-body">
+          <p class="statement">Desktop keeps context visible. Tablet overlays diagnosis. Mobile turns each responsibility into a focused view.</p>
+          <div class="breakpoints">
+            <figure class="device desktop"><div class="device-bar"><i></i><i></i><i></i></div><div class="device-content"><span></span><span></span><span></span><span></span></div><figcaption><strong>Desktop</strong><span>four panes</span></figcaption></figure>
+            <figure class="device tablet"><div class="device-bar"><i></i><i></i><i></i></div><div class="device-content"><span></span><span></span><span></span></div><figcaption><strong>Tablet</strong><span>diagnosis drawer</span></figcaption></figure>
+            <figure class="device mobile"><div class="device-bar"><i></i><i></i><i></i></div><div class="device-content"><span></span><span></span></div><figcaption><strong>Mobile</strong><span>focused flow</span></figcaption></figure>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="commits">
+        <div class="section-label"><h2>Shipping record</h2><p>Logical commits</p></div>
+        <div class="section-body">
+          <div class="commit-list">
+            <div class="commit"><code>fc6f400</code><div><strong>docs(design): define Werkt interface system</strong><p>Product register, normative design tokens, component rules, responsive posture, and live-design configuration.</p></div></div>
+            <div class="commit"><code>448820c</code><div><strong>feat(workspace): add agent-aligned management console</strong><p>Embedded secure assets, responsive operator workspace, public-API integration, documentation, and HTTP coverage.</p></div></div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <section class="next" id="next">
+      <div><h2>Next: let agents deliver the artifact.</h2><p>The remaining lifecycle gap is deployment. Today, an external agent can inspect, pause, resume, invoke, and diagnose—but deployment still assumes CLI access to a local package directory. The next milestone should add authenticated, idempotent artifact intake through the management API while preserving validation, immutable revisions, and the Husker boundary.</p></div>
+      <ol class="next-list">
+        <li><b>1 · Intake</b>Stream a bounded package archive with digest and idempotency key.</li>
+        <li><b>2 · Validate</b>Return structured manifest and build diagnostics before activation.</li>
+        <li><b>3 · Build</b>Run language-specific build steps inside the configured isolation backend.</li>
+        <li><b>4 · Activate</b>Create and atomically select an immutable revision with audit attribution.</li>
+      </ol>
+    </section>
+  </main>
+
+  <footer class="wrap"><span>Werkt management workspace milestone</span><span>Generated from verified repository and live runtime evidence · 2026-08-18</span></footer>
+</body>
+</html>
