@@ -3,6 +3,9 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,27 +14,52 @@ import (
 	"net/http"
 	"net/mail"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/rvben/werkt/internal/database"
+	"github.com/rvben/werkt/internal/domain"
 )
 
 const maxWebhookBody = 2 << 20
 const maxEmailBody = 12 << 20
 
+//go:embed openapi.yaml
+var openAPIFS embed.FS
+
 type Server struct {
-	store  *database.Store
-	server *http.Server
+	store           Store
+	managementToken string
+	server          *http.Server
 }
 
-func New(store *database.Store, address string) *Server {
-	value := &Server{store: store}
+type Store interface {
+	Ping(context.Context) error
+	IngestEvent(context.Context, string, string, string, string, time.Time, json.RawMessage, map[string]any) (string, bool, error)
+	ListAutomations(context.Context, database.AutomationFilter) ([]database.AutomationSummary, error)
+	GetAutomation(context.Context, string) (database.AutomationDetail, error)
+	SetAutomationEnabled(context.Context, string, bool, string) (bool, error)
+	EnqueueManualRun(context.Context, string, string, json.RawMessage, string) (string, bool, error)
+	ListRunsFiltered(context.Context, string, string, int) ([]domain.Run, error)
+	GetRun(context.Context, string) (domain.Run, error)
+	ListAuditEvents(context.Context, string, int) ([]database.AuditEvent, error)
+}
+
+func New(store Store, address, managementToken string) *Server {
+	value := &Server{store: store, managementToken: managementToken}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", value.health)
+	mux.HandleFunc("GET /api/openapi.yaml", value.openAPI)
 	mux.HandleFunc("POST /api/v1/hooks/{automation}/{trigger}", value.webhook)
 	mux.HandleFunc("POST /api/v1/email/{automation}/{trigger}", value.email)
-	mux.HandleFunc("GET /api/v1/automations", value.automations)
-	mux.HandleFunc("GET /api/v1/runs", value.runs)
+	mux.Handle("GET /api/v1/automations", value.requireManagementAuth(http.HandlerFunc(value.automations)))
+	mux.Handle("GET /api/v1/automations/{automation}", value.requireManagementAuth(http.HandlerFunc(value.automation)))
+	mux.Handle("PATCH /api/v1/automations/{automation}", value.requireManagementAuth(http.HandlerFunc(value.updateAutomation)))
+	mux.Handle("POST /api/v1/automations/{automation}/runs", value.requireManagementAuth(http.HandlerFunc(value.manualRun)))
+	mux.Handle("GET /api/v1/runs", value.requireManagementAuth(http.HandlerFunc(value.runs)))
+	mux.Handle("GET /api/v1/runs/{run}", value.requireManagementAuth(http.HandlerFunc(value.run)))
+	mux.Handle("GET /api/v1/audit", value.requireManagementAuth(http.HandlerFunc(value.audit)))
 	value.server = &http.Server{
 		Addr:              address,
 		Handler:           requestLogger(mux),
@@ -108,6 +136,19 @@ func (s *Server) health(response http.ResponseWriter, request *http.Request) {
 	writeJSON(response, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func (s *Server) openAPI(response http.ResponseWriter, _ *http.Request) {
+	contents, err := openAPIFS.ReadFile("openapi.yaml")
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "load OpenAPI document")
+		return
+	}
+	response.Header().Set("Content-Type", "application/yaml")
+	response.WriteHeader(http.StatusOK)
+	if _, err := response.Write(contents); err != nil {
+		slog.Error("write OpenAPI document", "error", err)
+	}
+}
+
 func (s *Server) webhook(response http.ResponseWriter, request *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(response, request.Body, maxWebhookBody))
 	if err != nil {
@@ -141,7 +182,21 @@ func (s *Server) webhook(response http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) automations(response http.ResponseWriter, request *http.Request) {
-	values, err := s.store.ListAutomations(request.Context())
+	filter := database.AutomationFilter{
+		Project: strings.TrimSpace(request.URL.Query().Get("project")),
+		Folder:  strings.TrimSpace(request.URL.Query().Get("folder")),
+		Label:   strings.TrimSpace(request.URL.Query().Get("label")),
+		Query:   strings.TrimSpace(request.URL.Query().Get("q")),
+	}
+	if raw := request.URL.Query().Get("enabled"); raw != "" {
+		enabled, err := strconv.ParseBool(raw)
+		if err != nil {
+			writeError(response, http.StatusBadRequest, "enabled must be true or false")
+			return
+		}
+		filter.Enabled = &enabled
+	}
+	values, err := s.store.ListAutomations(request.Context(), filter)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "list automations")
 		return
@@ -149,14 +204,185 @@ func (s *Server) automations(response http.ResponseWriter, request *http.Request
 	writeJSON(response, http.StatusOK, values)
 }
 
+func (s *Server) automation(response http.ResponseWriter, request *http.Request) {
+	value, err := s.store.GetAutomation(request.Context(), request.PathValue("automation"))
+	if errors.Is(err, database.ErrAutomationNotFound) {
+		writeError(response, http.StatusNotFound, "automation not found")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "get automation")
+		return
+	}
+	writeJSON(response, http.StatusOK, value)
+}
+
+func (s *Server) updateAutomation(response http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := decodeJSON(response, request, 1024, &body); err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	if body.Enabled == nil {
+		writeError(response, http.StatusBadRequest, "enabled is required")
+		return
+	}
+	automationID := request.PathValue("automation")
+	changed, err := s.store.SetAutomationEnabled(request.Context(), automationID, *body.Enabled, requestActor(request))
+	if errors.Is(err, database.ErrAutomationNotFound) {
+		writeError(response, http.StatusNotFound, "automation not found")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "update automation")
+		return
+	}
+	value, err := s.store.GetAutomation(request.Context(), automationID)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "read updated automation")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"automation": value, "changed": changed})
+}
+
+func (s *Server) manualRun(response http.ResponseWriter, request *http.Request) {
+	body, err := io.ReadAll(http.MaxBytesReader(response, request.Body, maxWebhookBody))
+	if err != nil {
+		writeError(response, http.StatusBadRequest, "invalid or oversized request body")
+		return
+	}
+	data := json.RawMessage(body)
+	if len(data) == 0 {
+		data = json.RawMessage(`{}`)
+	} else if !json.Valid(data) {
+		writeError(response, http.StatusBadRequest, "body must be valid JSON")
+		return
+	}
+	runID, created, err := s.store.EnqueueManualRun(
+		request.Context(), request.PathValue("automation"), request.Header.Get("Idempotency-Key"), data, requestActor(request),
+	)
+	if errors.Is(err, database.ErrAutomationNotFound) {
+		writeError(response, http.StatusNotFound, "automation not found")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "queue manual run")
+		return
+	}
+	status := http.StatusAccepted
+	if !created {
+		status = http.StatusOK
+	}
+	writeJSON(response, status, map[string]any{"runId": runID, "created": created})
+}
+
 func (s *Server) runs(response http.ResponseWriter, request *http.Request) {
-	limit, _ := strconv.Atoi(request.URL.Query().Get("limit"))
-	values, err := s.store.ListRuns(request.Context(), limit)
+	limit, err := requestLimit(request, 100)
+	if err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	status := request.URL.Query().Get("status")
+	if status != "" && status != domain.RunQueued && status != domain.RunRunning && status != domain.RunSucceeded && status != domain.RunFailed {
+		writeError(response, http.StatusBadRequest, "status must be queued, running, succeeded, or failed")
+		return
+	}
+	values, err := s.store.ListRunsFiltered(request.Context(), request.URL.Query().Get("automation"), status, limit)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "list runs")
 		return
 	}
 	writeJSON(response, http.StatusOK, values)
+}
+
+func (s *Server) run(response http.ResponseWriter, request *http.Request) {
+	value, err := s.store.GetRun(request.Context(), request.PathValue("run"))
+	if errors.Is(err, database.ErrRunNotFound) {
+		writeError(response, http.StatusNotFound, "run not found")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "get run")
+		return
+	}
+	writeJSON(response, http.StatusOK, value)
+}
+
+func (s *Server) audit(response http.ResponseWriter, request *http.Request) {
+	limit, err := requestLimit(request, 100)
+	if err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	values, err := s.store.ListAuditEvents(request.Context(), request.URL.Query().Get("automation"), limit)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "list audit events")
+		return
+	}
+	writeJSON(response, http.StatusOK, values)
+}
+
+func (s *Server) requireManagementAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Cache-Control", "no-store")
+		if s.managementToken == "" {
+			next.ServeHTTP(response, request)
+			return
+		}
+		provided, found := strings.CutPrefix(request.Header.Get("Authorization"), "Bearer ")
+		expectedHash := sha256.Sum256([]byte(s.managementToken))
+		providedHash := sha256.Sum256([]byte(provided))
+		if !found || subtle.ConstantTimeCompare(expectedHash[:], providedHash[:]) != 1 {
+			response.Header().Set("WWW-Authenticate", `Bearer realm="werkt-management"`)
+			writeError(response, http.StatusUnauthorized, "management authentication required")
+			return
+		}
+		next.ServeHTTP(response, request)
+	})
+}
+
+func decodeJSON(response http.ResponseWriter, request *http.Request, maxBytes int64, destination any) error {
+	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, maxBytes))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return fmt.Errorf("invalid JSON body: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("body must contain one JSON value")
+	}
+	return nil
+}
+
+func requestLimit(request *http.Request, fallback int) (int, error) {
+	raw := request.URL.Query().Get("limit")
+	if raw == "" {
+		return fallback, nil
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 1 || limit > 500 {
+		return 0, errors.New("limit must be an integer from 1 to 500")
+	}
+	return limit, nil
+}
+
+func requestActor(request *http.Request) string {
+	actor := strings.TrimSpace(request.Header.Get("X-Werkt-Actor"))
+	actor = strings.Map(func(value rune) rune {
+		if unicode.IsControl(value) {
+			return -1
+		}
+		return value
+	}, actor)
+	if actor == "" {
+		return "api"
+	}
+	runes := []rune(actor)
+	if len(runes) > 255 {
+		return string(runes[:255])
+	}
+	return actor
 }
 
 func writeJSON(response http.ResponseWriter, status int, value any) {
