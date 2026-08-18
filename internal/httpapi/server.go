@@ -57,6 +57,10 @@ type Store interface {
 func New(store Store, address, managementToken string) *Server {
 	value := &Server{store: store, managementToken: managementToken}
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", value.workspaceRoot)
+	mux.HandleFunc("GET /app", value.workspaceRoot)
+	mux.HandleFunc("GET /app/", value.workspace)
+	mux.HandleFunc("GET /app/{asset}", value.workspace)
 	mux.HandleFunc("GET /healthz", value.health)
 	mux.HandleFunc("GET /api/openapi.yaml", value.openAPI)
 	mux.HandleFunc("POST /api/v1/hooks/{automation}/{trigger}", value.webhook)

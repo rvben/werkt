@@ -4,6 +4,14 @@ The management API is the stable control-plane surface for operators, external a
 
 The machine-readable OpenAPI 3.1 contract is served at `GET /api/openapi.yaml` and does not require authentication.
 
+## Management workspace
+
+`GET /app/` serves the responsive operator workspace embedded in the Werkt binary. It is deliberately a client of this management API rather than a separate administrative backend: inventory, detail, pause/resume, manual runs, run diagnosis, and audit history all use the endpoints documented below.
+
+When management authentication is enabled, choose **Connection** and enter the same bearer token an external agent would use. The token is held in `sessionStorage`, is never rendered into the page or embedded asset, and is cleared when the browser tab closes. Workspace mutations send `X-Werkt-Actor: workspace:operator` so they remain attributable in the audit trail.
+
+The workspace is a convenience for operators, not a requirement for automation or agent access. An API-only deployment remains fully supported.
+
 ## Authentication and attribution
 
 Set `WERKT_MANAGEMENT_TOKEN` and send it as a bearer token on every management request:

@@ -125,6 +125,56 @@ func TestManagementRoutesRequireBearerTokenButTriggerIngressDoesNot(t *testing.T
 	}
 }
 
+func TestWorkspaceServesEmbeddedAssetsWithoutExposingManagementToken(t *testing.T) {
+	server := New(&fakeStore{}, ":0", "management-secret-that-must-not-be-rendered")
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusTemporaryRedirect || response.Header().Get("Location") != "/app/" {
+		t.Fatalf("root status=%d location=%q", response.Code, response.Header().Get("Location"))
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/app/", nil)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("workspace status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if contentType := response.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/html") {
+		t.Fatalf("workspace content type = %q", contentType)
+	}
+	for _, header := range []string{"Content-Security-Policy", "Cross-Origin-Opener-Policy", "Referrer-Policy", "X-Content-Type-Options"} {
+		if response.Header().Get(header) == "" {
+			t.Errorf("workspace omitted %s", header)
+		}
+	}
+	contents := response.Body.String()
+	for _, marker := range []string{"Werkt workspace", "Skip to workspace", "/app/workspace.css", "/app/workspace.js"} {
+		if !strings.Contains(contents, marker) {
+			t.Errorf("workspace omitted %q", marker)
+		}
+	}
+	if strings.Contains(contents, "management-secret-that-must-not-be-rendered") {
+		t.Fatal("workspace rendered the management token")
+	}
+
+	for asset, contentType := range map[string]string{
+		"/app/workspace.css": "text/css",
+		"/app/workspace.js":  "text/javascript",
+	} {
+		request = httptest.NewRequest(http.MethodGet, asset, nil)
+		response = httptest.NewRecorder()
+		server.server.Handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !strings.HasPrefix(response.Header().Get("Content-Type"), contentType) {
+			t.Errorf("%s status=%d content-type=%q", asset, response.Code, response.Header().Get("Content-Type"))
+		}
+		if response.Body.Len() < 1000 {
+			t.Errorf("%s unexpectedly small: %d bytes", asset, response.Body.Len())
+		}
+	}
+}
+
 func TestTriggerIngressRejectsInvalidCredentials(t *testing.T) {
 	const webhookSecret = "test-webhook-secret-at-least-32-bytes"
 	const emailToken = "test-email-token-at-least-32-bytes-long"
