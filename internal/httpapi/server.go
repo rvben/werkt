@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/mail"
 	"os"
@@ -23,6 +24,8 @@ import (
 
 	"github.com/rvben/werkt/internal/database"
 	"github.com/rvben/werkt/internal/domain"
+	"github.com/rvben/werkt/internal/packageio"
+	"github.com/rvben/werkt/internal/service"
 )
 
 const maxWebhookBody = 2 << 20
@@ -36,9 +39,10 @@ const webhookSignatureTolerance = 5 * time.Minute
 var openAPIFS embed.FS
 
 type Server struct {
-	store           Store
-	managementToken string
-	server          *http.Server
+	store            Store
+	deploymentIntake DeploymentIntake
+	managementToken  string
+	server           *http.Server
 }
 
 type Store interface {
@@ -52,10 +56,25 @@ type Store interface {
 	ListRunsFiltered(context.Context, string, string, int) ([]domain.Run, error)
 	GetRun(context.Context, string) (domain.Run, error)
 	ListAuditEvents(context.Context, string, int) ([]database.AuditEvent, error)
+	ListDeploymentsFiltered(context.Context, string, string, int) ([]domain.Deployment, error)
+	GetDeployment(context.Context, string) (domain.Deployment, error)
 }
 
-func New(store Store, address, managementToken string) *Server {
+type DeploymentIntake interface {
+	Accept(context.Context, io.Reader, string, string, string) (domain.Deployment, bool, error)
+}
+
+type Option func(*Server)
+
+func WithDeploymentIntake(intake DeploymentIntake) Option {
+	return func(server *Server) { server.deploymentIntake = intake }
+}
+
+func New(store Store, address, managementToken string, options ...Option) *Server {
 	value := &Server{store: store, managementToken: managementToken}
+	for _, option := range options {
+		option(value)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", value.workspaceRoot)
 	mux.HandleFunc("GET /app", value.workspaceRoot)
@@ -72,6 +91,9 @@ func New(store Store, address, managementToken string) *Server {
 	mux.Handle("GET /api/v1/runs", value.requireManagementAuth(http.HandlerFunc(value.runs)))
 	mux.Handle("GET /api/v1/runs/{run}", value.requireManagementAuth(http.HandlerFunc(value.run)))
 	mux.Handle("GET /api/v1/audit", value.requireManagementAuth(http.HandlerFunc(value.audit)))
+	mux.Handle("POST /api/v1/deployments", value.requireManagementAuth(http.HandlerFunc(value.createDeployment)))
+	mux.Handle("GET /api/v1/deployments", value.requireManagementAuth(http.HandlerFunc(value.deployments)))
+	mux.Handle("GET /api/v1/deployments/{deployment}", value.requireManagementAuth(http.HandlerFunc(value.deployment)))
 	value.server = &http.Server{
 		Addr:              address,
 		Handler:           requestLogger(mux),
@@ -79,6 +101,94 @@ func New(store Store, address, managementToken string) *Server {
 		IdleTimeout:       60 * time.Second,
 	}
 	return value
+}
+
+func (s *Server) createDeployment(response http.ResponseWriter, request *http.Request) {
+	if s.deploymentIntake == nil {
+		writeError(response, http.StatusServiceUnavailable, "deployment intake is not configured")
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
+	if err != nil || (mediaType != "application/gzip" && mediaType != "application/x-gzip") {
+		writeError(response, http.StatusUnsupportedMediaType, "Content-Type must be application/gzip")
+		return
+	}
+	value, created, err := s.deploymentIntake.Accept(
+		request.Context(), request.Body, request.Header.Get("X-Werkt-Content-SHA256"),
+		request.Header.Get("Idempotency-Key"), requestActor(request),
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidIdempotencyKey), errors.Is(err, service.ErrInvalidDeploymentDigest):
+			writeError(response, http.StatusBadRequest, err.Error())
+		case errors.Is(err, service.ErrDeploymentDigestMismatch):
+			writeError(response, http.StatusUnprocessableEntity, err.Error())
+		case errors.Is(err, database.ErrDeploymentIdempotencyConflict):
+			writeError(response, http.StatusConflict, err.Error())
+		case errors.Is(err, packageio.ErrCompressedLimit), errors.Is(err, packageio.ErrExpandedLimit), errors.Is(err, packageio.ErrEntryLimit):
+			writeError(response, http.StatusRequestEntityTooLarge, err.Error())
+		case errors.Is(err, packageio.ErrUnsafeArchive), errors.Is(err, packageio.ErrInvalidArchive):
+			writeError(response, http.StatusBadRequest, err.Error())
+		default:
+			slog.Error("create deployment", "error", err)
+			writeError(response, http.StatusInternalServerError, "create deployment")
+		}
+		return
+	}
+	status := http.StatusAccepted
+	if !created {
+		status = http.StatusOK
+	}
+	response.Header().Set("Location", "/api/v1/deployments/"+value.ID)
+	if value.Status != domain.DeploymentSucceeded && value.Status != domain.DeploymentFailed {
+		response.Header().Set("Retry-After", "1")
+	}
+	writeJSON(response, status, map[string]any{"deployment": value, "created": created})
+}
+
+func (s *Server) deployments(response http.ResponseWriter, request *http.Request) {
+	limit, err := requestLimit(request, 100)
+	if err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	status := request.URL.Query().Get("status")
+	if status != "" && !validDeploymentStatus(status) {
+		writeError(response, http.StatusBadRequest, "status must be queued, validating, building, activating, succeeded, or failed")
+		return
+	}
+	values, err := s.store.ListDeploymentsFiltered(request.Context(), request.URL.Query().Get("automation"), status, limit)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "list deployments")
+		return
+	}
+	writeJSON(response, http.StatusOK, values)
+}
+
+func (s *Server) deployment(response http.ResponseWriter, request *http.Request) {
+	value, err := s.store.GetDeployment(request.Context(), request.PathValue("deployment"))
+	if errors.Is(err, database.ErrDeploymentNotFound) {
+		writeError(response, http.StatusNotFound, "deployment not found")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "get deployment")
+		return
+	}
+	if value.Status != domain.DeploymentSucceeded && value.Status != domain.DeploymentFailed {
+		response.Header().Set("Retry-After", "1")
+	}
+	writeJSON(response, http.StatusOK, value)
+}
+
+func validDeploymentStatus(status string) bool {
+	switch status {
+	case domain.DeploymentQueued, domain.DeploymentValidating, domain.DeploymentBuilding,
+		domain.DeploymentActivating, domain.DeploymentSucceeded, domain.DeploymentFailed:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) email(response http.ResponseWriter, request *http.Request) {

@@ -4,6 +4,12 @@ Werkt stores references to credentials, never credential values. References are 
 
 Names beginning with `WERKT_` cannot be referenced by trigger credentials or runtime secrets. This prevents an automation manifest from deliberately mapping the control plane's database, management, or Husker credentials into a guest.
 
+## Remote package intake
+
+The deployment endpoint is a code-execution boundary, not a file-storage endpoint. It requires management authentication, verifies the SHA-256 of the exact compressed request, streams to bounded temporary storage, and extracts only regular files beneath one package root. Absolute paths, traversal, backslashes, NUL bytes, links, special files, duplicate case-insensitive paths, excessive entries, and compressed or expanded size overages are rejected before validation or build execution.
+
+Do not expose a server using `WERKT_EXECUTOR=process` to deployers you do not fully trust: a manifest build command executes on the control-plane host, and runtime code later does too. Use `WERKT_EXECUTOR=husker` to isolate remote builds and attempts in disposable microVMs. Husker currently assumes one administrative trust domain; it is not yet a hostile multi-tenant boundary.
+
 ## Webhook signatures
 
 A webhook trigger requires `config.secretEnv`:

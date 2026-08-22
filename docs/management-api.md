@@ -6,7 +6,7 @@ The machine-readable OpenAPI 3.1 contract is served at `GET /api/openapi.yaml` a
 
 ## Management workspace
 
-`GET /app/` serves the responsive operator workspace embedded in the Werkt binary. It is deliberately a client of this management API rather than a separate administrative backend: inventory, detail, pause/resume, manual runs, run diagnosis, and audit history all use the endpoints documented below.
+`GET /app/` serves the responsive operator workspace embedded in the Werkt binary. It is deliberately a client of this management API rather than a separate administrative backend: deployment progress and diagnosis, inventory, detail, pause/resume, manual runs, run diagnosis, and audit history all use the endpoints documented below.
 
 When management authentication is enabled, choose **Connection** and enter the same bearer token an external agent would use. The token is held in `sessionStorage`, is never rendered into the page or embedded asset, and is cleared when the browser tab closes. Workspace mutations send `X-Werkt-Actor: workspace:operator` so they remain attributable in the audit trail.
 
@@ -24,6 +24,32 @@ X-Werkt-Actor: agent:operator
 `X-Werkt-Actor` is recorded in the audit trail but is attribution supplied by the authenticated caller, not a separate identity proof. If omitted, it is recorded as `api`. When `WERKT_MANAGEMENT_TOKEN` is empty, management authentication is disabled for local development and Werkt emits a startup warning. Werkt binds to `127.0.0.1:8080` by default; explicitly configure both a token and `WERKT_LISTEN_ADDR` before exposing it beyond the host.
 
 Health checks and trigger ingress (`/hooks/...` and `/email/...`) do not accept the management token as authority and remain outside this middleware. Trigger ingress has independent per-trigger credentials described in [security.md](security.md).
+
+## Deployments
+
+`POST /api/v1/deployments` accepts a gzip-compressed tar package and creates a durable asynchronous deployment. Supply all of these headers:
+
+```http
+Authorization: Bearer <token>
+Content-Type: application/gzip
+X-Werkt-Content-SHA256: <lowercase SHA-256 of the exact compressed body>
+Idempotency-Key: <stable key for this intended deployment>
+X-Werkt-Actor: agent:deployer
+```
+
+A new upload returns `202 Accepted`; an idempotent retry returns `200 OK` and the original deployment. The response includes `Location` for `GET /api/v1/deployments/{id}` and `Retry-After: 1` while the deployment is not terminal. Reusing an idempotency key for different package bytes returns `409 Conflict`.
+
+The lifecycle is `queued` → `validating` → `building` → `activating` → `succeeded`. Any worker stage can become `failed`, with a diagnostic error in the deployment resource. A successful response includes the automation, content hash, and immutable revision. Revision activation and the transition to `succeeded` commit in the same database transaction.
+
+`GET /api/v1/deployments` returns newest first and accepts `automation`, `status`, and `limit` filters. Agents should poll the resource named by `Location` until `succeeded` or `failed`; the CLI implements this contract:
+
+```bash
+WERKT_API_URL=https://werkt.example \
+WERKT_MANAGEMENT_TOKEN="$WERKT_MANAGEMENT_TOKEN" \
+werkt deploy --idempotency-key release-2026-08-22 ./automation
+```
+
+Package intake is streamed and bounded. Werkt rejects traversal paths, links, special files, duplicate case-insensitive names, excessive entries, and compressed or expanded bodies over the configured limits before any build runs.
 
 ## Automations
 
