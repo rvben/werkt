@@ -225,6 +225,7 @@ The workspace is flat by default. One-pixel rules and warm tonal shifts define s
 
 - **Style:** compact icon-and-label rail on desktop, persistent bottom navigation on mobile.
 - **State:** selected items use the pale orange surface plus a short Signal Orange underline. Hover uses only a neutral tonal shift.
+- **Narrow screens:** at `42rem` and below, bottom-navigation items stack the icon above the label, share the available width evenly, and keep the label visible.
 
 ### Run Diagnosis
 
