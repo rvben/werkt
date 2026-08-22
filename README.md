@@ -108,6 +108,16 @@ curl -H "Authorization: Bearer $WERKT_MANAGEMENT_TOKEN" \
 
 See [docs/management-api.md](docs/management-api.md) for the full agent-facing contract and the workspace/API relationship.
 
+Review retained deployment sources and inactive artifacts without deleting anything, then explicitly apply the short-lived plan:
+
+```bash
+go run ./cmd/werkt retention plan
+go run ./cmd/werkt retention get ret_...
+go run ./cmd/werkt retention apply ret_...
+```
+
+The defaults keep retryable sources for 30 days, inactive artifacts for 90 days, the newest three retryable sources per automation, and the newest five inactive revisions. Active work and active revisions are never candidates.
+
 Deploying the Rust example runs its `cargo build --release` build command once. With the Husker backend, that build runs in the manifest's disposable `rust:1.88-bookworm` build VM; the resulting workspace becomes the immutable artifact:
 
 ```bash
