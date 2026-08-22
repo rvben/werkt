@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f8f7f5">
+  <title>Werkt — Retention milestone</title>
+  <style>
+    :root {
+      --ink: oklch(0.19 0.018 43);
+      --ink-soft: oklch(0.34 0.018 43);
+      --muted: oklch(0.47 0.018 43);
+      --faint: oklch(0.64 0.014 43);
+      --line: oklch(0.89 0.009 43);
+      --line-strong: oklch(0.79 0.012 43);
+      --canvas: oklch(0.982 0.003 43);
+      --surface: oklch(1 0 0);
+      --selected: oklch(0.955 0.032 47);
+      --orange: oklch(0.59 0.205 42);
+      --orange-deep: oklch(0.52 0.2 42);
+      --green: oklch(0.47 0.13 151);
+      --green-pale: oklch(0.95 0.035 151);
+      --blue: oklch(0.42 0.095 205);
+      --code: oklch(0.2 0.018 205);
+      --code-text: oklch(0.93 0.012 205);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; background: var(--canvas); }
+    body {
+      margin: 0;
+      min-width: 20rem;
+      background: var(--canvas);
+      color: var(--ink);
+      font: 1rem/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    ::selection { background: var(--orange); color: white; }
+    a { color: inherit; text-underline-offset: .2em; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .tabular { font-variant-numeric: tabular-nums; }
+    :focus-visible { outline: 2px solid var(--orange); outline-offset: 3px; }
+    .skip-link { position: fixed; z-index: 30; top: 1rem; left: 1rem; transform: translateY(-200%); padding: .7rem 1rem; background: var(--ink); color: white; }
+    .skip-link:focus { transform: none; }
+    .wrap { width: min(76rem, calc(100% - 2rem)); margin-inline: auto; }
+
+    .signal { height: .45rem; background: var(--orange); }
+    .topbar {
+      position: sticky;
+      z-index: 20;
+      top: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 3.75rem;
+      padding-inline: max(1rem, calc((100vw - 76rem) / 2));
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in oklch, var(--canvas) 94%, transparent);
+      backdrop-filter: blur(12px);
+    }
+    .brand { display: flex; align-items: center; gap: .55rem; font-weight: 800; text-decoration: none; }
+    .brand-mark { width: .9rem; height: .9rem; border: .24rem solid var(--orange); border-right-width: .1rem; transform: skew(-8deg); }
+    .report-name { color: var(--muted); font-size: .75rem; font-weight: 700; }
+    .topbar nav { display: flex; gap: 1.5rem; }
+    .topbar nav a { color: var(--muted); font-size: .8125rem; font-weight: 700; text-decoration: none; }
+    .topbar nav a:hover { color: var(--orange-deep); }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.08fr) minmax(21rem, .92fr);
+      min-height: min(48rem, calc(100vh - 4.2rem));
+      border-bottom: 1px solid var(--ink);
+    }
+    .hero-copy { display: flex; flex-direction: column; justify-content: center; padding: clamp(4rem, 10vw, 8rem) clamp(2rem, 6vw, 5rem) clamp(4rem, 8vw, 6rem) max(1rem, calc((100vw - 76rem) / 2)); }
+    h1 { max-width: 11ch; margin: 0; font-size: clamp(3.4rem, 7vw, 6rem); line-height: .92; letter-spacing: -.04em; }
+    .lede { max-width: 42rem; margin: 2rem 0 0; color: var(--ink-soft); font-size: clamp(1.08rem, 2vw, 1.4rem); }
+    .hero-proof { display: grid; align-content: center; padding: clamp(2rem, 6vw, 4.5rem); border-left: 1px solid var(--line-strong); background: var(--surface); }
+    .ledger-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-bottom: 1rem; border-bottom: 3px solid var(--ink); }
+    .ledger-head strong { font-size: 1.125rem; }
+    .state { display: inline-flex; align-items: center; gap: .45rem; color: var(--green); font-size: .75rem; font-weight: 800; }
+    .state::before { content: ""; width: .5rem; height: .5rem; border-radius: 50%; background: currentColor; }
+    .ledger-row { display: grid; grid-template-columns: 7rem 1fr; gap: 1rem; padding: .9rem 0; border-bottom: 1px solid var(--line); font-size: .8125rem; }
+    .ledger-row span:first-child { color: var(--muted); }
+    .ledger-row strong, .ledger-row code { overflow-wrap: anywhere; }
+    .ledger-note { margin: 1.5rem 0 0; color: var(--muted); font-size: .8125rem; }
+
+    .section { display: grid; grid-template-columns: 13rem minmax(0, 1fr); gap: 3rem; padding-block: 4.5rem; border-bottom: 1px solid var(--line-strong); scroll-margin-top: 5rem; }
+    .section-label h2 { position: sticky; top: 5.5rem; margin: 0; font-size: 1rem; }
+    .section-label p { margin: .35rem 0 0; color: var(--muted); font-size: .8125rem; }
+    .statement { max-width: 42rem; margin: 0 0 3rem; font-size: clamp(1.55rem, 3.2vw, 2.5rem); line-height: 1.16; letter-spacing: -.035em; font-weight: 750; }
+
+    .sequence { border-top: 1px solid var(--ink); }
+    .sequence-row { display: grid; grid-template-columns: 4.5rem 10rem 1fr; gap: 1.5rem; align-items: baseline; padding: 1.5rem 0; border-bottom: 1px solid var(--line); }
+    .sequence-row .step { color: var(--orange-deep); font: 700 .75rem ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .sequence-row strong { font-size: .875rem; }
+    .sequence-row p { margin: 0; color: var(--ink-soft); }
+
+    .guard-table { width: 100%; border-collapse: collapse; }
+    .guard-table th, .guard-table td { padding: 1rem .75rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .guard-table th { color: var(--muted); font-size: .75rem; }
+    .guard-table td { font-size: .875rem; }
+    .guard-table td:first-child { width: 11rem; font-weight: 750; }
+    .always { color: var(--green); font-weight: 750; }
+    .always::before { content: "Protected · "; }
+
+    .proof-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(18rem, .9fr); gap: 1.5rem; }
+    pre { margin: 0; padding: 1.5rem; overflow: auto; border-radius: .25rem; background: var(--code); color: var(--code-text); font-size: .8rem; line-height: 1.7; }
+    .outcome-list { border-top: 3px solid var(--ink); background: var(--surface); }
+    .outcome { display: grid; grid-template-columns: 6rem 1fr; gap: 1rem; padding: 1rem; border-bottom: 1px solid var(--line); }
+    .outcome span { color: var(--muted); font-size: .75rem; }
+    .outcome strong { font-size: .875rem; }
+    .outcome code { color: var(--orange-deep); font-size: .75rem; }
+
+    .evidence { width: 100%; border-collapse: collapse; }
+    .evidence th, .evidence td { padding: 1rem .75rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .evidence th { color: var(--muted); font-size: .75rem; }
+    .evidence td { font-size: .875rem; }
+    .evidence td:first-child { width: 9rem; font-weight: 750; }
+    .pass { color: var(--green); font-weight: 750; }
+    .pass::before { content: "✓"; display: inline-grid; place-items: center; width: 1.2rem; height: 1.2rem; margin-right: .4rem; border-radius: 50%; background: var(--green-pale); font-size: .7rem; }
+    .evidence code { color: var(--ink-soft); font-size: .75rem; }
+
+    .commits { border-top: 1px solid var(--ink); }
+    .commit { display: grid; grid-template-columns: 7rem 1fr; gap: 1.5rem; padding: 1.4rem 0; border-bottom: 1px solid var(--line); }
+    .commit code { color: var(--orange-deep); font-weight: 750; }
+    .commit strong { display: block; }
+    .commit p { margin: .25rem 0 0; color: var(--muted); }
+
+    .next { display: grid; grid-template-columns: minmax(0, 1fr) 19rem; gap: 3rem; padding: 4.5rem max(1rem, calc((100vw - 76rem) / 2)); background: var(--ink); color: white; }
+    .next h2 { max-width: 14ch; margin: 0; font-size: clamp(2.2rem, 5vw, 4rem); line-height: 1; letter-spacing: -.04em; }
+    .next p { margin: 0; color: var(--line-strong); }
+    footer { padding-block: 2rem; color: var(--muted); font-size: .8125rem; }
+
+    @media (max-width: 58rem) {
+      .hero { grid-template-columns: 1fr; min-height: 0; }
+      .hero-proof { border-top: 1px solid var(--line-strong); border-left: 0; }
+      .section { grid-template-columns: 1fr; gap: 2rem; }
+      .section-label h2 { position: static; }
+      .proof-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 42rem) {
+      .topbar { position: static; }
+      .topbar nav { display: none; }
+      .hero-copy { padding-block: 4rem; }
+      .sequence-row { grid-template-columns: 3rem 1fr; gap: .75rem; }
+      .sequence-row p { grid-column: 2; }
+      .guard-table thead, .evidence thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+      .guard-table, .guard-table tbody, .guard-table tr,
+      .evidence, .evidence tbody, .evidence tr { display: block; width: 100%; }
+      .guard-table tr, .evidence tr { padding: .8rem 0; border-bottom: 1px solid var(--line); }
+      .guard-table td, .evidence td {
+        display: grid;
+        grid-template-columns: 6.75rem minmax(0, 1fr);
+        gap: .75rem;
+        width: auto;
+        padding: .3rem 0;
+        border: 0;
+        overflow-wrap: anywhere;
+      }
+      .guard-table td::before, .evidence td::before { content: attr(data-label); color: var(--muted); font-size: .6875rem; font-weight: 700; }
+      .evidence td:first-child, .guard-table td:first-child { width: auto; }
+      .evidence .pass::before { content: "Result"; display: block; width: auto; height: auto; margin: 0; border-radius: 0; background: transparent; color: var(--muted); font-size: .6875rem; }
+      .next { grid-template-columns: 1fr; padding-block: 3.5rem; }
+      .commit { grid-template-columns: 1fr; gap: .4rem; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+    @media print { .topbar { position: static; } .section { break-inside: avoid; } }
+  </style>
+</head>
+<body>
+  <!--
+    THESIS: Retention is a reviewed ledger, not an invisible cleanup job; this report refuses decorative storage metrics.
+    OWN-WORLD: Warm instrument paper, flat ruled surfaces, one signal orange, exact mono identifiers, and textual semantic states.
+    STORY: See why deletion is safe, trace plan to apply, verify the race behavior, and understand the next hardening step.
+    FIRST VIEWPORT: A large plain-language guarantee faces the exact live plan ledger and its terminal state.
+    FORM: Read-mode extension of Werkt’s established engineering report series; no direction seed was needed for this narrow artifact.
+    FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+  -->
+  <a class="skip-link" href="#content">Skip to report</a>
+  <div class="signal" aria-hidden="true"></div>
+  <header class="topbar">
+    <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span>Werkt <span class="report-name">Retention report</span></a>
+    <nav aria-label="Report sections">
+      <a href="#workflow">Workflow</a>
+      <a href="#guards">Guards</a>
+      <a href="#evidence">Evidence</a>
+      <a href="#next">Next</a>
+    </nav>
+  </header>
+
+  <main id="content">
+    <header class="hero" id="top">
+      <div class="hero-copy">
+        <h1>Nothing disappears by surprise.</h1>
+        <p class="lede">Werkt now turns storage cleanup into a short-lived, inspectable plan. Apply rechecks reality, preserves anything that became active, and leaves an audit trail for every outcome.</p>
+      </div>
+      <aside class="hero-proof" aria-label="Live retention plan evidence">
+        <div class="ledger-head"><strong>Live plan</strong><span class="state">Applied</span></div>
+        <div class="ledger-row"><span>Plan</span><code>ret_3e9494b1fa51e1efe0b81cbc</code></div>
+        <div class="ledger-row"><span>Source age</span><strong class="tabular">720h · 30 days</strong></div>
+        <div class="ledger-row"><span>Artifact age</span><strong class="tabular">2160h · 90 days</strong></div>
+        <div class="ledger-row"><span>Count floors</span><strong>3 retryable · 5 revisions</strong></div>
+        <div class="ledger-row"><span>Audit</span><strong>planned → applied</strong></div>
+        <p class="ledger-note">The live production-shaped exercise had no expired candidates; destructive behavior was verified separately against real PostgreSQL and temporary filesystem storage.</p>
+      </aside>
+    </header>
+
+    <div class="wrap">
+      <section class="section" id="workflow">
+        <div class="section-label"><h2>Plan → apply</h2><p>Two explicit decisions</p></div>
+        <div>
+          <p class="statement">Deletion only begins after an operator or agent has seen the exact candidates and names the plan to apply.</p>
+          <div class="sequence">
+            <div class="sequence-row"><span class="step">PLAN</span><strong>Select</strong><p>Group shared paths, apply age and per-automation count floors, and persist relative storage keys with byte estimates.</p></div>
+            <div class="sequence-row"><span class="step">15 MIN</span><strong>Review</strong><p>The plan remains inspectable but expires quickly, limiting drift between what was reviewed and what will execute.</p></div>
+            <div class="sequence-row"><span class="step">APPLY</span><strong>Revalidate</strong><p>Recompute eligibility so a new retry, run, deployment, or rollback can protect previously selected material.</p></div>
+            <div class="sequence-row"><span class="step">COMMIT</span><strong>Detach</strong><p>Clear database references only if the final SQL guard still sees no active consumer, then remove the owned direct-child path.</p></div>
+            <div class="sequence-row"><span class="step">AUDIT</span><strong>Record</strong><p>Persist deleted, skipped, and failed outcomes. Repeated apply requests return the same terminal plan.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="guards">
+        <div class="section-label"><h2>Protection rules</h2><p>Age never acts alone</p></div>
+        <div>
+          <p class="statement">Policy controls old, inactive material. System truth always outranks policy.</p>
+          <table class="guard-table">
+            <thead><tr><th>Material</th><th>Policy floor</th><th>Non-negotiable guard</th></tr></thead>
+            <tbody>
+              <tr><td data-label="Material">Successful source</td><td data-label="Policy floor">Newer than <code>sourceMaxAge</code></td><td data-label="Guard">Any nonterminal deployment sharing the path</td></tr>
+              <tr><td data-label="Material">Failed source</td><td data-label="Policy floor">Age plus newest <code>keepRetryableSources</code></td><td data-label="Guard">Any queued or active retry sharing the path</td></tr>
+              <tr><td data-label="Material">Inactive artifact</td><td data-label="Policy floor">Age plus newest <code>keepInactiveRevisions</code></td><td data-label="Guard">Queued/running run or in-progress deployment reuse</td></tr>
+              <tr><td data-label="Material">Active artifact</td><td data-label="Policy floor">Not applicable</td><td class="always" data-label="Guard">Current automation revision</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-label"><h2>Race proof</h2><p>The plan was allowed to go stale</p></div>
+        <div>
+          <p class="statement">The integration test changed two resources after planning. Apply noticed both changes and backed away.</p>
+          <div class="proof-grid">
+            <pre aria-label="Retention CLI commands"><code>werkt retention plan \
+  --source-max-age 720h \
+  --artifact-max-age 2160h \
+  --keep-retryable-sources 3 \
+  --keep-inactive-revisions 5
+
+werkt retention get ret_...
+werkt retention apply ret_...</code></pre>
+            <div class="outcome-list">
+              <div class="outcome"><span>Deleted</span><strong>Old terminal source</strong></div>
+              <div class="outcome"><span>Skipped</span><strong>Source gained queued retry</strong></div>
+              <div class="outcome"><span>Skipped</span><strong>Artifact became active</strong></div>
+              <div class="outcome"><span>Repeat</span><code>same applied result</code></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="evidence">
+        <div class="section-label"><h2>Verification</h2><p>Database to CLI</p></div>
+        <div>
+          <p class="statement">Every layer exercised the same plan/apply boundary.</p>
+          <table class="evidence">
+            <thead><tr><th>Layer</th><th>What was exercised</th><th>Result</th></tr></thead>
+            <tbody>
+              <tr><td data-label="Layer">Selection</td><td data-label="Evidence">Age, count floors, shared source paths, active work, active revisions, and running references</td><td class="pass" data-label="Result">Passed</td></tr>
+              <tr><td data-label="Layer">PostgreSQL</td><td data-label="Evidence">Migration 005, leases, item outcomes, final SQL guards, unavailable rollback, and audit events</td><td class="pass" data-label="Result">Passed</td></tr>
+              <tr><td data-label="Layer">Race behavior</td><td data-label="Evidence">Retry and rollback introduced after dry run but before apply</td><td class="pass" data-label="Result">Passed</td></tr>
+              <tr><td data-label="Layer">Filesystem</td><td data-label="Evidence">Owned-root validation, direct-child enforcement, byte estimation, and deletion</td><td class="pass" data-label="Result">Passed</td></tr>
+              <tr><td data-label="Layer">Contract</td><td data-label="Evidence">Management API, OpenAPI schema, client methods, CLI plan/get/apply, and expiry responses</td><td class="pass" data-label="Result">Passed</td></tr>
+              <tr><td data-label="Layer">Repository</td><td data-label="Evidence"><code>go test ./... -count=1</code> with PostgreSQL and <code>go vet ./...</code></td><td class="pass" data-label="Result">Passed</td></tr>
+              <tr><td data-label="Layer">Live server</td><td data-label="Evidence">Real CLI dry run, explicit apply, and <code>retention.planned</code>/<code>retention.applied</code> audit events</td><td class="pass" data-label="Result">Passed</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-label"><h2>Delivered commits</h2><p>Reviewable boundaries</p></div>
+        <div class="commits">
+          <div class="commit"><code>208e729</code><div><strong>Safe plan execution</strong><p>Policy selection, persisted plans, database protection, filesystem ownership, audit outcomes, and integration coverage.</p></div></div>
+          <div class="commit"><code>4b3295b</code><div><strong>Agent controls</strong><p>Management endpoints, OpenAPI contract, Go client, CLI workflow, and route-level tests.</p></div></div>
+          <div class="commit"><code>2ce59e6</code><div><strong>Deployment reuse guard</strong><p>Artifacts referenced by in-progress deployments remain protected across the final detach check.</p></div></div>
+          <div class="commit"><code>207c6c3</code><div><strong>Storage lifecycle guide</strong><p>Operator semantics, policy defaults, expiry, rollback behavior, and the plan/apply examples.</p></div></div>
+        </div>
+      </section>
+    </div>
+
+    <section class="next" id="next">
+      <h2>Next: secrets that belong to Werkt.</h2>
+      <p>Move runtime credentials out of process environment references into an encrypted secret backend with scoped resolution, versioning, rotation, redaction before logs are persisted, and audit events that reveal access without revealing values.</p>
+    </section>
+  </main>
+
+  <footer class="wrap">Werkt engineering report · Retention milestone · 22 August 2026</footer>
+</body>
+</html>
