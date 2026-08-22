@@ -16,6 +16,7 @@ import (
 
 	"github.com/rvben/werkt/internal/config"
 	"github.com/rvben/werkt/internal/database"
+	"github.com/rvben/werkt/internal/domain"
 	"github.com/rvben/werkt/internal/httpapi"
 	"github.com/rvben/werkt/internal/managementclient"
 	"github.com/rvben/werkt/internal/manifest"
@@ -45,6 +46,8 @@ func run(arguments []string) error {
 		return deploymentCommand(arguments[1:])
 	case "rollback":
 		return rollback(arguments[1:])
+	case "retention":
+		return retentionCommand(arguments[1:])
 	case "serve":
 		return serve(arguments[1:])
 	case "automations":
@@ -219,6 +222,58 @@ func rollback(arguments []string) error {
 	return printJSON(value)
 }
 
+func retentionCommand(arguments []string) error {
+	if len(arguments) == 0 {
+		return errors.New("usage: werkt retention plan|get|apply [PLAN_ID]")
+	}
+	configuration := config.Load()
+	ctx, cancel := context.WithTimeout(context.Background(), configuration.DeployTimeout)
+	defer cancel()
+	client, err := managementclient.New(configuration.APIURL, configuration.ManagementToken, nil)
+	if err != nil {
+		return err
+	}
+	switch arguments[0] {
+	case "plan":
+		flags := flag.NewFlagSet("retention plan", flag.ContinueOnError)
+		sourceMaxAge := flags.String("source-max-age", service.DefaultRetentionPolicy.SourceMaxAge, "minimum age for terminal deployment sources")
+		artifactMaxAge := flags.String("artifact-max-age", service.DefaultRetentionPolicy.ArtifactMaxAge, "minimum age for inactive revision artifacts")
+		keepRetryable := flags.Int("keep-retryable-sources", service.DefaultRetentionPolicy.KeepRetryableSources, "newest retryable sources retained per automation")
+		keepRevisions := flags.Int("keep-inactive-revisions", service.DefaultRetentionPolicy.KeepInactiveRevisions, "newest inactive revisions retained per automation")
+		if err := flags.Parse(arguments[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 {
+			return errors.New("usage: werkt retention plan [flags]")
+		}
+		value, err := client.CreateRetentionPlan(ctx, domain.RetentionPolicy{
+			SourceMaxAge: *sourceMaxAge, ArtifactMaxAge: *artifactMaxAge,
+			KeepRetryableSources: *keepRetryable, KeepInactiveRevisions: *keepRevisions,
+		}, "cli")
+		if err != nil {
+			return err
+		}
+		return printJSON(value)
+	case "get", "apply":
+		if len(arguments) != 2 {
+			return fmt.Errorf("usage: werkt retention %s PLAN_ID", arguments[0])
+		}
+		var value domain.RetentionPlan
+		var err error
+		if arguments[0] == "get" {
+			value, err = client.GetRetentionPlan(ctx, arguments[1])
+		} else {
+			value, err = client.ApplyRetentionPlan(ctx, arguments[1], "cli")
+		}
+		if err != nil {
+			return err
+		}
+		return printJSON(value)
+	default:
+		return fmt.Errorf("unknown retention command %q", arguments[0])
+	}
+}
+
 func serve(arguments []string) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	workers := flags.Int("workers", 2, "number of local automation workers")
@@ -267,7 +322,9 @@ func serve(arguments []string) error {
 		ExpandedBytes:   configuration.MaxExpandedPackageBytes,
 		Entries:         configuration.MaxPackageEntries,
 	})
-	api := httpapi.New(store, configuration.ListenAddress, configuration.ManagementToken, httpapi.WithDeploymentIntake(intake))
+	retention := service.NewRetentionManager(store, configuration.DataDir)
+	api := httpapi.New(store, configuration.ListenAddress, configuration.ManagementToken,
+		httpapi.WithDeploymentIntake(intake), httpapi.WithRetentionManager(retention))
 	serverErrors := make(chan error, 1)
 	go func() {
 		slog.Info("control plane listening", "address", configuration.ListenAddress, "workers", *workers)
@@ -396,9 +453,10 @@ func usage() {
   %s deploy [-api URL] [-idempotency-key KEY] [-wait=true] [directory]
   %s deployment get|cancel|retry DEPLOYMENT_ID
   %s rollback AUTOMATION_ID REVISION_ID
+  %s retention plan|get|apply [PLAN_ID]
   %s serve [-workers N]
   %s automations
   %s runs [-limit N]
   %s version
-`, executable, executable, executable, executable, executable, executable, executable, executable)
+`, executable, executable, executable, executable, executable, executable, executable, executable, executable)
 }

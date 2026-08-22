@@ -16,6 +16,7 @@ import (
 
 	"github.com/rvben/werkt/internal/database"
 	"github.com/rvben/werkt/internal/domain"
+	"github.com/rvben/werkt/internal/service"
 	"gopkg.in/yaml.v3"
 )
 
@@ -127,6 +128,35 @@ type fakeDeploymentIntake struct {
 	created        bool
 }
 
+type fakeRetentionManager struct {
+	policy      domain.RetentionPolicy
+	actor       string
+	appliedPlan string
+	applyErr    error
+}
+
+func (m *fakeRetentionManager) Plan(_ context.Context, policy domain.RetentionPolicy, actor string) (domain.RetentionPlan, error) {
+	m.policy = policy
+	m.actor = actor
+	return domain.RetentionPlan{ID: "ret_example", Status: domain.RetentionPlanPlanned, Policy: policy, Items: []domain.RetentionItem{}}, nil
+}
+
+func (m *fakeRetentionManager) Get(_ context.Context, planID string) (domain.RetentionPlan, error) {
+	if planID == "missing" {
+		return domain.RetentionPlan{}, database.ErrRetentionPlanNotFound
+	}
+	return domain.RetentionPlan{ID: planID, Status: domain.RetentionPlanPlanned, Items: []domain.RetentionItem{}}, nil
+}
+
+func (m *fakeRetentionManager) Apply(_ context.Context, planID, actor string) (domain.RetentionPlan, error) {
+	m.appliedPlan = planID
+	m.actor = actor
+	if m.applyErr != nil {
+		return domain.RetentionPlan{}, m.applyErr
+	}
+	return domain.RetentionPlan{ID: planID, Status: domain.RetentionPlanApplied, Items: []domain.RetentionItem{}}, nil
+}
+
 func (i *fakeDeploymentIntake) Accept(_ context.Context, reader io.Reader, expectedDigest, idempotencyKey, actor string) (domain.Deployment, bool, error) {
 	_, _ = io.Copy(io.Discard, reader)
 	i.expectedDigest = expectedDigest
@@ -217,6 +247,52 @@ func TestWorkspaceServesEmbeddedAssetsWithoutExposingManagementToken(t *testing.
 		if response.Body.Len() < 1000 {
 			t.Errorf("%s unexpectedly small: %d bytes", asset, response.Body.Len())
 		}
+	}
+}
+
+func TestRetentionPlanAndApplyRoutesAreExplicit(t *testing.T) {
+	manager := &fakeRetentionManager{}
+	server := New(&fakeStore{}, ":0", "", WithRetentionManager(manager))
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/retention/plans", strings.NewReader(`{"sourceMaxAge":"48h"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Werkt-Actor", "agent:operator")
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("plan status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if response.Header().Get("Location") != "/api/v1/retention/plans/ret_example" {
+		t.Fatalf("plan location = %q", response.Header().Get("Location"))
+	}
+	if manager.policy.SourceMaxAge != "48h" || manager.policy.ArtifactMaxAge != service.DefaultRetentionPolicy.ArtifactMaxAge {
+		t.Fatalf("merged policy = %#v", manager.policy)
+	}
+	if manager.policy.KeepRetryableSources != service.DefaultRetentionPolicy.KeepRetryableSources || manager.actor != "agent:operator" {
+		t.Fatalf("policy=%#v actor=%q", manager.policy, manager.actor)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/retention/plans/ret_example/apply", nil)
+	request.Header.Set("X-Werkt-Actor", "agent:operator")
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || manager.appliedPlan != "ret_example" {
+		t.Fatalf("apply status=%d plan=%q body=%s", response.Code, manager.appliedPlan, response.Body.String())
+	}
+	var applied domain.RetentionPlan
+	if err := json.Unmarshal(response.Body.Bytes(), &applied); err != nil || applied.Status != domain.RetentionPlanApplied {
+		t.Fatalf("apply response = %#v, err = %v", applied, err)
+	}
+}
+
+func TestRetentionApplyMapsExpiredPlanToGone(t *testing.T) {
+	manager := &fakeRetentionManager{applyErr: database.ErrRetentionPlanExpired}
+	server := New(&fakeStore{}, ":0", "", WithRetentionManager(manager))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/retention/plans/expired/apply", nil)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusGone {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
 
@@ -461,6 +537,8 @@ func TestOpenAPIContractIsPublicAndDocumentsManagementRoutes(t *testing.T) {
 		"/api/v1/runs", "/api/v1/audit", "/api/v1/deployments",
 		"/api/v1/deployments/{deployment}", "/api/v1/deployments/{deployment}/cancel",
 		"/api/v1/deployments/{deployment}/retry",
+		"/api/v1/retention/plans", "/api/v1/retention/plans/{plan}",
+		"/api/v1/retention/plans/{plan}/apply",
 	} {
 		if _, exists := document.Paths[path]; !exists {
 			t.Errorf("OpenAPI path %q is missing", path)
