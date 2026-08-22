@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f7f5f2">
+  <title>Werkt — Safe promotion pipeline</title>
+  <style>
+    :root {
+      --ink: #211d1b;
+      --soft: #5d5550;
+      --muted: #7d746e;
+      --line: #ddd7d2;
+      --paper: #fff;
+      --canvas: #f7f5f2;
+      --orange: #d34b00;
+      --orange-dark: #963600;
+      --orange-pale: #fff0e7;
+      --green: #197446;
+      --green-pale: #e6f6ed;
+      --code: #182329;
+      --code-text: #e7eeee;
+      --space-1: .5rem;
+      --space-2: .75rem;
+      --space-3: 1rem;
+      --space-4: 1.5rem;
+      --space-5: 2rem;
+      --space-6: 3rem;
+      --space-7: 4.5rem;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; background: var(--canvas); }
+    body {
+      margin: 0;
+      min-width: 20rem;
+      background: var(--canvas);
+      color: var(--ink);
+      font: 1rem/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    :focus-visible { outline: 2px solid var(--orange); outline-offset: 3px; }
+    .wrap { width: min(76rem, calc(100% - 2rem)); margin-inline: auto; }
+    .top-rule { height: .5rem; background: var(--orange); }
+    .report-nav {
+      position: sticky;
+      z-index: 10;
+      top: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 3.75rem;
+      padding-inline: max(1rem, calc((100vw - 76rem) / 2));
+      border-bottom: 1px solid var(--line);
+      background: rgb(247 245 242 / .94);
+      backdrop-filter: blur(12px);
+    }
+    .brand { display: flex; align-items: center; gap: .55rem; font-weight: 800; text-decoration: none; }
+    .brand-mark { width: .9rem; height: .9rem; border: .24rem solid var(--orange); border-right-width: .1rem; transform: skew(-8deg); }
+    .report-nav nav { display: flex; gap: var(--space-4); }
+    .report-nav nav a { color: var(--muted); font-size: .8125rem; font-weight: 700; text-decoration: none; }
+    .report-nav nav a:hover { color: var(--orange-dark); }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(17rem, .75fr);
+      gap: var(--space-7);
+      padding-block: clamp(4rem, 9vw, 7.5rem) var(--space-7);
+      border-bottom: 1px solid var(--ink);
+    }
+    .kicker { margin: 0 0 var(--space-3); color: var(--orange-dark); font-weight: 800; }
+    h1, h2, h3, p { text-wrap: pretty; }
+    h1 { max-width: 12ch; margin: 0; font-size: clamp(3rem, 7.5vw, 6rem); line-height: .92; letter-spacing: -.07em; }
+    .lede { max-width: 47rem; margin: var(--space-5) 0 0; color: var(--soft); font-size: clamp(1.1rem, 2vw, 1.45rem); }
+    .meta { align-self: end; margin: 0; border-top: 3px solid var(--ink); }
+    .meta div { display: grid; grid-template-columns: 7rem 1fr; gap: var(--space-2); padding: .8rem 0; border-bottom: 1px solid var(--line); font-size: .8125rem; }
+    .meta dt { color: var(--muted); }
+    .meta dd { margin: 0; font-weight: 750; overflow-wrap: anywhere; }
+    .pass { color: var(--green); }
+    .pass::before { content: "●"; margin-right: .45rem; font-size: .7em; }
+
+    .section { display: grid; grid-template-columns: 13rem minmax(0, 1fr); gap: var(--space-6); padding-block: var(--space-7); border-bottom: 1px solid var(--line); }
+    .section-label h2 { position: sticky; top: 5.5rem; margin: 0; font-size: 1rem; }
+    .section-label p { margin: .35rem 0 0; color: var(--muted); font-size: .8125rem; }
+    .statement { max-width: 42rem; margin: 0 0 var(--space-6); font-size: clamp(1.55rem, 3.2vw, 2.55rem); line-height: 1.16; letter-spacing: -.04em; font-weight: 750; }
+
+    .pipeline { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .75rem; }
+    .stage { position: relative; min-height: 10rem; padding: 1.2rem; border-top: 3px solid var(--ink); background: var(--paper); }
+    .stage.current { border-color: var(--orange); }
+    .stage:not(:last-child)::after { content: "→"; position: absolute; z-index: 2; top: 50%; right: -.75rem; transform: translate(50%, -50%); color: var(--muted); font-weight: 800; }
+    .stage small { color: var(--muted); font-weight: 750; }
+    .stage h3 { margin: .45rem 0; font-size: 1rem; }
+    .stage p { margin: 0; color: var(--soft); font-size: .8125rem; }
+    .principle { margin-top: var(--space-4); padding: var(--space-4); border: 1px solid #e6b99f; background: var(--orange-pale); }
+    .principle strong { color: var(--orange-dark); }
+    .principle p { margin: .3rem 0 0; }
+
+    .outcomes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--ink); }
+    .outcome { padding: var(--space-5) var(--space-4) var(--space-5) 0; border-bottom: 1px solid var(--line); }
+    .outcome:nth-child(odd) { border-right: 1px solid var(--line); }
+    .outcome:nth-child(even) { padding-left: var(--space-4); }
+    .outcome h3 { margin: 0 0 .5rem; font-size: 1rem; }
+    .outcome p { margin: 0; color: var(--soft); }
+
+    .code-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: var(--space-4); }
+    pre { margin: 0; padding: var(--space-5); overflow: auto; border-radius: .25rem; background: var(--code); color: var(--code-text); font-size: .8rem; line-height: 1.65; }
+    .controls { border-top: 3px solid var(--ink); background: var(--paper); }
+    .control { display: grid; grid-template-columns: 5.5rem 1fr; gap: var(--space-3); padding: .9rem var(--space-3); border-bottom: 1px solid var(--line); }
+    .control strong { font-size: .8125rem; }
+    .control code { color: var(--orange-dark); font-size: .75rem; overflow-wrap: anywhere; }
+
+    .language-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-3); }
+    .language { padding: var(--space-4); border: 1px solid var(--line); background: var(--paper); }
+    .language-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); }
+    .language h3 { margin: 0; }
+    .language .pass { font-size: .75rem; font-weight: 750; }
+    .language code { display: block; margin-top: var(--space-4); color: var(--soft); font-size: .75rem; }
+
+    .evidence { width: 100%; border-collapse: collapse; }
+    .evidence th, .evidence td { padding: .95rem .75rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .evidence th { color: var(--muted); font-size: .75rem; }
+    .evidence td { font-size: .875rem; }
+    .evidence td:first-child { width: 9rem; font-weight: 750; }
+    .evidence code { color: var(--soft); font-size: .75rem; }
+
+    .commit-list { border-top: 1px solid var(--ink); }
+    .commit { display: grid; grid-template-columns: 7rem 1fr; gap: var(--space-4); padding: var(--space-4) 0; border-bottom: 1px solid var(--line); }
+    .commit code { color: var(--orange-dark); font-weight: 750; }
+    .commit strong { display: block; }
+    .commit p { margin: .25rem 0 0; color: var(--muted); }
+
+    .next { display: grid; grid-template-columns: minmax(0, 1fr) 17rem; gap: var(--space-6); padding: var(--space-7); background: var(--ink); color: white; }
+    .next h2 { max-width: 14ch; margin: 0; font-size: clamp(2rem, 5vw, 3.8rem); line-height: 1; letter-spacing: -.05em; }
+    .next p { margin: 0; color: #d8d0cb; }
+    footer { padding-block: var(--space-5); color: var(--muted); font-size: .8125rem; }
+
+    @media (max-width: 58rem) {
+      .hero, .section { grid-template-columns: 1fr; gap: var(--space-5); }
+      .section-label h2 { position: static; }
+      .pipeline { grid-template-columns: 1fr; }
+      .stage { min-height: 0; }
+      .stage:not(:last-child)::after { top: auto; right: 50%; bottom: -.75rem; transform: translate(50%, 50%) rotate(90deg); }
+      .code-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 42rem) {
+      .report-nav nav { display: none; }
+      .hero { padding-top: var(--space-6); }
+      .outcomes, .language-grid { grid-template-columns: 1fr; }
+      .outcome:nth-child(odd) { border-right: 0; }
+      .outcome:nth-child(even) { padding-left: 0; }
+      .next { grid-template-columns: 1fr; padding: var(--space-6) var(--space-4); }
+      .evidence th:nth-child(2), .evidence td:nth-child(2) { display: none; }
+    }
+    @media print {
+      .report-nav { position: static; }
+      .section { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="top-rule"></div>
+  <header class="report-nav">
+    <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span>Werkt</a>
+    <nav aria-label="Report sections">
+      <a href="#pipeline">Pipeline</a>
+      <a href="#interfaces">Interfaces</a>
+      <a href="#evidence">Evidence</a>
+      <a href="#next">Next</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <div class="wrap">
+      <header class="hero">
+        <div>
+          <p class="kicker">Promotion milestone · 22 August 2026</p>
+          <h1>Promotion without guesswork.</h1>
+          <p class="lede">Werkt can now take an automation package from intake to activation through durable, observable steps—then safely cancel, retry, or roll it back when reality intervenes.</p>
+        </div>
+        <dl class="meta">
+          <div><dt>Status</dt><dd class="pass">Verified</dd></div>
+          <div><dt>Languages</dt><dd>Python · Go · Rust</dd></div>
+          <div><dt>Executors</dt><dd>Process · Husker</dd></div>
+          <div><dt>Surface</dt><dd>API · CLI · Workspace</dd></div>
+        </dl>
+      </header>
+
+      <section class="section" id="pipeline">
+        <div class="section-label"><h2>The pipeline</h2><p>One durable state machine</p></div>
+        <div>
+          <p class="statement">A revision becomes active only after its package, build, and declared checks have succeeded.</p>
+          <div class="pipeline" aria-label="Deployment promotion pipeline">
+            <article class="stage"><small>01</small><h3>Receive</h3><p>Hash and retain the package before work is queued.</p></article>
+            <article class="stage"><small>02</small><h3>Validate</h3><p>Parse the manifest and reject unsafe or inconsistent input.</p></article>
+            <article class="stage"><small>03</small><h3>Build</h3><p>Compile or prepare inside the selected execution boundary.</p></article>
+            <article class="stage current"><small>04</small><h3>Check</h3><p>Run ordered, time-bounded commands with captured logs.</p></article>
+            <article class="stage"><small>05</small><h3>Activate</h3><p>Commit the immutable revision and reconcile triggers.</p></article>
+          </div>
+          <div class="principle"><strong>Activation is the commit point.</strong><p>A failed or cancelled deployment never replaces the currently active revision. Rollback performs a new transactional activation and restores the target revision’s triggers.</p></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-label"><h2>Operational safety</h2><p>Failures become actions</p></div>
+        <div class="outcomes">
+          <article class="outcome"><h3>Declared checks</h3><p>Each manifest can define an ordered list of commands and explicit timeouts. The same contract works across languages.</p></article>
+          <article class="outcome"><h3>Step diagnostics</h3><p>Validate, build, check, and activate durations and bounded logs are recorded independently for fast diagnosis.</p></article>
+          <article class="outcome"><h3>Cooperative cancellation</h3><p>Queued work cancels immediately. Active work receives a persistent request that the worker observes without lying about completion.</p></article>
+          <article class="outcome"><h3>Idempotent recovery</h3><p>Retries link back to their source deployment and deduplicate repeated requests; rollback preserves immutable history.</p></article>
+        </div>
+      </section>
+
+      <section class="section" id="interfaces">
+        <div class="section-label"><h2>Automation contract</h2><p>Language-neutral by design</p></div>
+        <div>
+          <div class="code-grid">
+            <pre aria-label="Manifest checks example"><code>runtime:
+  kind: rust
+  image: rust:1-bookworm
+
+deployment:
+  checks:
+    - id: unit
+      command: cargo test --locked
+      timeout: 10m</code></pre>
+            <div class="controls" aria-label="Recovery interfaces">
+              <div class="control"><strong>Inspect</strong><code>GET /deployments/{id}</code></div>
+              <div class="control"><strong>Cancel</strong><code>POST /deployments/{id}/cancel</code></div>
+              <div class="control"><strong>Retry</strong><code>POST /deployments/{id}/retry</code></div>
+              <div class="control"><strong>Rollback</strong><code>POST /automations/{id}/rollback</code></div>
+            </div>
+          </div>
+          <div class="language-grid" style="margin-top: 1rem">
+            <article class="language"><div class="language-head"><h3>Python</h3><span class="pass">Live</span></div><code>python -m py_compile main.py</code></article>
+            <article class="language"><div class="language-head"><h3>Go</h3><span class="pass">Live</span></div><code>go test ./...</code></article>
+            <article class="language"><div class="language-head"><h3>Rust</h3><span class="pass">Live</span></div><code>cargo test --locked</code></article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="evidence">
+        <div class="section-label"><h2>Verification</h2><p>Evidence, not optimism</p></div>
+        <div>
+          <p class="statement">The same behavior is exercised from the database boundary through the live workspace.</p>
+          <table class="evidence">
+            <thead><tr><th>Layer</th><th>What was exercised</th><th>Result</th></tr></thead>
+            <tbody>
+              <tr><td>Core suite</td><td><code>go test -race ./... -count=1</code> and <code>go vet ./...</code></td><td class="pass">Passed</td></tr>
+              <tr><td>PostgreSQL</td><td>Migration 004, durable steps, queue claiming, cancellation, retry, and rollback integration</td><td class="pass">Passed</td></tr>
+              <tr><td>Executors</td><td>Process and Husker build/check ordering, timeouts, logs, and cancellation</td><td class="pass">Passed</td></tr>
+              <tr><td>Packages</td><td>Real Python, Go, and Rust deployments with language-native checks</td><td class="pass">Passed</td></tr>
+              <tr><td>Workspace</td><td>Desktop and mobile layouts, deployment drawer, recovery confirmations, focus-safe polling</td><td class="pass">Passed</td></tr>
+              <tr><td>Browser</td><td>Live Go promotion rendered four recorded steps and its unit-check output</td><td class="pass">Passed</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-label"><h2>Delivered commits</h2><p>Logical, reviewable slices</p></div>
+        <div class="commit-list">
+          <div class="commit"><code>b2147f9</code><div><strong>Promotion engine</strong><p>Manifest checks, durable lifecycle, cancellation, retry, rollback, and executor integration.</p></div></div>
+          <div class="commit"><code>ebd401f</code><div><strong>Agent-facing recovery API</strong><p>HTTP resources, CLI commands, OpenAPI contract, examples, and operational documentation.</p></div></div>
+          <div class="commit"><code>b9ca518</code><div><strong>Workspace recovery controls</strong><p>Deployment inventory, step logs, confirmations, resilient polling, responsive behavior, and design guidance.</p></div></div>
+        </div>
+      </section>
+    </div>
+
+    <section class="next" id="next">
+      <h2>Next: make retention explicit.</h2>
+      <p>Source packages and build material are intentionally retained to make retry possible. The next best increment is a policy-driven garbage collector with protected active revisions, configurable age and count limits, a dry-run plan, and auditable deletions.</p>
+    </section>
+  </main>
+
+  <footer class="wrap">Werkt engineering report · Safe promotion pipeline</footer>
+</body>
+</html>
