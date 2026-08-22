@@ -39,15 +39,25 @@ X-Werkt-Actor: agent:deployer
 
 A new upload returns `202 Accepted`; an idempotent retry returns `200 OK` and the original deployment. The response includes `Location` for `GET /api/v1/deployments/{id}` and `Retry-After: 1` while the deployment is not terminal. Reusing an idempotency key for different package bytes returns `409 Conflict`.
 
-The lifecycle is `queued` → `validating` → `building` → `activating` → `succeeded`. Any worker stage can become `failed`, with a diagnostic error in the deployment resource. A successful response includes the automation, content hash, and immutable revision. Revision activation and the transition to `succeeded` commit in the same database transaction.
+The lifecycle is `queued` → `validating` → optional `building` → optional `checking` → `activating` → `succeeded`. Any active stage can become `failed` or `cancelled`. The deployment detail includes ordered validation, build, check, and activation steps with bounded logs, errors, and timings. A successful response includes the automation, content hash, and immutable revision. Revision activation and the transition to `succeeded` commit in the same database transaction.
 
-`GET /api/v1/deployments` returns newest first and accepts `automation`, `status`, and `limit` filters. Agents should poll the resource named by `Location` until `succeeded` or `failed`; the CLI implements this contract:
+`GET /api/v1/deployments` returns newest first and accepts `automation`, `status`, and `limit` filters. Agents should poll the resource named by `Location` until `succeeded`, `failed`, or `cancelled`; the CLI implements this contract:
 
 ```bash
 WERKT_API_URL=https://werkt.example \
 WERKT_MANAGEMENT_TOKEN="$WERKT_MANAGEMENT_TOKEN" \
 werkt deploy --idempotency-key release-2026-08-22 ./automation
 ```
+
+Cancel active work or retry the exact retained source of a failed/cancelled deployment:
+
+```bash
+werkt deployment cancel dep_...
+werkt deployment retry dep_... --idempotency-key repair-2026-08-22
+werkt deployment get dep_...
+```
+
+`POST /api/v1/deployments/{id}/cancel` is safe only for nonterminal work. `POST /api/v1/deployments/{id}/retry` requires `Idempotency-Key`, returns a new deployment linked by `retryOf`, and rejects successful or active jobs. Uploaded sources are retained until a future bounded garbage collector is introduced.
 
 Package intake is streamed and bounded. Werkt rejects traversal paths, links, special files, duplicate case-insensitive names, excessive entries, and compressed or expanded bodies over the configured limits before any build runs.
 
@@ -64,6 +74,8 @@ Package intake is streamed and bounded. Werkt rejects traversal paths, links, sp
 ```
 
 Pausing blocks schedule, webhook, email, and ntfy ingestion. Manual runs remain available for diagnosis. Resuming recalculates each schedule from the next future occurrence, so missed intervals are not replayed as a backlog. Redeployment preserves the paused state.
+
+`POST /api/v1/automations/{id}/rollback` with `{"revisionId":"rev_..."}` atomically reactivates an existing revision belonging to that automation and reconstructs its effective triggers. Repeating a rollback to the active revision is a no-op. The equivalent CLI is `werkt rollback AUTOMATION_ID REVISION_ID`.
 
 ## Manual runs
 

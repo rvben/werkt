@@ -41,6 +41,10 @@ func run(arguments []string) error {
 		return validate(arguments[1:])
 	case "deploy":
 		return deploy(arguments[1:])
+	case "deployment":
+		return deploymentCommand(arguments[1:])
+	case "rollback":
+		return rollback(arguments[1:])
 	case "serve":
 		return serve(arguments[1:])
 	case "automations":
@@ -129,7 +133,7 @@ func deploy(arguments []string) error {
 		if err != nil {
 			return err
 		}
-		if result.Status == "failed" {
+		if result.Status == "failed" || result.Status == "cancelled" {
 			if err := printJSON(result); err != nil {
 				return err
 			}
@@ -137,6 +141,82 @@ func deploy(arguments []string) error {
 		}
 	}
 	return printJSON(result)
+}
+
+func deploymentCommand(arguments []string) error {
+	if len(arguments) < 2 {
+		return errors.New("usage: werkt deployment get|cancel|retry DEPLOYMENT_ID")
+	}
+	configuration := config.Load()
+	ctx, cancel := context.WithTimeout(context.Background(), configuration.DeployTimeout)
+	defer cancel()
+	client, err := managementclient.New(configuration.APIURL, configuration.ManagementToken, nil)
+	if err != nil {
+		return err
+	}
+	deploymentID := arguments[1]
+	switch arguments[0] {
+	case "get":
+		value, err := client.GetDeployment(ctx, deploymentID)
+		if err != nil {
+			return err
+		}
+		return printJSON(value)
+	case "cancel":
+		value, err := client.CancelDeployment(ctx, deploymentID, "cli")
+		if err != nil {
+			return err
+		}
+		return printJSON(value)
+	case "retry":
+		flags := flag.NewFlagSet("deployment retry", flag.ContinueOnError)
+		idempotencyKey := flags.String("idempotency-key", "retry-"+deploymentID, "retry replay key")
+		wait := flags.Bool("wait", true, "wait for validation, checks, and activation")
+		if err := flags.Parse(arguments[2:]); err != nil {
+			return err
+		}
+		value, _, err := client.RetryDeployment(ctx, deploymentID, *idempotencyKey, "cli")
+		if err != nil {
+			return err
+		}
+		if *wait {
+			value, err = client.WaitDeployment(ctx, value, configuration.DeploymentPoll)
+			if err != nil {
+				return err
+			}
+		}
+		if err := printJSON(value); err != nil {
+			return err
+		}
+		if value.Status == "failed" || value.Status == "cancelled" {
+			return fmt.Errorf("deployment %s %s: %s", value.ID, value.Status, value.Error)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown deployment command %q", arguments[0])
+	}
+}
+
+func rollback(arguments []string) error {
+	flags := flag.NewFlagSet("rollback", flag.ContinueOnError)
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 2 {
+		return errors.New("usage: werkt rollback AUTOMATION_ID REVISION_ID")
+	}
+	configuration := config.Load()
+	ctx, cancel := context.WithTimeout(context.Background(), configuration.DeployTimeout)
+	defer cancel()
+	client, err := managementclient.New(configuration.APIURL, configuration.ManagementToken, nil)
+	if err != nil {
+		return err
+	}
+	value, err := client.RollbackAutomation(ctx, flags.Arg(0), flags.Arg(1), "cli")
+	if err != nil {
+		return err
+	}
+	return printJSON(value)
 }
 
 func serve(arguments []string) error {
@@ -314,9 +394,11 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `Usage:
   %s validate [directory]
   %s deploy [-api URL] [-idempotency-key KEY] [-wait=true] [directory]
+  %s deployment get|cancel|retry DEPLOYMENT_ID
+  %s rollback AUTOMATION_ID REVISION_ID
   %s serve [-workers N]
   %s automations
   %s runs [-limit N]
   %s version
-`, executable, executable, executable, executable, executable, executable)
+`, executable, executable, executable, executable, executable, executable, executable, executable)
 }

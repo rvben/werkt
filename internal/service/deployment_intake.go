@@ -43,7 +43,7 @@ func (i *DeploymentIntake) Accept(ctx context.Context, packageReader io.Reader, 
 	if err != nil || len(decoded) != 32 {
 		return domain.Deployment{}, false, ErrInvalidDeploymentDigest
 	}
-	deploymentID, err := deploymentID()
+	deploymentID, err := NewDeploymentID()
 	if err != nil {
 		return domain.Deployment{}, false, err
 	}
@@ -107,12 +107,19 @@ func (i *DeploymentIntake) Accept(ctx context.Context, packageReader io.Reader, 
 	return value, true, nil
 }
 
-func deploymentID() (string, error) {
+func NewDeploymentID() (string, error) {
 	var value [12]byte
 	if _, err := cryptorand.Read(value[:]); err != nil {
 		return "", err
 	}
 	return "dep_" + hex.EncodeToString(value[:]), nil
+}
+
+func ValidateIdempotencyKey(value string) error {
+	if !validIdempotencyKey(strings.TrimSpace(value)) {
+		return ErrInvalidIdempotencyKey
+	}
+	return nil
 }
 
 func validIdempotencyKey(value string) bool {

@@ -69,6 +69,10 @@ func (s *fakeStore) SetAutomationEnabled(_ context.Context, _ string, enabled bo
 	return true, nil
 }
 
+func (s *fakeStore) RollbackAutomation(context.Context, string, string, string) (bool, error) {
+	return true, nil
+}
+
 func (s *fakeStore) EnqueueManualRun(_ context.Context, _ string, externalID string, data json.RawMessage, actor string) (string, bool, error) {
 	s.manualExternalID = externalID
 	s.manualData = append(json.RawMessage(nil), data...)
@@ -100,6 +104,20 @@ func (s *fakeStore) GetDeployment(_ context.Context, deploymentID string) (domai
 		return domain.Deployment{}, database.ErrDeploymentNotFound
 	}
 	return domain.Deployment{ID: deploymentID, Status: domain.DeploymentSucceeded}, nil
+}
+
+func (s *fakeStore) RequestDeploymentCancellation(_ context.Context, deploymentID, _ string) (domain.Deployment, error) {
+	if deploymentID == "missing" {
+		return domain.Deployment{}, database.ErrDeploymentNotFound
+	}
+	return domain.Deployment{ID: deploymentID, Status: domain.DeploymentCancelled}, nil
+}
+
+func (s *fakeStore) RetryDeployment(_ context.Context, originalID, deploymentID, _ string, actor string) (domain.Deployment, bool, error) {
+	if originalID == "missing" {
+		return domain.Deployment{}, false, database.ErrDeploymentNotFound
+	}
+	return domain.Deployment{ID: deploymentID, RetryOf: originalID, Status: domain.DeploymentQueued, Actor: actor}, true, nil
 }
 
 type fakeDeploymentIntake struct {
@@ -367,6 +385,37 @@ func TestDeploymentIntakeRequiresArchiveContractAndPreservesAttribution(t *testi
 	}
 }
 
+func TestDeploymentLifecycleMutationsAndRollbackAreAgentAccessible(t *testing.T) {
+	server := New(&fakeStore{}, ":0", "management-secret")
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/deployments/dep_active/cancel", nil)
+	request.Header.Set("Authorization", "Bearer management-secret")
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"status":"cancelled"`) {
+		t.Fatalf("cancel status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/deployments/dep_failed/retry", nil)
+	request.Header.Set("Authorization", "Bearer management-secret")
+	request.Header.Set("Idempotency-Key", "repair-1")
+	request.Header.Set("X-Werkt-Actor", "agent:repair")
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || !strings.Contains(response.Body.String(), `"retryOf":"dep_failed"`) {
+		t.Fatalf("retry status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/automations/example/rollback", strings.NewReader(`{"revisionId":"rev_previous"}`))
+	request.Header.Set("Authorization", "Bearer management-secret")
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"changed":true`) {
+		t.Fatalf("rollback status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestManagementQueryValidation(t *testing.T) {
 	store := &fakeStore{}
 	server := New(store, ":0", "")
@@ -408,8 +457,10 @@ func TestOpenAPIContractIsPublicAndDocumentsManagementRoutes(t *testing.T) {
 	}
 	for _, path := range []string{
 		"/api/v1/automations", "/api/v1/automations/{automation}",
-		"/api/v1/automations/{automation}/runs", "/api/v1/runs", "/api/v1/audit",
-		"/api/v1/deployments", "/api/v1/deployments/{deployment}",
+		"/api/v1/automations/{automation}/runs", "/api/v1/automations/{automation}/rollback",
+		"/api/v1/runs", "/api/v1/audit", "/api/v1/deployments",
+		"/api/v1/deployments/{deployment}", "/api/v1/deployments/{deployment}/cancel",
+		"/api/v1/deployments/{deployment}/retry",
 	} {
 		if _, exists := document.Paths[path]; !exists {
 			t.Errorf("OpenAPI path %q is missing", path)

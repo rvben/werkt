@@ -9,7 +9,7 @@ This is an executable MVP, not yet a production sandbox.
 ## What works
 
 - Strict `automation.yaml` manifests with deterministic content hashes
-- Durable, idempotent deployment jobs with immutable artifacts
+- Durable, idempotent deployment jobs with ordered promotion checks, retained diagnostics, cancellation, retry, and rollback
 - PostgreSQL-backed events, run queue, retries, worker leases, and concurrency policies
 - Cron schedules with IANA time zones
 - HMAC-authenticated webhook triggers with idempotency keys
@@ -148,13 +148,18 @@ runtime:
   command: [python3, main.py]
   secrets:
     INCIDENT_API_TOKEN: PROCESS_ALERT_INCIDENT_API_TOKEN
+deployment:
+  checks:
+    - id: syntax
+      command: [python3, -m, py_compile, main.py]
+      timeout: 1m
 execution:
   timeout: 5m
   retries: 3
   concurrency: forbid
 ```
 
-`runtime.language` is descriptive. The actual contract is `runtime.command`, so any executable language works. `runtime.image` names the Husker rootfs catalog entry or OCI reference that provides that command. When `runtime.build` is present, `runtime.buildImage` can select a separate toolchain image; otherwise the runtime image is reused. Both image fields are ignored by the local process executor. A daemon-wide `WERKT_HUSKER_ROOTFS` can be used as a fallback.
+`runtime.language` is descriptive. The actual runtime contract is `runtime.command`, so any executable language works. `deployment.checks` uses the same language-neutral command-array contract: checks run in order after the optional build, each with a stable ID and timeout. `runtime.image` names the Husker rootfs catalog entry or OCI reference that provides those commands. When `runtime.build` is present, `runtime.buildImage` can select a separate toolchain image; otherwise the runtime image is reused. Both image fields are ignored by the local process executor. A daemon-wide `WERKT_HUSKER_ROOTFS` can be used as a fallback.
 
 Trigger credentials and `runtime.secrets` contain environment-variable references only. Values are resolved at ingress or immediately before a run and never stored in PostgreSQL. See [docs/security.md](docs/security.md) for signing, token, and isolation details.
 

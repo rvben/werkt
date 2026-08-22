@@ -1,6 +1,7 @@
 package managementclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -74,11 +75,59 @@ func (c *Client) GetDeployment(ctx context.Context, deploymentID string) (domain
 	return value, nil
 }
 
+func (c *Client) CancelDeployment(ctx context.Context, deploymentID, actor string) (domain.Deployment, error) {
+	request, err := c.request(ctx, http.MethodPost, "/api/v1/deployments/"+url.PathEscape(deploymentID)+"/cancel", nil)
+	if err != nil {
+		return domain.Deployment{}, err
+	}
+	request.Header.Set("X-Werkt-Actor", actor)
+	var value domain.Deployment
+	if err := c.do(request, &value); err != nil {
+		return domain.Deployment{}, err
+	}
+	return value, nil
+}
+
+func (c *Client) RetryDeployment(ctx context.Context, deploymentID, idempotencyKey, actor string) (domain.Deployment, bool, error) {
+	request, err := c.request(ctx, http.MethodPost, "/api/v1/deployments/"+url.PathEscape(deploymentID)+"/retry", nil)
+	if err != nil {
+		return domain.Deployment{}, false, err
+	}
+	request.Header.Set("Idempotency-Key", idempotencyKey)
+	request.Header.Set("X-Werkt-Actor", actor)
+	var response struct {
+		Deployment domain.Deployment `json:"deployment"`
+		Created    bool              `json:"created"`
+	}
+	if err := c.do(request, &response); err != nil {
+		return domain.Deployment{}, false, err
+	}
+	return response.Deployment, response.Created, nil
+}
+
+func (c *Client) RollbackAutomation(ctx context.Context, automationID, revisionID, actor string) (json.RawMessage, error) {
+	body, err := json.Marshal(map[string]string{"revisionId": revisionID})
+	if err != nil {
+		return nil, err
+	}
+	request, err := c.request(ctx, http.MethodPost, "/api/v1/automations/"+url.PathEscape(automationID)+"/rollback", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Werkt-Actor", actor)
+	var response json.RawMessage
+	if err := c.do(request, &response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
 func (c *Client) WaitDeployment(ctx context.Context, deployment domain.Deployment, pollInterval time.Duration) (domain.Deployment, error) {
 	if pollInterval <= 0 {
 		pollInterval = 500 * time.Millisecond
 	}
-	for deployment.Status != domain.DeploymentSucceeded && deployment.Status != domain.DeploymentFailed {
+	for deployment.Status != domain.DeploymentSucceeded && deployment.Status != domain.DeploymentFailed && deployment.Status != domain.DeploymentCancelled {
 		timer := time.NewTimer(pollInterval)
 		select {
 		case <-ctx.Done():
