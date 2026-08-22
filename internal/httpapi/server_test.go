@@ -42,9 +42,68 @@ func (s *fakeStore) IngestEvent(context.Context, string, string, string, string,
 func (s *fakeStore) GetTriggerIngressPolicy(context.Context, string, string, string) (database.TriggerIngressPolicy, error) {
 	config := s.ingressConfig
 	if len(config) == 0 {
-		config = json.RawMessage(`{"secretEnv":"TEST_WEBHOOK_SECRET","tokenEnv":"TEST_EMAIL_TOKEN"}`)
+		config = json.RawMessage(`{"secret":"tests/webhook","tokenSecret":"tests/email"}`)
 	}
 	return database.TriggerIngressPolicy{Config: config}, nil
+}
+
+type fakeSecretManager struct {
+	values   map[string]string
+	metadata map[string]domain.SecretMetadata
+}
+
+func testSecretManager(values map[string]string) *fakeSecretManager {
+	return &fakeSecretManager{values: values, metadata: make(map[string]domain.SecretMetadata)}
+}
+
+func (m *fakeSecretManager) Resolve(_ context.Context, names []string) (map[string]string, error) {
+	values := make(map[string]string, len(names))
+	for _, name := range names {
+		value, ok := m.values[name]
+		if !ok {
+			return nil, database.ErrSecretNotFound
+		}
+		values[name] = value
+	}
+	return values, nil
+}
+
+func (m *fakeSecretManager) List(context.Context) ([]domain.SecretMetadata, error) {
+	values := make([]domain.SecretMetadata, 0, len(m.metadata))
+	for _, value := range m.metadata {
+		values = append(values, value)
+	}
+	return values, nil
+}
+
+func (m *fakeSecretManager) Get(_ context.Context, name string) (domain.SecretMetadata, error) {
+	value, ok := m.metadata[name]
+	if !ok {
+		return domain.SecretMetadata{}, database.ErrSecretNotFound
+	}
+	return value, nil
+}
+
+func (m *fakeSecretManager) Put(_ context.Context, name, value, description, _ string) (domain.SecretMetadata, bool, error) {
+	current, exists := m.metadata[name]
+	current.Name = name
+	current.Description = description
+	current.Version++
+	m.metadata[name] = current
+	if m.values == nil {
+		m.values = make(map[string]string)
+	}
+	m.values[name] = value
+	return current, !exists, nil
+}
+
+func (m *fakeSecretManager) Delete(_ context.Context, name, _ string) error {
+	if _, ok := m.metadata[name]; !ok {
+		return database.ErrSecretNotFound
+	}
+	delete(m.metadata, name)
+	delete(m.values, name)
+	return nil
 }
 
 func (s *fakeStore) ListAutomations(_ context.Context, filter database.AutomationFilter) ([]database.AutomationSummary, error) {
@@ -167,9 +226,8 @@ func (i *fakeDeploymentIntake) Accept(_ context.Context, reader io.Reader, expec
 
 func TestManagementRoutesRequireBearerTokenButTriggerIngressDoesNot(t *testing.T) {
 	const webhookSecret = "test-webhook-secret-at-least-32-bytes"
-	t.Setenv("TEST_WEBHOOK_SECRET", webhookSecret)
 	store := &fakeStore{}
-	server := New(store, ":0", "management-secret")
+	server := New(store, ":0", "management-secret", WithSecretManager(testSecretManager(map[string]string{"tests/webhook": webhookSecret})))
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/automations", nil)
 	response := httptest.NewRecorder()
@@ -296,13 +354,59 @@ func TestRetentionApplyMapsExpiredPlanToGone(t *testing.T) {
 	}
 }
 
+func TestSecretManagementNeverReturnsValuesAndRequiresAuthentication(t *testing.T) {
+	manager := testSecretManager(nil)
+	server := New(&fakeStore{}, ":0", "management-secret", WithSecretManager(manager))
+	path := "/api/v1/secrets/ops%2Fgithub%2Ftoken"
+
+	request := httptest.NewRequest(http.MethodPut, path, strings.NewReader(`{"value":"super-secret-value","description":"GitHub automation"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated put status=%d", response.Code)
+	}
+
+	request = httptest.NewRequest(http.MethodPut, path, strings.NewReader(`{"value":"super-secret-value","description":"GitHub automation"}`))
+	request.Header.Set("Authorization", "Bearer management-secret")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Werkt-Actor", "agent:operator")
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("put status=%d body=%s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "super-secret-value") {
+		t.Fatal("put response disclosed the secret value")
+	}
+	if response.Header().Get("Location") != path {
+		t.Fatalf("location=%q", response.Header().Get("Location"))
+	}
+
+	for _, target := range []string{path, "/api/v1/secrets"} {
+		request = httptest.NewRequest(http.MethodGet, target, nil)
+		request.Header.Set("Authorization", "Bearer management-secret")
+		response = httptest.NewRecorder()
+		server.server.Handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "super-secret-value") {
+			t.Fatalf("get %s status=%d body=%s", target, response.Code, response.Body.String())
+		}
+	}
+
+	request = httptest.NewRequest(http.MethodDelete, path, nil)
+	request.Header.Set("Authorization", "Bearer management-secret")
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("delete status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestTriggerIngressRejectsInvalidCredentials(t *testing.T) {
 	const webhookSecret = "test-webhook-secret-at-least-32-bytes"
 	const emailToken = "test-email-token-at-least-32-bytes-long"
-	t.Setenv("TEST_WEBHOOK_SECRET", webhookSecret)
-	t.Setenv("TEST_EMAIL_TOKEN", emailToken)
 	store := &fakeStore{}
-	server := New(store, ":0", "")
+	server := New(store, ":0", "", WithSecretManager(testSecretManager(map[string]string{"tests/webhook": webhookSecret, "tests/email": emailToken})))
 
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/example/incoming", strings.NewReader(`{"ok":true}`))
 	request.Header.Set("Idempotency-Key", "invalid-hook-test")
@@ -325,9 +429,8 @@ func TestTriggerIngressRejectsInvalidCredentials(t *testing.T) {
 
 func TestWebhookRejectsStaleSignatureAndMissingIdempotencyKey(t *testing.T) {
 	const webhookSecret = "test-webhook-secret-at-least-32-bytes"
-	t.Setenv("TEST_WEBHOOK_SECRET", webhookSecret)
 	store := &fakeStore{}
-	server := New(store, ":0", "")
+	server := New(store, ":0", "", WithSecretManager(testSecretManager(map[string]string{"tests/webhook": webhookSecret})))
 	body := []byte(`{"ok":true}`)
 
 	staleTimestamp := strconv.FormatInt(time.Now().Add(-10*time.Minute).Unix(), 10)
@@ -352,9 +455,8 @@ func TestWebhookRejectsStaleSignatureAndMissingIdempotencyKey(t *testing.T) {
 
 func TestAuthenticatedEmailIngress(t *testing.T) {
 	const emailToken = "test-email-token-at-least-32-bytes-long"
-	t.Setenv("TEST_EMAIL_TOKEN", emailToken)
 	store := &fakeStore{}
-	server := New(store, ":0", "")
+	server := New(store, ":0", "", WithSecretManager(testSecretManager(map[string]string{"tests/email": emailToken})))
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/email/example/mail", strings.NewReader("Message-Id: <test@example.com>\nFrom: sender@example.com\nTo: automation@example.com\nSubject: test\n\nhello"))
 	request.Header.Set("Authorization", "Bearer "+emailToken)
 	response := httptest.NewRecorder()

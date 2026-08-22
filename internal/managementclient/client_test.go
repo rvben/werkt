@@ -120,6 +120,47 @@ func TestRetentionClientPreservesPlanThenApplyBoundary(t *testing.T) {
 	}
 }
 
+func TestSecretClientUsesMetadataOnlyContract(t *testing.T) {
+	const name = "ops/github/token"
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.EscapedPath() != "/api/v1/secrets/ops%2Fgithub%2Ftoken" {
+			t.Errorf("escaped path=%q", request.URL.EscapedPath())
+		}
+		switch request.Method {
+		case http.MethodPut:
+			var body map[string]string
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			if body["value"] != "secret-value" || request.Header.Get("X-Werkt-Actor") != "cli" {
+				t.Errorf("body=%v actor=%q", body, request.Header.Get("X-Werkt-Actor"))
+			}
+			_ = json.NewEncoder(response).Encode(domain.SecretMetadata{Name: name, Version: 1})
+		case http.MethodGet:
+			_ = json.NewEncoder(response).Encode(domain.SecretMetadata{Name: name, Version: 1})
+		case http.MethodDelete:
+			response.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+	client, err := New(server.URL, "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := client.PutSecret(context.Background(), name, "secret-value", "GitHub", "cli")
+	if err != nil || metadata.Version != 1 {
+		t.Fatalf("PutSecret() metadata=%+v err=%v", metadata, err)
+	}
+	if _, err := client.GetSecret(context.Background(), name); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.DeleteSecret(context.Background(), name, "cli"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 type trackedReader struct {
 	io.Reader
 	closed bool
