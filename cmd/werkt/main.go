@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -22,6 +23,7 @@ import (
 	"github.com/rvben/werkt/internal/manifest"
 	"github.com/rvben/werkt/internal/packageio"
 	"github.com/rvben/werkt/internal/runner"
+	"github.com/rvben/werkt/internal/secretvault"
 	"github.com/rvben/werkt/internal/service"
 )
 
@@ -48,6 +50,8 @@ func run(arguments []string) error {
 		return rollback(arguments[1:])
 	case "retention":
 		return retentionCommand(arguments[1:])
+	case "secret":
+		return secretCommand(arguments[1:])
 	case "serve":
 		return serve(arguments[1:])
 	case "automations":
@@ -274,6 +278,88 @@ func retentionCommand(arguments []string) error {
 	}
 }
 
+func secretCommand(arguments []string) error {
+	if len(arguments) == 0 {
+		return errors.New("usage: werkt secret list|get|set|delete [NAME]")
+	}
+	configuration := config.Load()
+	ctx, cancel := context.WithTimeout(context.Background(), configuration.DeployTimeout)
+	defer cancel()
+	client, err := managementclient.New(configuration.APIURL, configuration.ManagementToken, nil)
+	if err != nil {
+		return err
+	}
+	switch arguments[0] {
+	case "list":
+		if len(arguments) != 1 {
+			return errors.New("usage: werkt secret list")
+		}
+		values, err := client.ListSecrets(ctx)
+		if err != nil {
+			return err
+		}
+		return printJSON(values)
+	case "get":
+		if len(arguments) != 2 {
+			return errors.New("usage: werkt secret get NAME")
+		}
+		value, err := client.GetSecret(ctx, arguments[1])
+		if err != nil {
+			return err
+		}
+		return printJSON(value)
+	case "set":
+		flags := flag.NewFlagSet("secret set", flag.ContinueOnError)
+		description := flags.String("description", "", "operator-facing purpose (never the value)")
+		fromEnv := flags.String("from-env", "", "read the value from this local environment variable")
+		if err := flags.Parse(arguments[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 1 {
+			return errors.New("usage: werkt secret set [--description TEXT] [--from-env ENV] NAME")
+		}
+		var secretValue string
+		if *fromEnv != "" {
+			var exists bool
+			secretValue, exists = os.LookupEnv(*fromEnv)
+			if !exists {
+				return fmt.Errorf("environment variable %s is not set", *fromEnv)
+			}
+		} else {
+			info, statErr := os.Stdin.Stat()
+			if statErr != nil {
+				return statErr
+			}
+			if info.Mode()&os.ModeCharDevice != 0 {
+				return errors.New("refusing to read a visible terminal; pipe the secret on stdin or use --from-env")
+			}
+			contents, readErr := io.ReadAll(io.LimitReader(os.Stdin, secretvault.MaximumValueBytes+1))
+			if readErr != nil {
+				return readErr
+			}
+			if len(contents) > secretvault.MaximumValueBytes {
+				return fmt.Errorf("secret value exceeds %d bytes", secretvault.MaximumValueBytes)
+			}
+			secretValue = string(contents)
+		}
+		value, err := client.PutSecret(ctx, flags.Arg(0), secretValue, *description, "cli")
+		if err != nil {
+			return err
+		}
+		return printJSON(value)
+	case "delete":
+		if len(arguments) != 2 {
+			return errors.New("usage: werkt secret delete NAME")
+		}
+		if err := client.DeleteSecret(ctx, arguments[1], "cli"); err != nil {
+			return err
+		}
+		return printJSON(map[string]any{"deleted": true, "name": arguments[1]})
+	default:
+		return fmt.Errorf("unknown secret command %q", arguments[0])
+	}
+}
+
 func serve(arguments []string) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	workers := flags.Int("workers", 2, "number of local automation workers")
@@ -292,7 +378,20 @@ func serve(arguments []string) error {
 	}
 	defer store.Close()
 
-	executor, err := newExecutor(configuration)
+	var vault *secretvault.Vault
+	if configuration.SecretKey == "" {
+		slog.Warn("secret vault is disabled; set WERKT_SECRET_KEY before deploying automations with secret references")
+	} else {
+		vault, err = secretvault.New(store, configuration.SecretKey)
+		if err != nil {
+			return fmt.Errorf("configure secret vault: %w", err)
+		}
+	}
+	var secretResolver runner.SecretResolver
+	if vault != nil {
+		secretResolver = vault
+	}
+	executor, err := newExecutor(configuration, secretResolver)
 	if err != nil {
 		return err
 	}
@@ -309,7 +408,7 @@ func serve(arguments []string) error {
 	deploymentWorkerID := fmt.Sprintf("%s-%d-deployments", hostname, os.Getpid())
 	go service.NewDeploymentWorker(store, deployer, deploymentWorkerID, configuration.DeploymentPoll).Run(ctx)
 	go service.NewScheduler(store, configuration.SchedulerPoll).Run(ctx)
-	go service.NewNtfyReconciler(store).Run(ctx)
+	go service.NewNtfyReconciler(store, secretResolver).Run(ctx)
 
 	if configuration.ManagementToken == "" {
 		slog.Warn("management API authentication is disabled; set WERKT_MANAGEMENT_TOKEN outside local development")
@@ -323,8 +422,11 @@ func serve(arguments []string) error {
 		Entries:         configuration.MaxPackageEntries,
 	})
 	retention := service.NewRetentionManager(store, configuration.DataDir)
-	api := httpapi.New(store, configuration.ListenAddress, configuration.ManagementToken,
-		httpapi.WithDeploymentIntake(intake), httpapi.WithRetentionManager(retention))
+	apiOptions := []httpapi.Option{httpapi.WithDeploymentIntake(intake), httpapi.WithRetentionManager(retention)}
+	if vault != nil {
+		apiOptions = append(apiOptions, httpapi.WithSecretManager(vault))
+	}
+	api := httpapi.New(store, configuration.ListenAddress, configuration.ManagementToken, apiOptions...)
 	serverErrors := make(chan error, 1)
 	go func() {
 		slog.Info("control plane listening", "address", configuration.ListenAddress, "workers", *workers)
@@ -341,12 +443,12 @@ func serve(arguments []string) error {
 	}
 }
 
-func newExecutor(configuration config.Config) (runner.Executor, error) {
+func newExecutor(configuration config.Config, secrets runner.SecretResolver) (runner.Executor, error) {
 	switch configuration.Executor {
 	case "process":
-		return runner.NewProcessRunner(), nil
+		return runner.NewProcessRunner(secrets), nil
 	case "husker":
-		return newHuskerRunner(configuration)
+		return newHuskerRunner(configuration, secrets)
 	default:
 		return nil, fmt.Errorf("unsupported executor %q (must be process or husker)", configuration.Executor)
 	}
@@ -357,13 +459,13 @@ func newBuilder(configuration config.Config) (service.Builder, error) {
 	case "process":
 		return runner.NewProcessRunner(), nil
 	case "husker":
-		return newHuskerRunner(configuration)
+		return newHuskerRunner(configuration, nil)
 	default:
 		return nil, fmt.Errorf("unsupported executor %q (must be process or husker)", configuration.Executor)
 	}
 }
 
-func newHuskerRunner(configuration config.Config) (*runner.HuskerRunner, error) {
+func newHuskerRunner(configuration config.Config, secrets runner.SecretResolver) (*runner.HuskerRunner, error) {
 	return runner.NewHuskerRunner(runner.HuskerConfig{
 		URL:              configuration.HuskerURL,
 		Token:            configuration.HuskerToken,
@@ -376,6 +478,7 @@ func newHuskerRunner(configuration config.Config) (*runner.HuskerRunner, error) 
 		BuildTimeout:     configuration.HuskerBuildTimeout,
 		ProvisionTimeout: configuration.HuskerProvisionTimeout,
 		CleanupTimeout:   configuration.HuskerCleanupTimeout,
+		Secrets:          secrets,
 	})
 }
 
@@ -454,9 +557,10 @@ func usage() {
   %s deployment get|cancel|retry DEPLOYMENT_ID
   %s rollback AUTOMATION_ID REVISION_ID
   %s retention plan|get|apply [PLAN_ID]
+  %s secret list|get|set|delete [NAME]
   %s serve [-workers N]
   %s automations
   %s runs [-limit N]
   %s version
-`, executable, executable, executable, executable, executable, executable, executable, executable, executable)
+	`, executable, executable, executable, executable, executable, executable, executable, executable, executable, executable)
 }

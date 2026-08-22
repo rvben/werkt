@@ -166,6 +166,72 @@ func (c *Client) ApplyRetentionPlan(ctx context.Context, planID, actor string) (
 	return value, nil
 }
 
+func (c *Client) ListSecrets(ctx context.Context) ([]domain.SecretMetadata, error) {
+	request, err := c.request(ctx, http.MethodGet, "/api/v1/secrets", nil)
+	if err != nil {
+		return nil, err
+	}
+	var values []domain.SecretMetadata
+	if err := c.do(request, &values); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+func (c *Client) GetSecret(ctx context.Context, name string) (domain.SecretMetadata, error) {
+	request, err := c.request(ctx, http.MethodGet, "/api/v1/secrets/"+url.PathEscape(name), nil)
+	if err != nil {
+		return domain.SecretMetadata{}, err
+	}
+	var value domain.SecretMetadata
+	if err := c.do(request, &value); err != nil {
+		return domain.SecretMetadata{}, err
+	}
+	return value, nil
+}
+
+func (c *Client) PutSecret(ctx context.Context, name, value, description, actor string) (domain.SecretMetadata, error) {
+	body, err := json.Marshal(map[string]string{"value": value, "description": description})
+	if err != nil {
+		return domain.SecretMetadata{}, err
+	}
+	request, err := c.request(ctx, http.MethodPut, "/api/v1/secrets/"+url.PathEscape(name), bytes.NewReader(body))
+	if err != nil {
+		return domain.SecretMetadata{}, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Werkt-Actor", actor)
+	var metadata domain.SecretMetadata
+	if err := c.do(request, &metadata); err != nil {
+		return domain.SecretMetadata{}, err
+	}
+	return metadata, nil
+}
+
+func (c *Client) DeleteSecret(ctx context.Context, name, actor string) error {
+	request, err := c.request(ctx, http.MethodDelete, "/api/v1/secrets/"+url.PathEscape(name), nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("X-Werkt-Actor", actor)
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= 200 && response.StatusCode < 300 {
+		return nil
+	}
+	limited := io.LimitReader(response.Body, 2<<20)
+	var problem struct {
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(limited).Decode(&problem); err != nil || problem.Error == "" {
+		problem.Error = http.StatusText(response.StatusCode)
+	}
+	return &APIError{Status: response.StatusCode, Message: problem.Error}
+}
+
 func (c *Client) WaitDeployment(ctx context.Context, deployment domain.Deployment, pollInterval time.Duration) (domain.Deployment, error) {
 	if pollInterval <= 0 {
 		pollInterval = 500 * time.Millisecond

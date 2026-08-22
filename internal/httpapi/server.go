@@ -16,7 +16,7 @@ import (
 	"mime"
 	"net/http"
 	"net/mail"
-	"os"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +25,7 @@ import (
 	"github.com/rvben/werkt/internal/database"
 	"github.com/rvben/werkt/internal/domain"
 	"github.com/rvben/werkt/internal/packageio"
+	"github.com/rvben/werkt/internal/secretvault"
 	"github.com/rvben/werkt/internal/service"
 )
 
@@ -42,6 +43,7 @@ type Server struct {
 	store            Store
 	deploymentIntake DeploymentIntake
 	retention        RetentionManager
+	secrets          SecretManager
 	managementToken  string
 	server           *http.Server
 }
@@ -74,6 +76,14 @@ type RetentionManager interface {
 	Apply(context.Context, string, string) (domain.RetentionPlan, error)
 }
 
+type SecretManager interface {
+	List(context.Context) ([]domain.SecretMetadata, error)
+	Get(context.Context, string) (domain.SecretMetadata, error)
+	Put(context.Context, string, string, string, string) (domain.SecretMetadata, bool, error)
+	Delete(context.Context, string, string) error
+	Resolve(context.Context, []string) (map[string]string, error)
+}
+
 type Option func(*Server)
 
 func WithDeploymentIntake(intake DeploymentIntake) Option {
@@ -82,6 +92,10 @@ func WithDeploymentIntake(intake DeploymentIntake) Option {
 
 func WithRetentionManager(manager RetentionManager) Option {
 	return func(server *Server) { server.retention = manager }
+}
+
+func WithSecretManager(manager SecretManager) Option {
+	return func(server *Server) { server.secrets = manager }
 }
 
 func New(store Store, address, managementToken string, options ...Option) *Server {
@@ -114,6 +128,10 @@ func New(store Store, address, managementToken string, options ...Option) *Serve
 	mux.Handle("POST /api/v1/retention/plans", value.requireManagementAuth(http.HandlerFunc(value.createRetentionPlan)))
 	mux.Handle("GET /api/v1/retention/plans/{plan}", value.requireManagementAuth(http.HandlerFunc(value.retentionPlan)))
 	mux.Handle("POST /api/v1/retention/plans/{plan}/apply", value.requireManagementAuth(http.HandlerFunc(value.applyRetentionPlan)))
+	mux.Handle("GET /api/v1/secrets", value.requireManagementAuth(http.HandlerFunc(value.secretsList)))
+	mux.Handle("GET /api/v1/secrets/{secret}", value.requireManagementAuth(http.HandlerFunc(value.secret)))
+	mux.Handle("PUT /api/v1/secrets/{secret}", value.requireManagementAuth(http.HandlerFunc(value.putSecret)))
+	mux.Handle("DELETE /api/v1/secrets/{secret}", value.requireManagementAuth(http.HandlerFunc(value.deleteSecret)))
 	value.server = &http.Server{
 		Addr:              address,
 		Handler:           requestLogger(mux),
@@ -359,6 +377,89 @@ func (s *Server) applyRetentionPlan(response http.ResponseWriter, request *http.
 	}
 }
 
+func (s *Server) secretsList(response http.ResponseWriter, request *http.Request) {
+	if s.secrets == nil {
+		writeError(response, http.StatusServiceUnavailable, "secret vault is not configured")
+		return
+	}
+	values, err := s.secrets.List(request.Context())
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "list secrets")
+		return
+	}
+	writeJSON(response, http.StatusOK, values)
+}
+
+func (s *Server) secret(response http.ResponseWriter, request *http.Request) {
+	if s.secrets == nil {
+		writeError(response, http.StatusServiceUnavailable, "secret vault is not configured")
+		return
+	}
+	value, err := s.secrets.Get(request.Context(), request.PathValue("secret"))
+	switch {
+	case errors.Is(err, secretvault.ErrInvalidName):
+		writeError(response, http.StatusBadRequest, err.Error())
+	case errors.Is(err, database.ErrSecretNotFound):
+		writeError(response, http.StatusNotFound, "secret not found")
+	case err != nil:
+		writeError(response, http.StatusInternalServerError, "get secret")
+	default:
+		writeJSON(response, http.StatusOK, value)
+	}
+}
+
+func (s *Server) putSecret(response http.ResponseWriter, request *http.Request) {
+	if s.secrets == nil {
+		writeError(response, http.StatusServiceUnavailable, "secret vault is not configured")
+		return
+	}
+	var body struct {
+		Value       string `json:"value"`
+		Description string `json:"description"`
+	}
+	if err := decodeJSON(response, request, secretvault.MaximumValueBytes*6+4096, &body); err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	value, created, err := s.secrets.Put(
+		request.Context(), request.PathValue("secret"), body.Value, body.Description, requestActor(request),
+	)
+	switch {
+	case errors.Is(err, secretvault.ErrInvalidName), errors.Is(err, secretvault.ErrInvalidValue), errors.Is(err, secretvault.ErrInvalidDescription):
+		writeError(response, http.StatusBadRequest, err.Error())
+	case err != nil:
+		slog.Error("put secret", "secret", request.PathValue("secret"), "error", err)
+		writeError(response, http.StatusInternalServerError, "put secret")
+	default:
+		status := http.StatusOK
+		if created {
+			status = http.StatusCreated
+			response.Header().Set("Location", "/api/v1/secrets/"+url.PathEscape(value.Name))
+		}
+		writeJSON(response, status, value)
+	}
+}
+
+func (s *Server) deleteSecret(response http.ResponseWriter, request *http.Request) {
+	if s.secrets == nil {
+		writeError(response, http.StatusServiceUnavailable, "secret vault is not configured")
+		return
+	}
+	err := s.secrets.Delete(request.Context(), request.PathValue("secret"), requestActor(request))
+	switch {
+	case errors.Is(err, secretvault.ErrInvalidName):
+		writeError(response, http.StatusBadRequest, err.Error())
+	case errors.Is(err, database.ErrSecretNotFound):
+		writeError(response, http.StatusNotFound, "secret not found")
+	case errors.Is(err, database.ErrSecretInUse):
+		writeError(response, http.StatusConflict, err.Error())
+	case err != nil:
+		writeError(response, http.StatusInternalServerError, "delete secret")
+	default:
+		response.WriteHeader(http.StatusNoContent)
+	}
+}
+
 func (s *Server) email(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Cache-Control", "no-store")
 	policy, ok := s.triggerIngressPolicy(response, request, "email")
@@ -366,14 +467,14 @@ func (s *Server) email(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	var config struct {
-		TokenEnv string `json:"tokenEnv"`
+		TokenSecret string `json:"tokenSecret"`
 	}
-	if err := json.Unmarshal(policy.Config, &config); err != nil || config.TokenEnv == "" {
+	if err := json.Unmarshal(policy.Config, &config); err != nil || config.TokenSecret == "" {
 		slog.Error("email trigger has invalid credential configuration", "automation", request.PathValue("automation"), "trigger", request.PathValue("trigger"))
 		writeError(response, http.StatusServiceUnavailable, "trigger credential unavailable")
 		return
 	}
-	token, ok := ingressSecret(response, config.TokenEnv)
+	token, ok := s.ingressSecret(response, request, config.TokenSecret)
 	if !ok {
 		return
 	}
@@ -480,15 +581,15 @@ func (s *Server) webhook(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	var config struct {
-		SecretEnv       string `json:"secretEnv"`
+		Secret          string `json:"secret"`
 		SignatureHeader string `json:"signatureHeader"`
 	}
-	if err := json.Unmarshal(policy.Config, &config); err != nil || config.SecretEnv == "" {
+	if err := json.Unmarshal(policy.Config, &config); err != nil || config.Secret == "" {
 		slog.Error("webhook trigger has invalid credential configuration", "automation", request.PathValue("automation"), "trigger", request.PathValue("trigger"))
 		writeError(response, http.StatusServiceUnavailable, "trigger credential unavailable")
 		return
 	}
-	secret, ok := ingressSecret(response, config.SecretEnv)
+	secret, ok := s.ingressSecret(response, request, config.Secret)
 	if !ok {
 		return
 	}
@@ -563,10 +664,15 @@ func (s *Server) triggerIngressPolicy(response http.ResponseWriter, request *htt
 	return policy, true
 }
 
-func ingressSecret(response http.ResponseWriter, environmentVariable string) ([]byte, bool) {
-	secret, exists := os.LookupEnv(environmentVariable)
-	if !exists || len(secret) < minimumIngressSecretBytes {
-		slog.Error("trigger credential is missing or too short", "environmentVariable", environmentVariable, "minimumBytes", minimumIngressSecretBytes)
+func (s *Server) ingressSecret(response http.ResponseWriter, request *http.Request, name string) ([]byte, bool) {
+	if s.secrets == nil {
+		writeError(response, http.StatusServiceUnavailable, "trigger credential unavailable")
+		return nil, false
+	}
+	values, err := s.secrets.Resolve(request.Context(), []string{name})
+	secret := values[name]
+	if err != nil || len(secret) < minimumIngressSecretBytes {
+		slog.Error("trigger credential is missing or too short", "secret", name, "minimumBytes", minimumIngressSecretBytes, "error", err)
 		writeError(response, http.StatusServiceUnavailable, "trigger credential unavailable")
 		return nil, false
 	}

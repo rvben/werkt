@@ -13,6 +13,7 @@ type Config struct {
 	DataDir                 string
 	ListenAddress           string
 	ManagementToken         string
+	SecretKey               string
 	WorkerPoll              time.Duration
 	SchedulerPoll           time.Duration
 	ShutdownPeriod          time.Duration
@@ -42,6 +43,7 @@ func Load() Config {
 		DataDir:                 env("WERKT_DATA_DIR", filepath.Join(".", "data")),
 		ListenAddress:           env("WERKT_LISTEN_ADDR", "127.0.0.1:8080"),
 		ManagementToken:         os.Getenv("WERKT_MANAGEMENT_TOKEN"),
+		SecretKey:               os.Getenv("WERKT_SECRET_KEY"),
 		WorkerPoll:              durationEnv("WERKT_WORKER_POLL", 500*time.Millisecond),
 		SchedulerPoll:           durationEnv("WERKT_SCHEDULER_POLL", time.Second),
 		ShutdownPeriod:          durationEnv("WERKT_SHUTDOWN_PERIOD", 10*time.Second),
