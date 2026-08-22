@@ -29,6 +29,8 @@ Werkt stores extracted deployment sources under `deployment-sources` and content
 
 Apply re-runs candidate selection and then performs a final database-side protection check. Database references are detached before an owned direct-child path is removed, preventing future work from discovering storage during deletion. Active sources, active revisions, artifacts being reused by in-progress deployments, and artifacts needed by queued or running runs cannot be detached. Historical rows, deployment diagnostics, revision manifests, and audit events remain in PostgreSQL after their filesystem material is pruned.
 
+Each runnable revision also owns immutable bindings to its named secrets. Artifact pruning releases those bindings only after the same final protection checks, because a revision without an artifact can no longer execute or be rolled back. This lets operators delete credentials that are referenced only by pruned history without weakening active revision safety.
+
 ## Stable automation contract
 
 Every executor starts `runtime.command` in the deployed artifact directory and provides:
@@ -39,7 +41,7 @@ Every executor starts `runtime.command` in the deployed artifact directory and p
 - `WERKT_EVENT_PATH`, containing the normalized event envelope
 - `WERKT_RESULT_PATH`, initialized to `{}` and expected to contain valid JSON at exit
 
-Standard output and error become bounded run logs. A non-zero exit fails the attempt. Exit code 124 is treated as a timeout. The runtime language is not part of this protocol.
+Standard output and error are redacted against the exact secrets resolved for that attempt, then bounded to 1 MiB and persisted as run logs. A non-zero exit fails the attempt. Exit code 124 is treated as a timeout. The runtime language is not part of this protocol.
 
 ## Husker attempt lifecycle
 
@@ -58,7 +60,7 @@ The default network mode is `none`. `nat` or `bridged` must be explicitly config
 - API uploads are chunked below Husker's default request and file-write ceilings.
 - Build artifacts and runtime results are downloaded in bounded ranges and checked for size or modification changes between chunks.
 - Husker bearer credentials stay in the worker configuration and are never exposed to automation code.
-- Only manifest environment values and reserved Werkt protocol values are sent to the guest.
+- Only manifest environment values, explicitly named vault values, and reserved Werkt protocol values are sent to the guest.
 - The VM deadline is activity-independent. It remains effective during stuck commands and after orchestrator failure.
 - Husker's `owner` field is correlation metadata, not an authorization boundary.
 - Build-image tags are not yet required to be immutable digests, and artifacts are not yet signed.
