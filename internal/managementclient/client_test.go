@@ -81,6 +81,45 @@ func TestCreateDeploymentDoesNotCloseCallerReader(t *testing.T) {
 	}
 }
 
+func TestRetentionClientPreservesPlanThenApplyBoundary(t *testing.T) {
+	var planned domain.RetentionPolicy
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("X-Werkt-Actor") != "agent:operator" && request.Method == http.MethodPost {
+			t.Errorf("actor=%q", request.Header.Get("X-Werkt-Actor"))
+		}
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/retention/plans":
+			if err := json.NewDecoder(request.Body).Decode(&planned); err != nil {
+				t.Error(err)
+			}
+			_ = json.NewEncoder(response).Encode(domain.RetentionPlan{ID: "ret_1", Status: domain.RetentionPlanPlanned, Policy: planned})
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/retention/plans/ret_1":
+			_ = json.NewEncoder(response).Encode(domain.RetentionPlan{ID: "ret_1", Status: domain.RetentionPlanPlanned})
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/retention/plans/ret_1/apply":
+			_ = json.NewEncoder(response).Encode(domain.RetentionPlan{ID: "ret_1", Status: domain.RetentionPlanApplied})
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+	client, err := New(server.URL, "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := domain.RetentionPolicy{SourceMaxAge: "24h", ArtifactMaxAge: "168h", KeepRetryableSources: 2, KeepInactiveRevisions: 4}
+	plan, err := client.CreateRetentionPlan(context.Background(), policy, "agent:operator")
+	if err != nil || plan.Status != domain.RetentionPlanPlanned || planned.KeepInactiveRevisions != 4 {
+		t.Fatalf("plan=%#v sent=%#v err=%v", plan, planned, err)
+	}
+	if _, err := client.GetRetentionPlan(context.Background(), plan.ID); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := client.ApplyRetentionPlan(context.Background(), plan.ID, "agent:operator")
+	if err != nil || applied.Status != domain.RetentionPlanApplied {
+		t.Fatalf("applied=%#v err=%v", applied, err)
+	}
+}
+
 type trackedReader struct {
 	io.Reader
 	closed bool

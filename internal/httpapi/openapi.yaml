@@ -136,6 +136,7 @@ paths:
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
   /api/v1/deployments:
     post:
       operationId: createDeployment
@@ -236,6 +237,61 @@ paths:
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
         "409": {$ref: "#/components/responses/Error"}
+  /api/v1/retention/plans:
+    post:
+      operationId: createRetentionPlan
+      description: Creates a persisted dry-run plan. No storage is deleted until the plan is explicitly applied.
+      security: [{BearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Actor"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RetentionPolicy"}
+      responses:
+        "201":
+          description: A retention plan that remains valid for 15 minutes.
+          headers:
+            Location:
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RetentionPlan"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+  /api/v1/retention/plans/{plan}:
+    get:
+      operationId: getRetentionPlan
+      security: [{BearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/RetentionPlanID"}
+      responses:
+        "200":
+          description: Persisted plan, candidates, and execution outcomes.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RetentionPlan"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /api/v1/retention/plans/{plan}/apply:
+    post:
+      operationId: applyRetentionPlan
+      description: Revalidates every planned item, detaches eligible database references, and deletes the owned storage.
+      security: [{BearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/RetentionPlanID"}
+        - {$ref: "#/components/parameters/Actor"}
+      responses:
+        "200":
+          description: Applied plan. Repeated apply requests return the same terminal result.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RetentionPlan"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "410": {$ref: "#/components/responses/Error"}
   /api/v1/runs:
     get:
       operationId: listRuns
@@ -371,6 +427,11 @@ components:
       schema: {type: string}
     DeploymentID:
       name: deployment
+      in: path
+      required: true
+      schema: {type: string}
+    RetentionPlanID:
+      name: plan
       in: path
       required: true
       schema: {type: string}
@@ -531,6 +592,67 @@ components:
         startedAt: {type: string, format: date-time}
         finishedAt: {type: string, format: date-time}
       required: [id, kind, status, startedAt]
+    RetentionPolicy:
+      type: object
+      additionalProperties: false
+      properties:
+        sourceMaxAge:
+          type: string
+          default: 720h
+          description: Positive Go duration. Terminal sources newer than this remain protected.
+        artifactMaxAge:
+          type: string
+          default: 2160h
+          description: Positive Go duration. Inactive artifacts newer than this remain protected.
+        keepRetryableSources:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          default: 3
+        keepInactiveRevisions:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          default: 5
+    RetentionPlan:
+      type: object
+      properties:
+        id: {type: string}
+        status: {type: string, enum: [planned, applying, applied]}
+        policy: {$ref: "#/components/schemas/RetentionPolicy"}
+        summary: {$ref: "#/components/schemas/RetentionSummary"}
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/RetentionItem"}
+        actor: {type: string}
+        createdAt: {type: string, format: date-time}
+        expiresAt: {type: string, format: date-time}
+        appliedAt: {type: string, format: date-time}
+      required: [id, status, policy, summary, items, actor, createdAt, expiresAt]
+    RetentionSummary:
+      type: object
+      properties:
+        items: {type: integer}
+        estimatedBytes: {type: integer, format: int64}
+        deleted: {type: integer}
+        skipped: {type: integer}
+        failed: {type: integer}
+      required: [items, estimatedBytes, deleted, skipped, failed]
+    RetentionItem:
+      type: object
+      properties:
+        position: {type: integer}
+        kind: {type: string, enum: [source, artifact]}
+        storageKey: {type: string}
+        resourceIds: {type: array, items: {type: string}}
+        automationIds: {type: array, items: {type: string}}
+        reason: {type: string}
+        estimatedBytes: {type: integer, format: int64}
+        status: {type: string, enum: [planned, deleted, skipped, failed]}
+        error: {type: string}
+        createdAt: {type: string, format: date-time}
+        deletedAt: {type: string, format: date-time}
+      required: [position, kind, storageKey, resourceIds, reason, estimatedBytes, status, createdAt]
     AuditEvent:
       type: object
       properties:

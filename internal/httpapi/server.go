@@ -41,6 +41,7 @@ var openAPIFS embed.FS
 type Server struct {
 	store            Store
 	deploymentIntake DeploymentIntake
+	retention        RetentionManager
 	managementToken  string
 	server           *http.Server
 }
@@ -67,10 +68,20 @@ type DeploymentIntake interface {
 	Accept(context.Context, io.Reader, string, string, string) (domain.Deployment, bool, error)
 }
 
+type RetentionManager interface {
+	Plan(context.Context, domain.RetentionPolicy, string) (domain.RetentionPlan, error)
+	Get(context.Context, string) (domain.RetentionPlan, error)
+	Apply(context.Context, string, string) (domain.RetentionPlan, error)
+}
+
 type Option func(*Server)
 
 func WithDeploymentIntake(intake DeploymentIntake) Option {
 	return func(server *Server) { server.deploymentIntake = intake }
+}
+
+func WithRetentionManager(manager RetentionManager) Option {
+	return func(server *Server) { server.retention = manager }
 }
 
 func New(store Store, address, managementToken string, options ...Option) *Server {
@@ -100,6 +111,9 @@ func New(store Store, address, managementToken string, options ...Option) *Serve
 	mux.Handle("GET /api/v1/deployments/{deployment}", value.requireManagementAuth(http.HandlerFunc(value.deployment)))
 	mux.Handle("POST /api/v1/deployments/{deployment}/cancel", value.requireManagementAuth(http.HandlerFunc(value.cancelDeployment)))
 	mux.Handle("POST /api/v1/deployments/{deployment}/retry", value.requireManagementAuth(http.HandlerFunc(value.retryDeployment)))
+	mux.Handle("POST /api/v1/retention/plans", value.requireManagementAuth(http.HandlerFunc(value.createRetentionPlan)))
+	mux.Handle("GET /api/v1/retention/plans/{plan}", value.requireManagementAuth(http.HandlerFunc(value.retentionPlan)))
+	mux.Handle("POST /api/v1/retention/plans/{plan}/apply", value.requireManagementAuth(http.HandlerFunc(value.applyRetentionPlan)))
 	value.server = &http.Server{
 		Addr:              address,
 		Handler:           requestLogger(mux),
@@ -270,6 +284,8 @@ func (s *Server) rollbackAutomation(response http.ResponseWriter, request *http.
 		writeError(response, http.StatusNotFound, "automation not found")
 	case errors.Is(err, database.ErrRevisionNotFound):
 		writeError(response, http.StatusNotFound, "revision not found for automation")
+	case errors.Is(err, database.ErrRevisionArtifactUnavailable):
+		writeError(response, http.StatusConflict, err.Error())
 	case err != nil:
 		writeError(response, http.StatusInternalServerError, "rollback automation")
 	default:
@@ -279,6 +295,67 @@ func (s *Server) rollbackAutomation(response http.ResponseWriter, request *http.
 			return
 		}
 		writeJSON(response, http.StatusOK, map[string]any{"automation": value, "changed": changed})
+	}
+}
+
+func (s *Server) createRetentionPlan(response http.ResponseWriter, request *http.Request) {
+	if s.retention == nil {
+		writeError(response, http.StatusServiceUnavailable, "retention is not configured")
+		return
+	}
+	policy := service.DefaultRetentionPolicy
+	if err := decodeJSON(response, request, 4096, &policy); err != nil {
+		return
+	}
+	value, err := s.retention.Plan(request.Context(), policy, requestActor(request))
+	if errors.Is(err, service.ErrInvalidRetentionPolicy) {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		slog.Error("create retention plan", "error", err)
+		writeError(response, http.StatusInternalServerError, "create retention plan")
+		return
+	}
+	response.Header().Set("Location", "/api/v1/retention/plans/"+value.ID)
+	writeJSON(response, http.StatusCreated, value)
+}
+
+func (s *Server) retentionPlan(response http.ResponseWriter, request *http.Request) {
+	if s.retention == nil {
+		writeError(response, http.StatusServiceUnavailable, "retention is not configured")
+		return
+	}
+	value, err := s.retention.Get(request.Context(), request.PathValue("plan"))
+	if errors.Is(err, database.ErrRetentionPlanNotFound) {
+		writeError(response, http.StatusNotFound, "retention plan not found")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "get retention plan")
+		return
+	}
+	writeJSON(response, http.StatusOK, value)
+}
+
+func (s *Server) applyRetentionPlan(response http.ResponseWriter, request *http.Request) {
+	if s.retention == nil {
+		writeError(response, http.StatusServiceUnavailable, "retention is not configured")
+		return
+	}
+	value, err := s.retention.Apply(request.Context(), request.PathValue("plan"), requestActor(request))
+	switch {
+	case errors.Is(err, database.ErrRetentionPlanNotFound):
+		writeError(response, http.StatusNotFound, "retention plan not found")
+	case errors.Is(err, database.ErrRetentionPlanExpired):
+		writeError(response, http.StatusGone, err.Error())
+	case errors.Is(err, database.ErrRetentionPlanBusy):
+		writeError(response, http.StatusConflict, err.Error())
+	case err != nil:
+		slog.Error("apply retention plan", "plan", request.PathValue("plan"), "error", err)
+		writeError(response, http.StatusInternalServerError, "apply retention plan")
+	default:
+		writeJSON(response, http.StatusOK, value)
 	}
 }
 

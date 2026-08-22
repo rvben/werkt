@@ -123,6 +123,49 @@ func (c *Client) RollbackAutomation(ctx context.Context, automationID, revisionI
 	return response, nil
 }
 
+func (c *Client) CreateRetentionPlan(ctx context.Context, policy domain.RetentionPolicy, actor string) (domain.RetentionPlan, error) {
+	body, err := json.Marshal(policy)
+	if err != nil {
+		return domain.RetentionPlan{}, err
+	}
+	request, err := c.request(ctx, http.MethodPost, "/api/v1/retention/plans", bytes.NewReader(body))
+	if err != nil {
+		return domain.RetentionPlan{}, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Werkt-Actor", actor)
+	var value domain.RetentionPlan
+	if err := c.do(request, &value); err != nil {
+		return domain.RetentionPlan{}, err
+	}
+	return value, nil
+}
+
+func (c *Client) GetRetentionPlan(ctx context.Context, planID string) (domain.RetentionPlan, error) {
+	request, err := c.request(ctx, http.MethodGet, "/api/v1/retention/plans/"+url.PathEscape(planID), nil)
+	if err != nil {
+		return domain.RetentionPlan{}, err
+	}
+	var value domain.RetentionPlan
+	if err := c.do(request, &value); err != nil {
+		return domain.RetentionPlan{}, err
+	}
+	return value, nil
+}
+
+func (c *Client) ApplyRetentionPlan(ctx context.Context, planID, actor string) (domain.RetentionPlan, error) {
+	request, err := c.request(ctx, http.MethodPost, "/api/v1/retention/plans/"+url.PathEscape(planID)+"/apply", nil)
+	if err != nil {
+		return domain.RetentionPlan{}, err
+	}
+	request.Header.Set("X-Werkt-Actor", actor)
+	var value domain.RetentionPlan
+	if err := c.do(request, &value); err != nil {
+		return domain.RetentionPlan{}, err
+	}
+	return value, nil
+}
+
 func (c *Client) WaitDeployment(ctx context.Context, deployment domain.Deployment, pollInterval time.Duration) (domain.Deployment, error) {
 	if pollInterval <= 0 {
 		pollInterval = 500 * time.Millisecond
