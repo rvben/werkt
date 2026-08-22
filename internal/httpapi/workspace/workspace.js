@@ -34,18 +34,21 @@
     token: readToken(),
     automations: [],
     runs: [],
+    deployments: [],
     audit: [],
     detail: null,
     detailRuns: [],
     detailAudit: [],
     selectedAutomation: "",
     selectedRun: null,
+    selectedDeployment: null,
     diagnosisReturnFocus: null,
     diagnosisTab: "summary",
     view: "automations",
     enabledFilter: "all",
     query: "",
     runStatusFilter: "all",
+    deploymentStatusFilter: "all",
     loading: true,
     mutating: false,
   };
@@ -118,13 +121,15 @@
     workspaceLoading.hidden = false;
     workspaceContent.hidden = true;
     try {
-      const [automations, runs, audit] = await Promise.all([
+      const [automations, runs, deployments, audit] = await Promise.all([
         api("/api/v1/automations"),
         api("/api/v1/runs?limit=100"),
+        api("/api/v1/deployments?limit=100"),
         api("/api/v1/audit?limit=100"),
       ]);
       state.automations = automations;
       state.runs = runs;
+      state.deployments = deployments;
       state.audit = audit;
       setConnection("connected", "Connected");
 
@@ -257,6 +262,7 @@
 
   function renderCurrentView() {
     if (state.view === "runs") renderGlobalRuns();
+    else if (state.view === "deployments") renderGlobalDeployments();
     else if (state.view === "audit") renderGlobalAudit();
     else if (!state.automations.length) renderEmptyWorkspace();
     else if (state.detail) renderAutomationDetail();
@@ -349,6 +355,19 @@
     workspaceContent.innerHTML = `<section class="global-view"><header class="global-view-header"><div><h1>Runs</h1><p>Execution history across every automation. Open a run to inspect attempts, logs, and structured output.</p></div><div class="global-toolbar"><label class="sr-only" for="run-status-filter">Filter runs by status</label><select class="select-control" id="run-status-filter"><option value="all">All statuses</option>${["queued", "running", "succeeded", "failed"].map((status) => `<option value="${status}"${state.runStatusFilter === status ? " selected" : ""}>${capitalize(status)}</option>`).join("")}</select></div></header>${renderRunsTable(runs)}</section>`;
   }
 
+  function renderGlobalDeployments() {
+    const deployments = state.deploymentStatusFilter === "all"
+      ? state.deployments
+      : state.deployments.filter((deployment) => deployment.status === state.deploymentStatusFilter);
+    const activeCount = state.deployments.filter((deployment) => !deployment.finishedAt).length;
+    workspaceContent.innerHTML = `<section class="global-view"><header class="global-view-header"><div><h1>Deployments</h1><p>Package intake, validation, build, and activation across every automation.${activeCount ? ` ${activeCount} ${activeCount === 1 ? "deployment is" : "deployments are"} still in progress.` : ""}</p></div><div class="global-toolbar"><label class="sr-only" for="deployment-status-filter">Filter deployments by status</label><select class="select-control" id="deployment-status-filter"><option value="all">All statuses</option>${["queued", "validating", "building", "activating", "succeeded", "failed"].map((status) => `<option value="${status}"${state.deploymentStatusFilter === status ? " selected" : ""}>${capitalize(status)}</option>`).join("")}</select></div></header>${renderDeploymentsTable(deployments)}</section>`;
+  }
+
+  function renderDeploymentsTable(deployments) {
+    if (!deployments.length) return `<div class="empty-state"><div class="empty-state-inner"><span class="empty-symbol">${icon("package")}</span><h2>No deployments found</h2><p>Upload an automation package with the CLI or adjust the status filter.</p><code class="empty-command">werkt deploy ./path/to/automation</code></div></div>`;
+    return `<table class="data-table"><thead><tr><th class="status-column">Status</th><th>Automation</th><th>Received</th><th class="hide-tablet">Actor</th><th class="wide">Deployment ID</th><th class="hide-tablet">Duration</th><th class="action-column"><span class="sr-only">Open</span></th></tr></thead><tbody>${deployments.map((deployment) => `<tr><td data-label="Status"><span class="status-badge status-${statusClass(deployment.status)}">${escapeHTML(capitalize(deployment.status))}</span></td><td data-label="Automation">${deployment.automationId ? `<button class="table-button" type="button" data-automation="${escapeHTML(deployment.automationId)}">${escapeHTML(deployment.automationId)}</button>` : '<span class="muted-value">Awaiting manifest</span>'}</td><td data-label="Received" class="tabular">${escapeHTML(relativeTime(deployment.createdAt))}</td><td data-label="Actor" class="hide-tablet">${escapeHTML(deployment.actor)}</td><td data-label="Deployment"><button class="table-button" type="button" data-deployment="${escapeHTML(deployment.id)}"><span class="mono">${escapeHTML(shortID(deployment.id, 26))}</span></button></td><td data-label="Duration" class="hide-tablet tabular">${escapeHTML(deploymentDuration(deployment))}</td><td class="action-column"><button class="icon-button" type="button" data-deployment="${escapeHTML(deployment.id)}" aria-label="Inspect deployment ${escapeHTML(deployment.id)}">${icon("chevron")}</button></td></tr>`).join("")}</tbody></table>`;
+  }
+
   function renderGlobalAudit() {
     workspaceContent.innerHTML = `<section class="global-view"><header class="global-view-header"><div><h1>Audit</h1><p>Lifecycle changes, deployments, and manual runs attributed through the management API.</p></div></header>${renderAuditTable(state.audit)}</section>`;
   }
@@ -374,10 +393,26 @@
     }
   }
 
+  async function openDeployment(deploymentID) {
+    state.diagnosisReturnFocus = document.activeElement;
+    diagnosisPane.hidden = false;
+    shell.classList.add("has-diagnosis");
+    diagnosisContent.innerHTML = `<div class="workspace-loading"><div class="skeleton skeleton-title"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-block"></div></div>`;
+    try {
+      state.selectedDeployment = await api(`/api/v1/deployments/${encodeURIComponent(deploymentID)}`);
+      renderDeploymentDiagnosis(true);
+    } catch (error) {
+      if (!(error instanceof AuthenticationRequired)) {
+        diagnosisContent.innerHTML = `<div class="error-state"><div class="error-state-inner"><h2>Deployment could not be loaded</h2><p>${escapeHTML(error.message)}</p><button class="button button-quiet" type="button" data-close-diagnosis>Close details</button></div></div>`;
+      }
+    }
+  }
+
   function closeDiagnosis() {
     diagnosisPane.hidden = true;
     shell.classList.remove("has-diagnosis");
     state.selectedRun = null;
+    state.selectedDeployment = null;
     const returnFocus = state.diagnosisReturnFocus;
     state.diagnosisReturnFocus = null;
     if (returnFocus?.isConnected) returnFocus.focus();
@@ -389,6 +424,16 @@
     if (!run) return;
     const tabs = ["summary", "logs", "output"];
     diagnosisContent.innerHTML = `<div class="diagnosis-header"><div class="diagnosis-header-top"><h2 id="diagnosis-title">Run diagnosis</h2><button class="icon-button" type="button" data-close-diagnosis aria-label="Close run diagnosis">${icon("close")}</button></div><div class="diagnosis-run"><span class="status-badge status-${statusClass(run.status)}">${escapeHTML(capitalize(run.status))}</span><code title="${escapeHTML(run.id)}">${escapeHTML(run.id)}</code></div><p class="diagnosis-meta"><span>${escapeHTML(run.automationId)}</span><span>${escapeHTML(runDuration(run))}</span><span>attempt ${escapeHTML(`${run.attempt}/${run.maxAttempts}`)}</span></p><div class="diagnosis-tabs" role="tablist" aria-label="Run detail">${tabs.map((tab) => `<button class="tab-button" type="button" role="tab" data-diagnosis-tab="${tab}" aria-selected="${state.diagnosisTab === tab}" tabindex="${state.diagnosisTab === tab ? "0" : "-1"}">${capitalize(tab)}</button>`).join("")}</div></div><div class="diagnosis-body">${diagnosisTabContent(run)}</div>`;
+    if (focusPanel) diagnosisContent.querySelector("[data-close-diagnosis]").focus();
+  }
+
+  function renderDeploymentDiagnosis(focusPanel = false) {
+    const deployment = state.selectedDeployment;
+    if (!deployment) return;
+    const failure = deployment.error
+      ? `<section class="deployment-error" aria-labelledby="deployment-error-title"><h3 id="deployment-error-title">Failure</h3><p>${escapeHTML(deployment.error)}</p></section>`
+      : "";
+    diagnosisContent.innerHTML = `<div class="diagnosis-header"><div class="diagnosis-header-top"><h2 id="diagnosis-title">Deployment details</h2><button class="icon-button" type="button" data-close-diagnosis aria-label="Close deployment details">${icon("close")}</button></div><div class="diagnosis-run"><span class="status-badge status-${statusClass(deployment.status)}">${escapeHTML(capitalize(deployment.status))}</span><code title="${escapeHTML(deployment.id)}">${escapeHTML(deployment.id)}</code></div><p class="diagnosis-meta"><span>${escapeHTML(deployment.automationId || "Manifest not validated yet")}</span><span>${escapeHTML(deploymentDuration(deployment))}</span><span>${escapeHTML(deployment.actor)}</span></p></div><div class="diagnosis-body">${failure}<dl class="diagnosis-facts"><dt>Automation</dt><dd>${escapeHTML(deployment.automationId || "Awaiting manifest")}</dd><dt>Revision</dt><dd class="mono">${escapeHTML(deployment.revisionId || "Not activated")}</dd><dt>Package SHA-256</dt><dd class="mono">${escapeHTML(deployment.packageDigest)}</dd><dt>Content hash</dt><dd class="mono">${escapeHTML(deployment.contentHash || "Not built")}</dd><dt>Received</dt><dd class="tabular">${escapeHTML(formatDate(deployment.createdAt))}</dd><dt>Started</dt><dd class="tabular">${escapeHTML(formatDate(deployment.startedAt))}</dd><dt>Finished</dt><dd class="tabular">${escapeHTML(formatDate(deployment.finishedAt))}</dd><dt>Updated</dt><dd class="tabular">${escapeHTML(formatDate(deployment.updatedAt))}</dd></dl></div>`;
     if (focusPanel) diagnosisContent.querySelector("[data-close-diagnosis]").focus();
   }
 
@@ -495,6 +540,7 @@
   }
 
   function statusClass(status) {
+    if (["validating", "building", "activating"].includes(status)) return "running";
     return ["queued", "running", "succeeded", "failed"].includes(status) ? status : "queued";
   }
 
@@ -540,6 +586,16 @@
     return `${Math.floor(milliseconds / 60000)}m ${Math.round((milliseconds % 60000) / 1000)}s`;
   }
 
+  function deploymentDuration(deployment) {
+    const start = new Date(deployment.createdAt).valueOf();
+    const end = deployment.finishedAt ? new Date(deployment.finishedAt).valueOf() : Date.now();
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return "—";
+    const milliseconds = Math.max(0, end - start);
+    if (milliseconds < 1000) return `${milliseconds}ms`;
+    if (milliseconds < 60000) return `${(milliseconds / 1000).toFixed(milliseconds < 10000 ? 1 : 0)}s`;
+    return `${Math.floor(milliseconds / 60000)}m ${Math.round((milliseconds % 60000) / 1000)}s`;
+  }
+
   function prettyJSON(value) {
     if (value === undefined || value === null || value === "") return "";
     try {
@@ -553,6 +609,8 @@
   function humanizeAction(action) {
     const values = {
       "automation.deployed": "Automation deployed",
+      "deployment.succeeded": "Deployment succeeded",
+      "deployment.failed": "Deployment failed",
       "automation.paused": "Automation paused",
       "automation.resumed": "Automation resumed",
       "run.queued_manually": "Manual run queued",
@@ -583,6 +641,8 @@
     }
     const runButton = event.target.closest("[data-run]");
     if (runButton) { openRun(runButton.dataset.run); return; }
+    const deploymentButton = event.target.closest("[data-deployment]");
+    if (deploymentButton) { openDeployment(deploymentButton.dataset.deployment); return; }
     if (event.target.closest("[data-close-diagnosis]")) { closeDiagnosis(); return; }
     const diagnosisTab = event.target.closest("[data-diagnosis-tab]");
     if (diagnosisTab) { selectDiagnosisTab(diagnosisTab.dataset.diagnosisTab); return; }
@@ -629,6 +689,10 @@
     if (event.target.id === "run-status-filter") {
       state.runStatusFilter = event.target.value;
       renderGlobalRuns();
+    }
+    if (event.target.id === "deployment-status-filter") {
+      state.deploymentStatusFilter = event.target.value;
+      renderGlobalDeployments();
     }
   });
 
