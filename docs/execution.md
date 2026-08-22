@@ -46,13 +46,26 @@ Standard output and error are redacted against the exact secrets resolved for th
 ## Husker attempt lifecycle
 
 1. Werkt derives a collision-resistant VM name from the run ID and attempt.
-2. It creates a VM from `runtime.image` (or the configured fallback) with the requested resources, explicit network mode, `owner: werkt/<run-id>`, and a hard lifetime covering provisioning, execution, and cleanup grace.
+2. It creates a VM from `runtime.image` (or the configured fallback) with the requested resources, a manifest-derived network policy, `owner: werkt/<run-id>`, and a hard lifetime covering provisioning, execution, and cleanup grace.
 3. It waits for the guest agent, uploads the compressed immutable artifact in bounded chunks, and extracts it into a fresh guest directory.
 4. It uploads the event, initializes the result, and invokes `runtime.command` without a shell.
 5. It collects bounded logs and the JSON result, then destroys the VM using a cleanup context independent of the run context.
 6. If the worker or control plane disappears, Husker's durable expiration reaper destroys the VM.
 
-The default network mode is `none`. `nat` or `bridged` must be explicitly configured for the whole Werkt worker deployment. A later manifest-level egress policy should be allowlist-based rather than a boolean network switch.
+The runtime network policy is part of the immutable manifest. An empty
+`runtime.egress` produces `network: none`. A non-empty policy produces
+`network: filtered` and exact hostname, protocol, and port entries. TCP is the
+default protocol. Husker resolves hostnames and pins their IPv4 addresses before
+boot, permits only the configured gateway and DNS infrastructure around those
+destinations, and denies other IPv4, IPv6, and layer-2 traffic. The distinct
+`filtered` mode is a compatibility guard: an older daemon rejects the request
+instead of ignoring the unknown rules and granting unrestricted NAT.
+
+The process executor cannot enforce network policy and therefore rejects a
+manifest that declares `runtime.egress`. Runtime egress is intentionally not a
+worker-wide switch. Build networking remains separately operator-controlled
+through `WERKT_HUSKER_BUILD_NETWORK` because dependency resolution occurs before
+the runtime artifact boundary.
 
 ## Security properties and non-goals
 
@@ -61,6 +74,8 @@ The default network mode is `none`. `nat` or `bridged` must be explicitly config
 - Build artifacts and runtime results are downloaded in bounded ranges and checked for size or modification changes between chunks.
 - Husker bearer credentials stay in the worker configuration and are never exposed to automation code.
 - Only manifest environment values, explicitly named vault values, and reserved Werkt protocol values are sent to the guest.
+- Runtime VMs are offline unless their immutable manifest contains explicit
+  egress destinations; policies cannot be silently downgraded to plain NAT.
 - The VM deadline is activity-independent. It remains effective during stuck commands and after orchestrator failure.
 - Husker's `owner` field is correlation metadata, not an authorization boundary.
 - Build-image tags are not yet required to be immutable digests, and artifacts are not yet signed.

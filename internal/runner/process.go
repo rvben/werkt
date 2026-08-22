@@ -30,6 +30,9 @@ func NewProcessRunner(resolvers ...SecretResolver) *ProcessRunner {
 }
 
 func (r *ProcessRunner) Build(ctx context.Context, directory string, value domain.Manifest, reporter domain.DeploymentStepReporter) error {
+	if len(value.Runtime.Egress) > 0 {
+		return errors.New("runtime.egress requires the husker executor; the process executor cannot enforce network policy")
+	}
 	if len(value.Runtime.Build) > 0 {
 		if err := runPromotionCommand(ctx, directory, value.Runtime.Environment, "build", "build", value.Runtime.Build, reporter); err != nil {
 			return fmt.Errorf("build automation: %w", err)
@@ -111,6 +114,9 @@ func (b *limitedBuffer) String() string {
 func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) (Result, error) {
 	if len(run.Manifest.Runtime.Command) == 0 {
 		return Result{}, errors.New("runtime command is empty")
+	}
+	if len(run.Manifest.Runtime.Egress) > 0 {
+		return Result{}, errors.New("runtime.egress requires the husker executor; the process executor cannot enforce network policy")
 	}
 	ctx, cancel := context.WithTimeout(parent, run.Manifest.Execution.TimeoutDuration())
 	defer cancel()

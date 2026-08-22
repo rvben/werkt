@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/rvben/werkt/internal/domain"
@@ -62,6 +63,24 @@ func TestProcessRunnerUsesLanguageNeutralContract(t *testing.T) {
 	}
 	if result.Logs != "[stdout]\nrunning [REDACTED]\n" {
 		t.Fatalf("logs = %q", result.Logs)
+	}
+}
+
+func TestProcessRunnerRejectsManifestEgressInsteadOfIgnoringIt(t *testing.T) {
+	runtime := domain.Runtime{
+		Command: []string{"true"},
+		Egress:  []domain.EgressRule{{Host: "api.example.com", Port: 443}},
+	}
+	runner := runner.NewProcessRunner()
+
+	buildErr := runner.Build(context.Background(), t.TempDir(), domain.Manifest{Runtime: runtime}, nil)
+	if buildErr == nil || !strings.Contains(buildErr.Error(), "cannot enforce network policy") {
+		t.Fatalf("Build() error = %v", buildErr)
+	}
+
+	_, executeErr := runner.Execute(context.Background(), domain.RunnableRun{Manifest: domain.Manifest{Runtime: runtime}})
+	if executeErr == nil || !strings.Contains(executeErr.Error(), "cannot enforce network policy") {
+		t.Fatalf("Execute() error = %v", executeErr)
 	}
 }
 

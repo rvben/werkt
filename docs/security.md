@@ -85,6 +85,36 @@ Builds receive `runtime.environment` but never `runtime.secrets`. Both process b
 
 Before run logs cross the executor boundary, Werkt replaces every resolved plaintext value and its common URL-encoded, JSON-escaped, standard-base64, and raw-base64 forms with `[REDACTED]`. Redaction happens before the 1 MiB log limit, so stored logs and API responses share the sanitized form. It is deterministic defense in depth, not data-loss prevention: hashes, encryption, arbitrary transformations, split/interleaved output, and values deliberately copied into the JSON result cannot be inferred and removed. Automation authors must still avoid emitting credentials.
 
+## Runtime network policy
+
+Runtime VMs are offline by default. A manifest can declare only the destinations
+its code needs:
+
+```yaml
+runtime:
+  language: python
+  command: [python3, main.py]
+  egress:
+    - host: api.github.com
+      port: 443
+    - host: metrics.internal.example
+      port: 9090
+      protocol: tcp
+```
+
+Werkt sends policy-bearing runs to Husker as `network: filtered`; it never turns
+them into unrestricted NAT. Husker resolves hostnames before boot, pins their
+IPv4 answers, and applies a TAP-keyed default-deny policy. DNS is limited to the
+configured resolvers and other IPv4, IPv6, and layer-2 traffic is denied. An
+older Husker that does not implement this contract rejects the distinct network
+mode. The local process executor also rejects the manifest because host-process
+network access cannot be constrained honestly.
+
+Allowlisting a destination is not application-layer authorization. Use TLS and
+validate the peer in the automation; an allowed service could proxy or change
+behavior. Long-running VMs may need recreation after an upstream changes its
+addresses, though normal Werkt attempts are intentionally short-lived.
+
 ## Remote package intake
 
 The deployment endpoint is a code-execution boundary, not a file-storage endpoint. It requires management authentication, verifies the SHA-256 of the exact compressed request, streams to bounded temporary storage, and extracts only regular files beneath one package root. Absolute paths, traversal, backslashes, NUL bytes, links, special files, duplicate case-insensitive paths, excessive entries, and compressed or expanded size overages are rejected before validation or build execution.

@@ -41,7 +41,6 @@ type HuskerConfig struct {
 	Kernel            string
 	VCPUs             uint32
 	MemoryMiB         uint32
-	Network           string
 	BuildNetwork      string
 	BuildTimeout      time.Duration
 	ProvisionTimeout  time.Duration
@@ -59,7 +58,6 @@ type HuskerRunner struct {
 	kernel            string
 	vcpus             uint32
 	memoryMiB         uint32
-	network           string
 	buildNetwork      string
 	buildTimeout      time.Duration
 	provisionTimeout  time.Duration
@@ -74,12 +72,6 @@ func NewHuskerRunner(config HuskerConfig) (*HuskerRunner, error) {
 	parsed, err := url.Parse(config.URL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return nil, errors.New("husker URL must be an absolute http or https URL")
-	}
-	if config.Network == "" {
-		config.Network = "none"
-	}
-	if config.Network != "none" && config.Network != "nat" && config.Network != "bridged" {
-		return nil, errors.New("husker network must be none, nat, or bridged")
 	}
 	if config.BuildNetwork == "" {
 		config.BuildNetwork = "nat"
@@ -118,7 +110,6 @@ func NewHuskerRunner(config HuskerConfig) (*HuskerRunner, error) {
 		kernel:            config.Kernel,
 		vcpus:             config.VCPUs,
 		memoryMiB:         config.MemoryMiB,
-		network:           config.Network,
 		buildNetwork:      config.BuildNetwork,
 		buildTimeout:      config.BuildTimeout,
 		provisionTimeout:  config.ProvisionTimeout,
@@ -167,7 +158,8 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 
 	provisionContext, cancelProvision := context.WithTimeout(parent, r.provisionTimeout)
 	defer cancelProvision()
-	if err := r.createVM(provisionContext, vmName, "werkt/"+run.ID, rootFS, r.network, lifetime); err != nil {
+	network := runtimeNetwork(run.Manifest.Runtime)
+	if err := r.createVM(provisionContext, vmName, "werkt/"+run.ID, rootFS, network, run.Manifest.Runtime.Egress, lifetime); err != nil {
 		return Result{}, fmt.Errorf("create husker VM: %w", err)
 	}
 	defer r.cleanupVM(vmName)
@@ -240,7 +232,22 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 	return Result{Output: resultJSON, Logs: logs}, nil
 }
 
-func (r *HuskerRunner) createVM(ctx context.Context, name, owner, rootFS, network string, lifetime time.Duration) error {
+func runtimeNetwork(runtime domain.Runtime) string {
+	if len(runtime.Egress) > 0 {
+		return "filtered"
+	}
+	return "none"
+}
+
+func (r *HuskerRunner) createVM(ctx context.Context, name, owner, rootFS, network string, egress []domain.EgressRule, lifetime time.Duration) error {
+	policy := make([]egressRuleRequest, len(egress))
+	for index, rule := range egress {
+		policy[index] = egressRuleRequest{
+			Host:     rule.Host,
+			Port:     rule.Port,
+			Protocol: rule.EffectiveProtocol(),
+		}
+	}
 	request := createVMRequest{
 		Name:             name,
 		RootFSPath:       rootFS,
@@ -248,6 +255,7 @@ func (r *HuskerRunner) createVM(ctx context.Context, name, owner, rootFS, networ
 		VCPUs:            r.vcpus,
 		MemoryMiB:        r.memoryMiB,
 		Network:          network,
+		Egress:           policy,
 		ExpiresAfterSecs: durationSeconds(lifetime),
 		Owner:            owner,
 	}
@@ -513,14 +521,21 @@ func runtimeEnvironmentMap(run domain.RunnableRun, eventPath, resultPath string,
 }
 
 type createVMRequest struct {
-	Name             string `json:"name"`
-	RootFSPath       string `json:"rootfs_path"`
-	KernelPath       string `json:"kernel_path,omitempty"`
-	VCPUs            uint32 `json:"vcpu_count,omitempty"`
-	MemoryMiB        uint32 `json:"mem_size_mib,omitempty"`
-	Network          string `json:"network"`
-	ExpiresAfterSecs uint64 `json:"expires_after_secs"`
-	Owner            string `json:"owner"`
+	Name             string              `json:"name"`
+	RootFSPath       string              `json:"rootfs_path"`
+	KernelPath       string              `json:"kernel_path,omitempty"`
+	VCPUs            uint32              `json:"vcpu_count,omitempty"`
+	MemoryMiB        uint32              `json:"mem_size_mib,omitempty"`
+	Network          string              `json:"network"`
+	Egress           []egressRuleRequest `json:"egress,omitempty"`
+	ExpiresAfterSecs uint64              `json:"expires_after_secs"`
+	Owner            string              `json:"owner"`
+}
+
+type egressRuleRequest struct {
+	Host     string `json:"host"`
+	Port     uint16 `json:"port"`
+	Protocol string `json:"protocol"`
 }
 
 type readyResponse struct {

@@ -473,7 +473,6 @@ func newHuskerRunner(configuration config.Config, secrets runner.SecretResolver)
 		Kernel:           configuration.HuskerKernel,
 		VCPUs:            configuration.HuskerVCPUs,
 		MemoryMiB:        configuration.HuskerMemory,
-		Network:          configuration.HuskerNetwork,
 		BuildNetwork:     configuration.HuskerBuildNetwork,
 		BuildTimeout:     configuration.HuskerBuildTimeout,
 		ProvisionTimeout: configuration.HuskerProvisionTimeout,
