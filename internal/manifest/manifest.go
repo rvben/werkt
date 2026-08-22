@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -25,6 +26,8 @@ var identifier = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var secretName = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._/-][a-z0-9]+)*$`)
 var headerName = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+
+const maxEgressRules = 32
 
 func Load(directory string) (domain.Manifest, error) {
 	file, err := os.Open(filepath.Join(directory, Filename))
@@ -137,6 +140,21 @@ func Validate(value domain.Manifest) error {
 	if len(value.Runtime.Build) > 0 && strings.TrimSpace(value.Runtime.Build[0]) == "" {
 		problems = append(problems, "runtime.build must start with an executable")
 	}
+	if len(value.Runtime.Egress) > maxEgressRules {
+		problems = append(problems, fmt.Sprintf("runtime.egress accepts at most %d rules", maxEgressRules))
+	}
+	for index, rule := range value.Runtime.Egress {
+		path := fmt.Sprintf("runtime.egress[%d]", index)
+		if problem := validateEgressHost(rule.Host); problem != "" {
+			problems = append(problems, path+".host "+problem)
+		}
+		if rule.Port == 0 {
+			problems = append(problems, path+".port must be between 1 and 65535")
+		}
+		if rule.Protocol != "" && rule.Protocol != "tcp" && rule.Protocol != "udp" {
+			problems = append(problems, path+".protocol must be tcp or udp")
+		}
+	}
 	checkIDs := make(map[string]struct{}, len(value.Deployment.Checks))
 	for index, check := range value.Deployment.Checks {
 		path := fmt.Sprintf("deployment.checks[%d]", index)
@@ -194,6 +212,47 @@ func Validate(value domain.Manifest) error {
 		return errors.New(strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+func validateEgressHost(value string) string {
+	host := strings.TrimSuffix(value, ".")
+	if host == "" {
+		return "is required"
+	}
+	if value != strings.TrimSpace(value) || len(host) > 253 {
+		return "must be a hostname or IPv4 address of at most 253 bytes"
+	}
+	if strings.Contains(host, "://") || strings.ContainsAny(host, "/*") {
+		return "must be a hostname or IPv4 address without a scheme, path, or wildcard"
+	}
+	for _, character := range host {
+		if character > 127 || character < 33 || character == 127 {
+			return "must contain only printable ASCII hostname characters"
+		}
+	}
+	if address := net.ParseIP(host); address != nil {
+		ipv4 := address.To4()
+		if ipv4 == nil {
+			return "must be IPv4; IPv6 egress is not supported"
+		}
+		if ipv4.IsUnspecified() || ipv4.IsMulticast() || ipv4.Equal(net.IPv4bcast) {
+			return "must be a unicast IPv4 address"
+		}
+		return ""
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return "is not a valid DNS hostname"
+		}
+		for _, character := range label {
+			if !((character >= 'a' && character <= 'z') ||
+				(character >= 'A' && character <= 'Z') ||
+				(character >= '0' && character <= '9') || character == '-') {
+				return "is not a valid DNS hostname"
+			}
+		}
+	}
+	return ""
 }
 
 func unexpectedTriggerConfig(path string, config map[string]any, allowed ...string) []string {

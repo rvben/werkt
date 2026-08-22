@@ -62,6 +62,22 @@ type Runtime struct {
 	Command     []string          `yaml:"command" json:"command"`
 	Environment map[string]string `yaml:"environment,omitempty" json:"environment,omitempty"`
 	Secrets     map[string]string `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	Egress      []EgressRule      `yaml:"egress,omitempty" json:"egress,omitempty"`
+}
+
+// EgressRule names one exact destination available to an automation at
+// runtime. Hostnames are resolved and pinned by Husker before the VM boots.
+type EgressRule struct {
+	Host     string `yaml:"host" json:"host"`
+	Port     uint16 `yaml:"port" json:"port"`
+	Protocol string `yaml:"protocol,omitempty" json:"protocol,omitempty"`
+}
+
+func (r EgressRule) EffectiveProtocol() string {
+	if r.Protocol == "" {
+		return "tcp"
+	}
+	return r.Protocol
 }
 
 // DeploymentPolicy defines language-neutral commands that must pass before a

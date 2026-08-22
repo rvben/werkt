@@ -28,6 +28,9 @@ runtime:
   image: python:3.13-alpine
   buildImage: python:3.13-alpine
   command: [python3, main.py]
+  egress:
+    - host: api.example.com
+      port: 443
 deployment:
   checks:
     - id: unit
@@ -57,8 +60,48 @@ execution:
 	if value.Runtime.BuildImage != "python:3.13-alpine" {
 		t.Fatalf("build image = %q, want python:3.13-alpine", value.Runtime.BuildImage)
 	}
+	if len(value.Runtime.Egress) != 1 || value.Runtime.Egress[0].EffectiveProtocol() != "tcp" {
+		t.Fatalf("runtime egress = %#v", value.Runtime.Egress)
+	}
 	if len(value.Deployment.Checks) != 1 || value.Deployment.Checks[0].TimeoutDuration() != 2*time.Minute {
 		t.Fatalf("deployment checks = %#v", value.Deployment.Checks)
+	}
+}
+
+func TestValidateRejectsUnsafeEgressPolicies(t *testing.T) {
+	base := domain.Manifest{
+		APIVersion: "werkt.dev/v1",
+		Kind:       "Automation",
+		Metadata:   domain.Metadata{Name: "example", Project: "personal"},
+		Triggers:   []domain.Trigger{{ID: "hourly", Type: "schedule", Config: map[string]any{"cron": "0 * * * *"}}},
+		Runtime: domain.Runtime{
+			Language: "go",
+			Command:  []string{"./example"},
+			Egress: []domain.EgressRule{
+				{Host: "https://api.example.com/path", Port: 443},
+				{Host: "::1", Port: 443},
+				{Host: "api.example.com", Port: 0},
+				{Host: "api.example.com", Port: 443, Protocol: "sctp"},
+			},
+		},
+	}
+
+	err := manifest.Validate(base)
+	if err == nil {
+		t.Fatal("Validate() error = nil")
+	}
+	for _, want := range []string{"without a scheme", "IPv6", "between 1 and 65535", "tcp or udp"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Validate() error = %v, want %q", err, want)
+		}
+	}
+
+	base.Runtime.Egress = make([]domain.EgressRule, 33)
+	for index := range base.Runtime.Egress {
+		base.Runtime.Egress[index] = domain.EgressRule{Host: "api.example.com", Port: 443}
+	}
+	if err := manifest.Validate(base); err == nil || !strings.Contains(err.Error(), "at most 32") {
+		t.Fatalf("Validate() max-rule error = %v", err)
 	}
 }
 

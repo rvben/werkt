@@ -69,7 +69,7 @@ func (r *HuskerRunner) Build(parent context.Context, directory string, value dom
 	provisionContext, cancelProvision := context.WithTimeout(parent, r.provisionTimeout)
 	defer cancelProvision()
 	owner := "werkt/build/" + value.Metadata.Name
-	if err := r.createVM(provisionContext, vmName, owner, rootFS, r.buildNetwork, lifetime); err != nil {
+	if err := r.createVM(provisionContext, vmName, owner, rootFS, r.buildNetwork, nil, lifetime); err != nil {
 		return fmt.Errorf("create husker build VM: %w", err)
 	}
 	defer r.cleanupVM(vmName)

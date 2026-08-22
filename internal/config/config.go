@@ -29,7 +29,6 @@ type Config struct {
 	HuskerKernel            string
 	HuskerVCPUs             uint32
 	HuskerMemory            uint32
-	HuskerNetwork           string
 	HuskerBuildNetwork      string
 	HuskerBuildTimeout      time.Duration
 	HuskerProvisionTimeout  time.Duration
@@ -59,7 +58,6 @@ func Load() Config {
 		HuskerKernel:            os.Getenv("WERKT_HUSKER_KERNEL"),
 		HuskerVCPUs:             uint32Env("WERKT_HUSKER_VCPUS", 1),
 		HuskerMemory:            uint32Env("WERKT_HUSKER_MEMORY_MIB", 256),
-		HuskerNetwork:           env("WERKT_HUSKER_NETWORK", "none"),
 		HuskerBuildNetwork:      env("WERKT_HUSKER_BUILD_NETWORK", "nat"),
 		HuskerBuildTimeout:      durationEnv("WERKT_HUSKER_BUILD_TIMEOUT", 15*time.Minute),
 		HuskerProvisionTimeout:  durationEnv("WERKT_HUSKER_PROVISION_TIMEOUT", 2*time.Minute),

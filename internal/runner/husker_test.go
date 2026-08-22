@@ -46,6 +46,7 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 	files := map[string][]byte{}
 	deleted := false
 	createNetwork := ""
+	var createEgress []egressRuleRequest
 	createRootFS := ""
 	createOwner := ""
 	createLifetime := uint64(0)
@@ -62,6 +63,7 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 				t.Errorf("decode create: %v", err)
 			}
 			createNetwork = body.Network
+			createEgress = body.Egress
 			createRootFS = body.RootFSPath
 			createOwner = body.Owner
 			createLifetime = body.ExpiresAfterSecs
@@ -123,7 +125,6 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 	executor, err := NewHuskerRunner(HuskerConfig{
 		URL:              server.URL,
 		Token:            "test-token",
-		Network:          "none",
 		ProvisionTimeout: time.Second,
 		CleanupTimeout:   time.Second,
 		UploadChunkSize:  16,
@@ -143,6 +144,10 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 				Command:     []string{"python3", "main.py"},
 				Environment: map[string]string{"CUSTOM": "value"},
 				Secrets:     map[string]string{"SERVICE_TOKEN": "ops/guest-token"},
+				Egress: []domain.EgressRule{
+					{Host: "api.example.com", Port: 443},
+					{Host: "metrics.example.com", Port: 9090, Protocol: "udp"},
+				},
 			},
 			Execution: domain.Execution{Timeout: "5s"},
 		},
@@ -159,8 +164,11 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 	if result.Logs != "[stdout]\nrunning [REDACTED]\n" {
 		t.Fatalf("logs = %q", result.Logs)
 	}
-	if createNetwork != "none" {
+	if createNetwork != "filtered" {
 		t.Fatalf("network = %q", createNetwork)
+	}
+	if len(createEgress) != 2 || createEgress[0].Protocol != "tcp" || createEgress[1].Protocol != "udp" {
+		t.Fatalf("egress = %#v", createEgress)
 	}
 	if createRootFS != "python:3.13-alpine" {
 		t.Fatalf("rootfs = %q", createRootFS)
@@ -181,6 +189,15 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 	defer mu.Unlock()
 	if len(files) < 3 {
 		t.Fatalf("uploaded files = %d, want at least 3", len(files))
+	}
+}
+
+func TestRuntimeNetworkIsOfflineUnlessTheManifestDeclaresEgress(t *testing.T) {
+	if got := runtimeNetwork(domain.Runtime{}); got != "none" {
+		t.Fatalf("empty runtime network = %q", got)
+	}
+	if got := runtimeNetwork(domain.Runtime{Egress: []domain.EgressRule{{Host: "api.example.com", Port: 443}}}); got != "filtered" {
+		t.Fatalf("policy runtime network = %q", got)
 	}
 }
 

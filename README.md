@@ -160,6 +160,9 @@ runtime:
   language: python
   image: python:3.13-alpine
   command: [python3, main.py]
+  egress:
+    - host: incidents.example.com
+      port: 443
   secrets:
     INCIDENT_API_TOKEN: infrastructure/process-alert/incident-api
 deployment:
@@ -174,6 +177,12 @@ execution:
 ```
 
 `runtime.language` is descriptive. The actual runtime contract is `runtime.command`, so any executable language works. `deployment.checks` uses the same language-neutral command-array contract: checks run in order after the optional build, each with a stable ID and timeout. `runtime.image` names the Husker rootfs catalog entry or OCI reference that provides those commands. When `runtime.build` is present, `runtime.buildImage` can select a separate toolchain image; otherwise the runtime image is reused. Both image fields are ignored by the local process executor. A daemon-wide `WERKT_HUSKER_ROOTFS` can be used as a fallback.
+
+Runtime networking is also manifest-owned. With no `runtime.egress`, the Husker
+VM has no network device. Each egress entry opens exactly one hostname, TCP or
+UDP protocol (TCP by default), and port; Husker resolves and pins its IPv4
+addresses before boot and denies everything else. The process executor rejects
+manifests with egress policy because it cannot enforce that boundary.
 
 Trigger credentials and `runtime.secrets` contain named vault references only. Werkt encrypts values before PostgreSQL, resolves only the names required at ingress or immediately before a run, and redacts resolved values from stdout/stderr before persistence. See [docs/security.md](docs/security.md) for key custody, signing, token, and redaction details.
 
@@ -231,7 +240,6 @@ The event envelope is stable across every trigger and runtime:
 | `WERKT_HUSKER_KERNEL` | empty; use the Husker daemon default |
 | `WERKT_HUSKER_VCPUS` | `1` |
 | `WERKT_HUSKER_MEMORY_MIB` | `256` |
-| `WERKT_HUSKER_NETWORK` | `none` |
 | `WERKT_HUSKER_BUILD_NETWORK` | `nat` |
 | `WERKT_HUSKER_BUILD_TIMEOUT` | `15m` |
 | `WERKT_HUSKER_PROVISION_TIMEOUT` | `2m` |
@@ -241,7 +249,7 @@ Webhook `secret`, email/ntfy `tokenSecret`, and `runtime.secrets` values are low
 
 ## Running through Husker
 
-Set `WERKT_EXECUTOR=husker`, point `WERKT_HUSKER_URL` at the daemon, and set its bearer token when authentication is enabled. Each attempt gets a fresh VM, an immutable artifact upload, the same event/result protocol, and a hard server-side expiration. Werkt requests `network: none` by default and destroys the VM after collecting the result. The Husker deadline is the cleanup fallback if a worker crashes.
+Set `WERKT_EXECUTOR=husker`, point `WERKT_HUSKER_URL` at the daemon, and set its bearer token when authentication is enabled. Each attempt gets a fresh VM, an immutable artifact upload, the same event/result protocol, and a hard server-side expiration. Werkt requests `network: none` when `runtime.egress` is empty and `network: filtered` with the exact policy otherwise. Husker versions that predate filtered networking reject that distinct mode instead of silently running unrestricted. Werkt destroys the VM after collecting the result; the Husker deadline is the cleanup fallback if a worker crashes.
 
 Deployments with `runtime.build` get a separate short-lived builder VM. Builds default to NAT so package managers can fetch dependencies, while runtime VMs remain offline. Werkt uploads the source, invokes the build command directly without a shell, downloads the result in bounded ranges, rejects links and unsafe archive paths, and atomically promotes the completed workspace. Set `WERKT_HUSKER_BUILD_NETWORK=none` for fully vendored builds.
 
@@ -251,4 +259,4 @@ See [docs/execution.md](docs/execution.md) for the complete boundary and failure
 
 ## Current trust boundary
 
-The `process` executor runs builds and deployed commands as child processes on the control-plane host and is for trusted local development only. Build and runtime children receive an allowlisted base environment; runtime attempts additionally receive only their explicit vault mappings. This protects Werkt credentials from accidental inheritance but does not sandbox host filesystem or network access. The `husker` executor isolates both builds and runtime code in separate microVMs, but Husker is currently a single-host, single-trust-domain system rather than a hostile multi-tenant service. Signed artifacts, dependency caches, stronger outbound allowlists, and multi-key master-key rotation remain production-hardening work.
+The `process` executor runs builds and deployed commands as child processes on the control-plane host and is for trusted local development only. Build and runtime children receive an allowlisted base environment; runtime attempts additionally receive only their explicit vault mappings. This protects Werkt credentials from accidental inheritance but does not sandbox host filesystem or network access, so the executor fails deployment and execution when a manifest requires egress enforcement. The `husker` executor isolates both builds and runtime code in separate microVMs, but Husker is currently a single-host, single-trust-domain system rather than a hostile multi-tenant service. Signed artifacts, dependency caches, build-plane egress allowlists, and multi-key master-key rotation remain production-hardening work.
