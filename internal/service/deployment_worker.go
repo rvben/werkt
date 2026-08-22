@@ -97,7 +97,7 @@ func (w *DeploymentWorker) process(ctx context.Context, deployment domain.Runnab
 	if err := report(domain.DeploymentStepUpdate{ID: "validate", Kind: "validate", Status: domain.DeploymentStepRunning}); err != nil {
 		return err
 	}
-	prepared, err := w.deployer.Prepare(deployment.SourcePath)
+	prepared, err := w.deployer.Prepare(ctx, deployment.SourcePath)
 	if err != nil {
 		_ = report(domain.DeploymentStepUpdate{ID: "validate", Kind: "validate", Status: domain.DeploymentStepFailed, Error: err.Error()})
 		return fmt.Errorf("validate package: %w", err)

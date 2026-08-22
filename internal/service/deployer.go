@@ -48,7 +48,7 @@ func NewDeployer(store *database.Store, dataDir string, builder Builder) *Deploy
 }
 
 func (d *Deployer) Deploy(ctx context.Context, sourceDirectory string) (Deployment, error) {
-	prepared, err := d.Prepare(sourceDirectory)
+	prepared, err := d.Prepare(ctx, sourceDirectory)
 	if err != nil {
 		return Deployment{}, err
 	}
@@ -59,7 +59,7 @@ func (d *Deployer) Deploy(ctx context.Context, sourceDirectory string) (Deployme
 	return d.Activate(ctx, built, "cli")
 }
 
-func (d *Deployer) Prepare(sourceDirectory string) (PreparedDeployment, error) {
+func (d *Deployer) Prepare(ctx context.Context, sourceDirectory string) (PreparedDeployment, error) {
 	absoluteSource, err := filepath.Abs(sourceDirectory)
 	if err != nil {
 		return PreparedDeployment{}, err
@@ -67,6 +67,9 @@ func (d *Deployer) Prepare(sourceDirectory string) (PreparedDeployment, error) {
 	value, err := manifest.Load(absoluteSource)
 	if err != nil {
 		return PreparedDeployment{}, err
+	}
+	if err := d.store.ValidateSecretReferences(ctx, value.SecretReferences()); err != nil {
+		return PreparedDeployment{}, fmt.Errorf("validate secret references: %w", err)
 	}
 	contentHash, err := manifest.HashDirectory(absoluteSource)
 	if err != nil {

@@ -23,6 +23,7 @@ const Filename = "automation.yaml"
 
 var identifier = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var secretName = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._/-][a-z0-9]+)*$`)
 var headerName = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 
 func Load(directory string) (domain.Manifest, error) {
@@ -92,10 +93,10 @@ func Validate(value domain.Manifest) error {
 				}
 			}
 		case "webhook":
-			problems = append(problems, unexpectedTriggerConfig(path, trigger.Config, "secretEnv", "signatureHeader")...)
-			secretEnv, _ := trigger.Config["secretEnv"].(string)
-			if !validSecretReference(secretEnv) {
-				problems = append(problems, path+".config.secretEnv must name a non-WERKT environment variable")
+			problems = append(problems, unexpectedTriggerConfig(path, trigger.Config, "secret", "signatureHeader")...)
+			secret, _ := trigger.Config["secret"].(string)
+			if !validSecretReference(secret) {
+				problems = append(problems, path+".config.secret must name a Werkt secret")
 			}
 			if raw, exists := trigger.Config["signatureHeader"]; exists {
 				signatureHeader, valid := raw.(string)
@@ -104,13 +105,13 @@ func Validate(value domain.Manifest) error {
 				}
 			}
 		case "email":
-			problems = append(problems, unexpectedTriggerConfig(path, trigger.Config, "tokenEnv")...)
-			tokenEnv, _ := trigger.Config["tokenEnv"].(string)
-			if !validSecretReference(tokenEnv) {
-				problems = append(problems, path+".config.tokenEnv must name a non-WERKT environment variable")
+			problems = append(problems, unexpectedTriggerConfig(path, trigger.Config, "tokenSecret")...)
+			tokenSecret, _ := trigger.Config["tokenSecret"].(string)
+			if !validSecretReference(tokenSecret) {
+				problems = append(problems, path+".config.tokenSecret must name a Werkt secret")
 			}
 		case "ntfy":
-			problems = append(problems, unexpectedTriggerConfig(path, trigger.Config, "server", "topic", "tokenEnv")...)
+			problems = append(problems, unexpectedTriggerConfig(path, trigger.Config, "server", "topic", "tokenSecret")...)
 			server, _ := trigger.Config["server"].(string)
 			topic, _ := trigger.Config["topic"].(string)
 			if server == "" {
@@ -119,8 +120,8 @@ func Validate(value domain.Manifest) error {
 			if topic == "" {
 				problems = append(problems, path+".config.topic is required")
 			}
-			if tokenEnv, _ := trigger.Config["tokenEnv"].(string); tokenEnv != "" && !validSecretReference(tokenEnv) {
-				problems = append(problems, path+".config.tokenEnv must name a non-WERKT environment variable")
+			if tokenSecret, _ := trigger.Config["tokenSecret"].(string); tokenSecret != "" && !validSecretReference(tokenSecret) {
+				problems = append(problems, path+".config.tokenSecret must name a Werkt secret")
 			}
 		default:
 			problems = append(problems, path+".type must be schedule, webhook, email, or ntfy")
@@ -171,7 +172,7 @@ func Validate(value domain.Manifest) error {
 			problems = append(problems, "runtime.secrets cannot override reserved WERKT_ variables")
 		}
 		if !validSecretReference(source) {
-			problems = append(problems, "runtime.secrets source for "+target+" must name a non-WERKT environment variable")
+			problems = append(problems, "runtime.secrets source for "+target+" must name a Werkt secret")
 		}
 		if _, exists := value.Runtime.Environment[target]; exists {
 			problems = append(problems, "runtime.secrets target "+target+" duplicates runtime.environment")
@@ -211,7 +212,7 @@ func unexpectedTriggerConfig(path string, config map[string]any, allowed ...stri
 }
 
 func validSecretReference(value string) bool {
-	return environmentName.MatchString(value) && !strings.HasPrefix(value, "WERKT_")
+	return len(value) <= 128 && secretName.MatchString(value)
 }
 
 func CanonicalJSON(value domain.Manifest) ([]byte, error) {

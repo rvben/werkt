@@ -283,31 +283,39 @@ func (s *Store) DetachRetentionItem(ctx context.Context, kind, path string) (boo
 		}
 		return command.RowsAffected() > 0, nil
 	case domain.RetentionKindArtifact:
-		command, err := s.pool.Exec(ctx, `
-			UPDATE revisions target SET artifact_path = ''
-			WHERE target.artifact_path = $1
-				AND NOT EXISTS (
-					SELECT 1 FROM revisions protected
-					JOIN automations a ON a.id = protected.automation_id
-					WHERE protected.artifact_path = $1 AND a.active_revision_id = protected.id
-				)
-				AND NOT EXISTS (
-					SELECT 1 FROM runs run
-					JOIN revisions protected ON protected.id = run.revision_id
-					WHERE protected.artifact_path = $1 AND run.status IN ($2, $3)
-				)
-				AND NOT EXISTS (
-					SELECT 1 FROM deployments deployment
-					JOIN revisions protected ON protected.automation_id = deployment.automation_id
-						AND protected.content_hash = deployment.content_hash
-					WHERE protected.artifact_path = $1
-						AND deployment.status IN ($4, $5, $6, $7)
-				)`, path, domain.RunQueued, domain.RunRunning, domain.DeploymentValidating,
-			domain.DeploymentBuilding, domain.DeploymentChecking, domain.DeploymentActivating)
+		var detached int
+		err := s.pool.QueryRow(ctx, `
+			WITH detached AS (
+				UPDATE revisions target SET artifact_path = ''
+				WHERE target.artifact_path = $1
+					AND NOT EXISTS (
+						SELECT 1 FROM revisions protected
+						JOIN automations a ON a.id = protected.automation_id
+						WHERE protected.artifact_path = $1 AND a.active_revision_id = protected.id
+					)
+					AND NOT EXISTS (
+						SELECT 1 FROM runs run
+						JOIN revisions protected ON protected.id = run.revision_id
+						WHERE protected.artifact_path = $1 AND run.status IN ($2, $3)
+					)
+					AND NOT EXISTS (
+						SELECT 1 FROM deployments deployment
+						JOIN revisions protected ON protected.automation_id = deployment.automation_id
+							AND protected.content_hash = deployment.content_hash
+						WHERE protected.artifact_path = $1
+							AND deployment.status IN ($4, $5, $6, $7)
+					)
+				RETURNING id
+			), released AS (
+				DELETE FROM revision_secret_references
+				WHERE revision_id IN (SELECT id FROM detached)
+			)
+			SELECT count(*) FROM detached`, path, domain.RunQueued, domain.RunRunning, domain.DeploymentValidating,
+			domain.DeploymentBuilding, domain.DeploymentChecking, domain.DeploymentActivating).Scan(&detached)
 		if err != nil {
 			return false, err
 		}
-		return command.RowsAffected() > 0, nil
+		return detached > 0, nil
 	default:
 		return false, fmt.Errorf("unsupported retention kind %q", kind)
 	}
