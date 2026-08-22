@@ -6,7 +6,7 @@ Werkt owns automation definitions, triggers, durable events, revision history, q
 
 Agents upload a deterministic package to the management API. Werkt verifies the digest while streaming the bounded body to disk, safely extracts it into private staging, and records an idempotent `queued` deployment. A lease-backed worker then advances it through `validating`, `building`, and `activating`. Expired leases can be reacquired after a worker crash.
 
-The source package stays private to the control plane and is retained after a terminal result so an operator or agent can retry the exact same bytes without uploading a subtly different package. A future bounded garbage collector will own expiry. Activation publishes the immutable revision, replaces effective triggers, and marks the deployment successful in one transaction, so clients cannot observe an active revision paired with a failed or unfinished job.
+The source package stays private to the control plane and is retained after a terminal result so an operator or agent can retry the exact same bytes without uploading a subtly different package. Policy-driven retention later expires old material through a persisted dry-run/apply workflow. Activation publishes the immutable revision, replaces effective triggers, and marks the deployment successful in one transaction, so clients cannot observe an active revision paired with a failed or unfinished job.
 
 ## Build lifecycle
 
@@ -22,6 +22,12 @@ When a manifest defines `runtime.build` or `deployment.checks`, deployment copie
 Builder networking defaults to `nat` because dependency resolution commonly needs outbound access. Runtime networking remains independently set to `none`. Fully vendored builds can set `WERKT_HUSKER_BUILD_NETWORK=none`. `runtime.buildImage` should contain the compiler and `/bin/tar`; `runtime.image` only needs the final runtime and `/bin/tar`.
 
 Validation, build, every check, and activation are durable deployment steps with timestamps, bounded logs, and a terminal error. Cancellation is immediate for queued work and cooperative for active commands; the worker context terminates the local process or guest request. Failed and cancelled jobs can be retried from their retained source. Rollback is different: it atomically makes an already-published immutable revision active again and reconstructs its trigger set without rebuilding code.
+
+## Storage retention
+
+Werkt stores extracted deployment sources under `deployment-sources` and content-addressed runtime artifacts under `artifacts`. Retention plans group shared paths before making decisions, so a retry chain that references one source is treated as one storage item. Age and per-automation count rules are additive protections: storage must exceed both before it becomes a candidate.
+
+Apply re-runs candidate selection and then performs a final database-side protection check. Database references are detached before an owned direct-child path is removed, preventing future work from discovering storage during deletion. Active sources, active revisions, artifacts being reused by in-progress deployments, and artifacts needed by queued or running runs cannot be detached. Historical rows, deployment diagnostics, revision manifests, and audit events remain in PostgreSQL after their filesystem material is pruned.
 
 ## Stable automation contract
 

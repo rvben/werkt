@@ -57,9 +57,34 @@ werkt deployment retry dep_... --idempotency-key repair-2026-08-22
 werkt deployment get dep_...
 ```
 
-`POST /api/v1/deployments/{id}/cancel` is safe only for nonterminal work. `POST /api/v1/deployments/{id}/retry` requires `Idempotency-Key`, returns a new deployment linked by `retryOf`, and rejects successful or active jobs. Uploaded sources are retained until a future bounded garbage collector is introduced.
+`POST /api/v1/deployments/{id}/cancel` is safe only for nonterminal work. `POST /api/v1/deployments/{id}/retry` requires `Idempotency-Key`, returns a new deployment linked by `retryOf`, and rejects successful or active jobs. A pruned source returns `409 Conflict` rather than silently accepting a retry that cannot run.
 
 Package intake is streamed and bounded. Werkt rejects traversal paths, links, special files, duplicate case-insensitive names, excessive entries, and compressed or expanded bodies over the configured limits before any build runs.
+
+## Retention plans
+
+Retention is an explicit plan/apply workflow. Create a persisted dry run with `POST /api/v1/retention/plans`; the policy uses positive Go duration strings and per-automation count floors:
+
+```json
+{
+  "sourceMaxAge": "720h",
+  "artifactMaxAge": "2160h",
+  "keepRetryableSources": 3,
+  "keepInactiveRevisions": 5
+}
+```
+
+An item is eligible only when it is older than its age limit and outside its count floor. Active deployment sources, active revision artifacts, artifacts being reused by an in-progress deployment, and artifacts referenced by queued or running runs are always protected. Successful deployment sources use the age limit because they are not retryable; failed and cancelled sources receive both protections.
+
+Plans expire after 15 minutes and expose only relative `storageKey` values, never host filesystem paths. Applying `POST /api/v1/retention/plans/{id}/apply` re-evaluates every candidate before detaching database references and deleting storage. Items that became protected are recorded as `skipped`; deletion errors are recorded as `failed`. Apply is lease-protected and idempotent, and both planning and final outcomes emit audit events.
+
+```bash
+werkt retention plan --source-max-age 720h --artifact-max-age 2160h
+werkt retention get ret_...
+werkt retention apply ret_...
+```
+
+Artifact retention intentionally makes sufficiently old inactive revisions unavailable for rollback. A rollback to a pruned revision returns `409 Conflict`; its immutable metadata and history remain available.
 
 ## Automations
 
@@ -75,7 +100,7 @@ Package intake is streamed and bounded. Werkt rejects traversal paths, links, sp
 
 Pausing blocks schedule, webhook, email, and ntfy ingestion. Manual runs remain available for diagnosis. Resuming recalculates each schedule from the next future occurrence, so missed intervals are not replayed as a backlog. Redeployment preserves the paused state.
 
-`POST /api/v1/automations/{id}/rollback` with `{"revisionId":"rev_..."}` atomically reactivates an existing revision belonging to that automation and reconstructs its effective triggers. Repeating a rollback to the active revision is a no-op. The equivalent CLI is `werkt rollback AUTOMATION_ID REVISION_ID`.
+`POST /api/v1/automations/{id}/rollback` with `{"revisionId":"rev_..."}` atomically reactivates a retained revision belonging to that automation and reconstructs its effective triggers. Repeating a rollback to the active revision is a no-op. The equivalent CLI is `werkt rollback AUTOMATION_ID REVISION_ID`.
 
 ## Manual runs
 
@@ -96,4 +121,4 @@ Manual runs use the active immutable revision and the manifest's retry and concu
 
 `GET /api/v1/runs` accepts `automation`, `status`, and `limit` filters. `limit` must be from 1 to 500. `GET /api/v1/runs/{id}` returns one run.
 
-`GET /api/v1/audit` accepts `automation` and `limit`. Deployments, pause/resume changes, and newly created manual runs are recorded transactionally with the state change. Idempotent no-ops do not create duplicate audit events.
+`GET /api/v1/audit` accepts `automation` and `limit`. Deployments, pause/resume changes, newly created manual runs, retention plans, and retention outcomes are recorded transactionally with their database state change. Idempotent no-ops do not create duplicate audit events.
