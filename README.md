@@ -19,7 +19,7 @@ This is an executable MVP, not yet a production sandbox.
 - Bearer-protected management API for external agents and operators
 - Responsive management workspace at `/app/`, backed only by that public API
 - Filtered inventory, deployment progress, automation detail, pause/resume, manual runs, and audit history
-- Explicit runtime secret mapping without persisted secret values
+- AES-256-GCM secret vault with safe rotation, revision bindings, and runtime log redaction
 - Python, Rust, and Go examples
 - HTTP endpoints for health, automations, hooks, and run history
 - CLI commands for validation, deployment, serving, and inspection
@@ -38,17 +38,20 @@ Validate the Python example:
 go run ./cmd/werkt validate ./examples/python-hello
 ```
 
-Start the control plane, deployment worker, and two local run workers:
+Generate a persistent 32-byte master key, then start the control plane, deployment worker, and two local run workers. Keep this key outside PostgreSQL and reuse it after restarts:
+
+```bash
+export WERKT_SECRET_KEY="$(openssl rand -base64 32)"
+go run ./cmd/werkt serve -workers 2
+```
+
+From another terminal, create the named credentials without placing their values in command-line arguments, then upload the package. The CLI waits while Werkt validates its secret bindings, builds, and atomically activates the revision:
 
 ```bash
 export PYTHON_HELLO_WEBHOOK_SECRET='development-webhook-secret-change-me'
 export PYTHON_HELLO_EMAIL_TOKEN='development-email-token-change-me-now'
-go run ./cmd/werkt serve -workers 2
-```
-
-Then upload the package through the management API from another terminal. The CLI waits while Werkt validates, builds, and atomically activates the revision:
-
-```bash
+go run ./cmd/werkt secret set --from-env PYTHON_HELLO_WEBHOOK_SECRET examples/python-hello/webhook
+go run ./cmd/werkt secret set --from-env PYTHON_HELLO_EMAIL_TOKEN examples/python-hello/email
 go run ./cmd/werkt deploy ./examples/python-hello
 ```
 
@@ -121,8 +124,9 @@ The defaults keep retryable sources for 30 days, inactive artifacts for 90 days,
 Deploying the Rust example runs its `cargo build --release` build command once. With the Husker backend, that build runs in the manifest's disposable `rust:1.88-bookworm` build VM; the resulting workspace becomes the immutable artifact:
 
 ```bash
-go run ./cmd/werkt deploy ./examples/rust-hello
 export RUST_HELLO_WEBHOOK_SECRET='development-rust-secret-change-me-now'
+go run ./cmd/werkt secret set --from-env RUST_HELLO_WEBHOOK_SECRET examples/rust-hello/webhook
+go run ./cmd/werkt deploy ./examples/rust-hello
 payload='{"from":"rust"}'
 timestamp="$(date +%s)"
 idempotency_key='rust-example-1'
@@ -151,13 +155,13 @@ triggers:
   - id: incoming
     type: webhook
     config:
-      secretEnv: PROCESS_ALERT_WEBHOOK_SECRET
+      secret: infrastructure/process-alert/webhook
 runtime:
   language: python
   image: python:3.13-alpine
   command: [python3, main.py]
   secrets:
-    INCIDENT_API_TOKEN: PROCESS_ALERT_INCIDENT_API_TOKEN
+    INCIDENT_API_TOKEN: infrastructure/process-alert/incident-api
 deployment:
   checks:
     - id: syntax
@@ -171,7 +175,7 @@ execution:
 
 `runtime.language` is descriptive. The actual runtime contract is `runtime.command`, so any executable language works. `deployment.checks` uses the same language-neutral command-array contract: checks run in order after the optional build, each with a stable ID and timeout. `runtime.image` names the Husker rootfs catalog entry or OCI reference that provides those commands. When `runtime.build` is present, `runtime.buildImage` can select a separate toolchain image; otherwise the runtime image is reused. Both image fields are ignored by the local process executor. A daemon-wide `WERKT_HUSKER_ROOTFS` can be used as a fallback.
 
-Trigger credentials and `runtime.secrets` contain environment-variable references only. Values are resolved at ingress or immediately before a run and never stored in PostgreSQL. See [docs/security.md](docs/security.md) for signing, token, and isolation details.
+Trigger credentials and `runtime.secrets` contain named vault references only. Werkt encrypts values before PostgreSQL, resolves only the names required at ingress or immediately before a run, and redacts resolved values from stdout/stderr before persistence. See [docs/security.md](docs/security.md) for key custody, signing, token, and redaction details.
 
 ## Process protocol
 
@@ -211,6 +215,7 @@ The event envelope is stable across every trigger and runtime:
 | `WERKT_DATA_DIR` | `./data` |
 | `WERKT_LISTEN_ADDR` | `127.0.0.1:8080` |
 | `WERKT_MANAGEMENT_TOKEN` | empty; disables management authentication for local development |
+| `WERKT_SECRET_KEY` | empty; base64-encoded 32-byte AES master key; secret operations fail closed when absent |
 | `WERKT_WORKER_POLL` | `500ms` |
 | `WERKT_SCHEDULER_POLL` | `1s` |
 | `WERKT_SHUTDOWN_PERIOD` | `10s` |
@@ -232,7 +237,7 @@ The event envelope is stable across every trigger and runtime:
 | `WERKT_HUSKER_PROVISION_TIMEOUT` | `2m` |
 | `WERKT_HUSKER_CLEANUP_TIMEOUT` | `30s` |
 
-Webhook `secretEnv`, email `tokenEnv`, ntfy `tokenEnv`, and runtime secret references are read from the control-plane environment and are not stored as values in the manifest or database.
+Webhook `secret`, email/ntfy `tokenSecret`, and `runtime.secrets` values are lowercase hierarchical names in the Werkt vault. Their plaintext values never appear in manifests, API responses, audit details, or PostgreSQL rows.
 
 ## Running through Husker
 
@@ -246,4 +251,4 @@ See [docs/execution.md](docs/execution.md) for the complete boundary and failure
 
 ## Current trust boundary
 
-The `process` executor runs builds and deployed commands as child processes on the control-plane host and is for trusted local development only. Runtime children receive an allowlisted base environment plus explicit secret mappings, but local build commands still inherit the host environment. The `husker` executor isolates both builds and runtime code in separate microVMs, but Husker is currently a single-host, single-trust-domain system rather than a hostile multi-tenant service. A dedicated secret backend with rotation and log redaction, signed artifacts, dependency caches, and stronger outbound allowlists remain production-hardening work.
+The `process` executor runs builds and deployed commands as child processes on the control-plane host and is for trusted local development only. Build and runtime children receive an allowlisted base environment; runtime attempts additionally receive only their explicit vault mappings. This protects Werkt credentials from accidental inheritance but does not sandbox host filesystem or network access. The `husker` executor isolates both builds and runtime code in separate microVMs, but Husker is currently a single-host, single-trust-domain system rather than a hostile multi-tenant service. Signed artifacts, dependency caches, stronger outbound allowlists, and multi-key master-key rotation remain production-hardening work.

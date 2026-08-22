@@ -12,7 +12,7 @@ triggers:
   - id: incoming
     type: webhook
     config:
-      secretEnv: RUST_HELLO_WEBHOOK_SECRET
+      secret: examples/rust-hello/webhook
 
   - id: ntfy-example
     type: ntfy

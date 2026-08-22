@@ -12,7 +12,7 @@ triggers:
   - id: incoming
     type: webhook
     config:
-      secretEnv: GO_HELLO_WEBHOOK_SECRET
+      secret: examples/go-hello/webhook
 
 runtime:
   language: go
@@ -21,7 +21,7 @@ runtime:
   build: [go, build, -o, go-hello, .]
   command: [./go-hello]
   secrets:
-    EXAMPLE_SERVICE_TOKEN: GO_HELLO_SERVICE_TOKEN
+    EXAMPLE_SERVICE_TOKEN: examples/go-hello/service-token
 
 deployment:
   checks:

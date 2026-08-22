@@ -25,6 +25,26 @@ X-Werkt-Actor: agent:operator
 
 Health checks and trigger ingress (`/hooks/...` and `/email/...`) do not accept the management token as authority and remain outside this middleware. Trigger ingress has independent per-trigger credentials described in [security.md](security.md).
 
+## Secrets
+
+The management surface exposes encrypted-secret lifecycle without a reveal operation:
+
+- `GET /api/v1/secrets` lists safe metadata.
+- `GET /api/v1/secrets/{name}` returns safe metadata for one name.
+- `PUT /api/v1/secrets/{name}` with `{"value":"...","description":"..."}` creates or rotates a value.
+- `DELETE /api/v1/secrets/{name}` deletes only when no retained runnable revision references it.
+
+Hierarchical names contain `/`; clients must percent-encode the name as one path segment. The Werkt client and CLI do this automatically. Responses contain only the name, optional description, monotonically increasing version, and timestamps. They never contain plaintext or ciphertext.
+
+```bash
+werkt secret set --from-env GITHUB_TOKEN infrastructure/process-alert/github
+werkt secret list
+werkt secret get infrastructure/process-alert/github
+werkt secret delete infrastructure/process-alert/github
+```
+
+Create and rotation return `201` and `200` respectively. Invalid names or values return `400`; missing names return `404`; a retained revision binding returns `409`; and a server without `WERKT_SECRET_KEY` returns `503`. Mutations emit `secret.created`, `secret.rotated`, and `secret.deleted` audit events.
+
 ## Deployments
 
 `POST /api/v1/deployments` accepts a gzip-compressed tar package and creates a durable asynchronous deployment. Supply all of these headers:
@@ -121,4 +141,4 @@ Manual runs use the active immutable revision and the manifest's retry and concu
 
 `GET /api/v1/runs` accepts `automation`, `status`, and `limit` filters. `limit` must be from 1 to 500. `GET /api/v1/runs/{id}` returns one run.
 
-`GET /api/v1/audit` accepts `automation` and `limit`. Deployments, pause/resume changes, newly created manual runs, retention plans, and retention outcomes are recorded transactionally with their database state change. Idempotent no-ops do not create duplicate audit events.
+`GET /api/v1/audit` accepts `automation` and `limit`. Deployments, pause/resume changes, newly created manual runs, secret lifecycle changes, retention plans, and retention outcomes are recorded transactionally with their database state change. Idempotent no-ops do not create duplicate audit events.
