@@ -19,10 +19,13 @@ import (
 )
 
 var (
-	ErrRunLeaseLost       = errors.New("run lease ownership was lost")
-	ErrAutomationNotFound = errors.New("automation not found")
-	ErrRunNotFound        = errors.New("run not found")
-	ErrTriggerNotFound    = errors.New("enabled trigger not found")
+	ErrRunLeaseLost                  = errors.New("run lease ownership was lost")
+	ErrDeploymentLeaseLost           = errors.New("deployment lease ownership was lost")
+	ErrDeploymentIdempotencyConflict = errors.New("deployment idempotency key was already used for another package")
+	ErrAutomationNotFound            = errors.New("automation not found")
+	ErrRunNotFound                   = errors.New("run not found")
+	ErrDeploymentNotFound            = errors.New("deployment not found")
+	ErrTriggerNotFound               = errors.New("enabled trigger not found")
 )
 
 //go:embed migrations/*.sql
@@ -154,6 +157,21 @@ func (s *Store) Migrate(ctx context.Context) error {
 }
 
 func (s *Store) Deploy(ctx context.Context, value domain.Manifest, contentHash, artifactPath string) (string, error) {
+	return s.deploy(ctx, value, contentHash, artifactPath, "cli", "", "")
+}
+
+func (s *Store) DeployAs(ctx context.Context, value domain.Manifest, contentHash, artifactPath, actor string) (string, error) {
+	return s.deploy(ctx, value, contentHash, artifactPath, actor, "", "")
+}
+
+// ActivateDeployment publishes an immutable revision and completes its durable
+// deployment job in one transaction. A worker that lost its lease cannot
+// activate an artifact.
+func (s *Store) ActivateDeployment(ctx context.Context, deploymentID, workerID string, value domain.Manifest, contentHash, artifactPath, actor string) (string, error) {
+	return s.deploy(ctx, value, contentHash, artifactPath, actor, deploymentID, workerID)
+}
+
+func (s *Store) deploy(ctx context.Context, value domain.Manifest, contentHash, artifactPath, actor, deploymentID, workerID string) (string, error) {
 	manifestJSON, err := json.Marshal(value)
 	if err != nil {
 		return "", fmt.Errorf("encode manifest: %w", err)
@@ -224,11 +242,33 @@ func (s *Store) Deploy(ctx context.Context, value domain.Manifest, contentHash, 
 	if _, err := tx.Exec(ctx, `UPDATE automations SET active_revision_id = $2, updated_at = now() WHERE id = $1`, value.Metadata.Name, revisionID); err != nil {
 		return "", fmt.Errorf("activate revision: %w", err)
 	}
-	if err := insertAuditEvent(ctx, tx, "automation.deployed", value.Metadata.Name, "cli", map[string]any{
-		"revisionId":  revisionID,
-		"contentHash": contentHash,
+	if err := insertAuditEvent(ctx, tx, "automation.deployed", value.Metadata.Name, actor, map[string]any{
+		"revisionId":   revisionID,
+		"contentHash":  contentHash,
+		"deploymentId": deploymentID,
 	}); err != nil {
 		return "", fmt.Errorf("audit deployment: %w", err)
+	}
+	if deploymentID != "" {
+		command, err := tx.Exec(ctx, `
+			UPDATE deployments
+			SET status = $3, revision_id = $4, error = '', updated_at = now(), finished_at = now(),
+				lease_owner = NULL, lease_expires_at = NULL, source_path = ''
+			WHERE id = $1 AND lease_owner = $2 AND status = $5`,
+			deploymentID, workerID, domain.DeploymentSucceeded, revisionID, domain.DeploymentActivating)
+		if err != nil {
+			return "", fmt.Errorf("complete deployment: %w", err)
+		}
+		if command.RowsAffected() != 1 {
+			return "", ErrDeploymentLeaseLost
+		}
+		if err := insertAuditEvent(ctx, tx, "deployment.succeeded", value.Metadata.Name, actor, map[string]any{
+			"deploymentId": deploymentID,
+			"revisionId":   revisionID,
+			"contentHash":  contentHash,
+		}); err != nil {
+			return "", fmt.Errorf("audit successful deployment: %w", err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return "", err
@@ -787,6 +827,186 @@ func (s *Store) EnqueueManualRun(ctx context.Context, automationID, externalID s
 		return "", false, err
 	}
 	return runID, true, nil
+}
+
+func (s *Store) CreateDeployment(ctx context.Context, deploymentID, idempotencyKey, packageDigest, sourcePath, actor string) (domain.Deployment, bool, error) {
+	command, err := s.pool.Exec(ctx, `
+		INSERT INTO deployments (id, idempotency_key, package_digest, source_path, status, actor)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (idempotency_key) DO NOTHING`,
+		deploymentID, idempotencyKey, packageDigest, sourcePath, domain.DeploymentQueued, actor)
+	if err != nil {
+		return domain.Deployment{}, false, err
+	}
+	value, err := s.getDeploymentByIdempotencyKey(ctx, idempotencyKey)
+	if err != nil {
+		return domain.Deployment{}, false, err
+	}
+	if value.PackageDigest != packageDigest {
+		return domain.Deployment{}, false, ErrDeploymentIdempotencyConflict
+	}
+	return value, command.RowsAffected() == 1, nil
+}
+
+func (s *Store) ListDeploymentsFiltered(ctx context.Context, automationID, status string, limit int) ([]domain.Deployment, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, status, automation_id, package_digest, content_hash,
+			COALESCE(revision_id, ''), actor, error, created_at, updated_at, started_at, finished_at
+		FROM deployments
+		WHERE ($1 = '' OR automation_id = $1) AND ($2 = '' OR status = $2)
+		ORDER BY created_at DESC, id DESC LIMIT $3`, automationID, status, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := make([]domain.Deployment, 0)
+	for rows.Next() {
+		var value domain.Deployment
+		if err := scanDeployment(rows, &value); err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
+func (s *Store) GetDeployment(ctx context.Context, deploymentID string) (domain.Deployment, error) {
+	var value domain.Deployment
+	err := scanDeployment(s.pool.QueryRow(ctx, `
+		SELECT id, status, automation_id, package_digest, content_hash,
+			COALESCE(revision_id, ''), actor, error, created_at, updated_at, started_at, finished_at
+		FROM deployments WHERE id = $1`, deploymentID), &value)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Deployment{}, ErrDeploymentNotFound
+	}
+	return value, err
+}
+
+func (s *Store) getDeploymentByIdempotencyKey(ctx context.Context, idempotencyKey string) (domain.Deployment, error) {
+	var value domain.Deployment
+	err := scanDeployment(s.pool.QueryRow(ctx, `
+		SELECT id, status, automation_id, package_digest, content_hash,
+			COALESCE(revision_id, ''), actor, error, created_at, updated_at, started_at, finished_at
+		FROM deployments WHERE idempotency_key = $1`, idempotencyKey), &value)
+	return value, err
+}
+
+func (s *Store) AcquireDeployment(ctx context.Context, workerID string, leaseDuration time.Duration) (*domain.RunnableDeployment, error) {
+	var value domain.RunnableDeployment
+	err := s.pool.QueryRow(ctx, `
+		WITH candidate AS (
+			SELECT id FROM deployments
+			WHERE status = $3 OR (
+				status IN ($4, $5, $6) AND lease_expires_at < now()
+			)
+			ORDER BY created_at
+			FOR UPDATE SKIP LOCKED
+			LIMIT 1
+		), claimed AS (
+			UPDATE deployments d
+			SET status = $4, started_at = COALESCE(started_at, now()), updated_at = now(),
+				lease_owner = $1, lease_expires_at = now() + $2::interval, error = ''
+			FROM candidate WHERE d.id = candidate.id
+			RETURNING d.*
+		)
+		SELECT id, status, automation_id, package_digest, content_hash,
+			COALESCE(revision_id, ''), actor, error, created_at, updated_at, started_at, finished_at,
+			source_path
+		FROM claimed`, workerID, leaseDuration.String(), domain.DeploymentQueued,
+		domain.DeploymentValidating, domain.DeploymentBuilding, domain.DeploymentActivating).Scan(
+		&value.ID, &value.Status, &value.AutomationID, &value.PackageDigest, &value.ContentHash,
+		&value.RevisionID, &value.Actor, &value.Error, &value.CreatedAt, &value.UpdatedAt,
+		&value.StartedAt, &value.FinishedAt, &value.SourcePath)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &value, nil
+}
+
+func (s *Store) RenewDeploymentLease(ctx context.Context, deploymentID, workerID string, leaseDuration time.Duration) (bool, error) {
+	command, err := s.pool.Exec(ctx, `
+		UPDATE deployments SET lease_expires_at = now() + $3::interval, updated_at = now()
+		WHERE id = $1 AND lease_owner = $2 AND status IN ($4, $5, $6)`,
+		deploymentID, workerID, leaseDuration.String(), domain.DeploymentValidating,
+		domain.DeploymentBuilding, domain.DeploymentActivating)
+	if err != nil {
+		return false, err
+	}
+	return command.RowsAffected() == 1, nil
+}
+
+func (s *Store) SetDeploymentStage(ctx context.Context, deploymentID, workerID, status, automationID, contentHash string) error {
+	if status != domain.DeploymentBuilding && status != domain.DeploymentActivating {
+		return fmt.Errorf("unsupported deployment stage %q", status)
+	}
+	command, err := s.pool.Exec(ctx, `
+		UPDATE deployments
+		SET status = $3, automation_id = $4, content_hash = $5, updated_at = now()
+		WHERE id = $1 AND lease_owner = $2 AND status IN ($6, $7)`,
+		deploymentID, workerID, status, automationID, contentHash,
+		domain.DeploymentValidating, domain.DeploymentBuilding)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return ErrDeploymentLeaseLost
+	}
+	return nil
+}
+
+func (s *Store) FailDeployment(ctx context.Context, deploymentID, workerID string, deploymentErr error) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	message := deploymentErr.Error()
+	if len(message) > 1<<20 {
+		message = message[:1<<20] + "\n[error truncated]"
+	}
+	var automationID, actor, packageDigest, contentHash string
+	err = tx.QueryRow(ctx, `
+		UPDATE deployments
+		SET status = $3, error = $4, updated_at = now(), finished_at = now(),
+			lease_owner = NULL, lease_expires_at = NULL, source_path = ''
+		WHERE id = $1 AND lease_owner = $2 AND status IN ($5, $6, $7)
+		RETURNING automation_id, actor, package_digest, content_hash`,
+		deploymentID, workerID, domain.DeploymentFailed, message,
+		domain.DeploymentValidating, domain.DeploymentBuilding, domain.DeploymentActivating).
+		Scan(&automationID, &actor, &packageDigest, &contentHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrDeploymentLeaseLost
+	}
+	if err != nil {
+		return err
+	}
+	if automationID != "" {
+		if err := insertAuditEvent(ctx, tx, "deployment.failed", automationID, actor, map[string]any{
+			"deploymentId":  deploymentID,
+			"packageDigest": packageDigest,
+			"contentHash":   contentHash,
+			"error":         message,
+		}); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+type rowScanner interface {
+	Scan(...any) error
+}
+
+func scanDeployment(row rowScanner, value *domain.Deployment) error {
+	return row.Scan(&value.ID, &value.Status, &value.AutomationID, &value.PackageDigest,
+		&value.ContentHash, &value.RevisionID, &value.Actor, &value.Error, &value.CreatedAt,
+		&value.UpdatedAt, &value.StartedAt, &value.FinishedAt)
 }
 
 func (s *Store) ListRuns(ctx context.Context, limit int) ([]domain.Run, error) {

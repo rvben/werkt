@@ -10,6 +10,13 @@ const (
 	RunRunning   = "running"
 	RunSucceeded = "succeeded"
 	RunFailed    = "failed"
+
+	DeploymentQueued     = "queued"
+	DeploymentValidating = "validating"
+	DeploymentBuilding   = "building"
+	DeploymentActivating = "activating"
+	DeploymentSucceeded  = "succeeded"
+	DeploymentFailed     = "failed"
 )
 
 type Manifest struct {
@@ -112,4 +119,26 @@ type RunnableRun struct {
 	ArtifactPath string
 	Manifest     Manifest
 	Event        EventEnvelope
+}
+
+// Deployment is the durable, agent-visible lifecycle of one uploaded package.
+// SourcePath and the idempotency key stay internal to the control plane.
+type Deployment struct {
+	ID            string     `json:"id"`
+	Status        string     `json:"status"`
+	AutomationID  string     `json:"automationId,omitempty"`
+	PackageDigest string     `json:"packageDigest"`
+	ContentHash   string     `json:"contentHash,omitempty"`
+	RevisionID    string     `json:"revisionId,omitempty"`
+	Actor         string     `json:"actor"`
+	Error         string     `json:"error,omitempty"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	UpdatedAt     time.Time  `json:"updatedAt"`
+	StartedAt     *time.Time `json:"startedAt,omitempty"`
+	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
+}
+
+type RunnableDeployment struct {
+	Deployment
+	SourcePath string
 }

@@ -32,36 +32,63 @@ type Deployment struct {
 	ArtifactPath string `json:"artifactPath"`
 }
 
+type PreparedDeployment struct {
+	SourceDirectory string
+	Manifest        domain.Manifest
+	ContentHash     string
+}
+
+type BuiltDeployment struct {
+	PreparedDeployment
+	ArtifactPath string
+}
+
 func NewDeployer(store *database.Store, dataDir string, builder Builder) *Deployer {
 	return &Deployer{store: store, dataDir: dataDir, builder: builder}
 }
 
 func (d *Deployer) Deploy(ctx context.Context, sourceDirectory string) (Deployment, error) {
-	absoluteSource, err := filepath.Abs(sourceDirectory)
+	prepared, err := d.Prepare(sourceDirectory)
 	if err != nil {
 		return Deployment{}, err
+	}
+	built, err := d.BuildArtifact(ctx, prepared)
+	if err != nil {
+		return Deployment{}, err
+	}
+	return d.Activate(ctx, built, "cli")
+}
+
+func (d *Deployer) Prepare(sourceDirectory string) (PreparedDeployment, error) {
+	absoluteSource, err := filepath.Abs(sourceDirectory)
+	if err != nil {
+		return PreparedDeployment{}, err
 	}
 	value, err := manifest.Load(absoluteSource)
 	if err != nil {
-		return Deployment{}, err
+		return PreparedDeployment{}, err
 	}
 	contentHash, err := manifest.HashDirectory(absoluteSource)
 	if err != nil {
-		return Deployment{}, err
+		return PreparedDeployment{}, err
 	}
+	return PreparedDeployment{SourceDirectory: absoluteSource, Manifest: value, ContentHash: contentHash}, nil
+}
+
+func (d *Deployer) BuildArtifact(ctx context.Context, prepared PreparedDeployment) (BuiltDeployment, error) {
 	artifactsDir := filepath.Join(d.dataDir, "artifacts")
 	if err := os.MkdirAll(artifactsDir, 0o750); err != nil {
-		return Deployment{}, fmt.Errorf("create artifacts directory: %w", err)
+		return BuiltDeployment{}, fmt.Errorf("create artifacts directory: %w", err)
 	}
-	artifactPath, err := filepath.Abs(filepath.Join(artifactsDir, contentHash))
+	artifactPath, err := filepath.Abs(filepath.Join(artifactsDir, prepared.ContentHash))
 	if err != nil {
-		return Deployment{}, err
+		return BuiltDeployment{}, err
 	}
 	artifactInfo, statErr := os.Stat(artifactPath)
 	if os.IsNotExist(statErr) {
 		temporary, err := os.MkdirTemp(artifactsDir, ".deploy-")
 		if err != nil {
-			return Deployment{}, err
+			return BuiltDeployment{}, err
 		}
 		deployed := false
 		defer func() {
@@ -69,43 +96,61 @@ func (d *Deployer) Deploy(ctx context.Context, sourceDirectory string) (Deployme
 				_ = os.RemoveAll(temporary)
 			}
 		}()
-		if err := copyDirectory(absoluteSource, temporary); err != nil {
-			return Deployment{}, err
+		if err := copyDirectory(prepared.SourceDirectory, temporary); err != nil {
+			return BuiltDeployment{}, err
 		}
-		if len(value.Runtime.Build) > 0 {
+		if len(prepared.Manifest.Runtime.Build) > 0 {
 			if d.builder == nil {
-				return Deployment{}, errors.New("deployment builder is not configured")
+				return BuiltDeployment{}, errors.New("deployment builder is not configured")
 			}
-			if err := d.builder.Build(ctx, temporary, value); err != nil {
-				return Deployment{}, err
+			if err := d.builder.Build(ctx, temporary, prepared.Manifest); err != nil {
+				return BuiltDeployment{}, err
 			}
 		}
 		if err := os.Rename(temporary, artifactPath); err != nil {
 			publishedInfo, publishedErr := os.Stat(artifactPath)
 			if publishedErr != nil || !publishedInfo.IsDir() {
-				return Deployment{}, fmt.Errorf("publish artifact: %w", err)
+				return BuiltDeployment{}, fmt.Errorf("publish artifact: %w", err)
 			}
 			// Another deployment of the same source won the publication race.
 			if removeErr := os.RemoveAll(temporary); removeErr != nil {
-				return Deployment{}, fmt.Errorf("remove redundant artifact: %w", removeErr)
+				return BuiltDeployment{}, fmt.Errorf("remove redundant artifact: %w", removeErr)
 			}
 		}
 		deployed = true
 	} else if statErr != nil {
-		return Deployment{}, statErr
+		return BuiltDeployment{}, statErr
 	} else if !artifactInfo.IsDir() {
-		return Deployment{}, fmt.Errorf("artifact path is not a directory: %s", artifactPath)
+		return BuiltDeployment{}, fmt.Errorf("artifact path is not a directory: %s", artifactPath)
 	}
+	return BuiltDeployment{PreparedDeployment: prepared, ArtifactPath: artifactPath}, nil
+}
 
-	revisionID, err := d.store.Deploy(ctx, value, contentHash, artifactPath)
+func (d *Deployer) Activate(ctx context.Context, built BuiltDeployment, actor string) (Deployment, error) {
+	revisionID, err := d.store.DeployAs(ctx, built.Manifest, built.ContentHash, built.ArtifactPath, actor)
 	if err != nil {
 		return Deployment{}, err
 	}
 	return Deployment{
-		AutomationID: value.Metadata.Name,
+		AutomationID: built.Manifest.Metadata.Name,
 		RevisionID:   revisionID,
-		ContentHash:  contentHash,
-		ArtifactPath: artifactPath,
+		ContentHash:  built.ContentHash,
+		ArtifactPath: built.ArtifactPath,
+	}, nil
+}
+
+func (d *Deployer) ActivateDeployment(ctx context.Context, built BuiltDeployment, deploymentID, workerID, actor string) (Deployment, error) {
+	revisionID, err := d.store.ActivateDeployment(
+		ctx, deploymentID, workerID, built.Manifest, built.ContentHash, built.ArtifactPath, actor,
+	)
+	if err != nil {
+		return Deployment{}, err
+	}
+	return Deployment{
+		AutomationID: built.Manifest.Metadata.Name,
+		RevisionID:   revisionID,
+		ContentHash:  built.ContentHash,
+		ArtifactPath: built.ArtifactPath,
 	}, nil
 }
 

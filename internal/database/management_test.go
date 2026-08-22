@@ -29,7 +29,7 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	reset := func() {
-		if _, err := store.pool.Exec(ctx, `TRUNCATE audit_events, runs, events, triggers, revisions, automations CASCADE`); err != nil {
+		if _, err := store.pool.Exec(ctx, `TRUNCATE deployments, audit_events, runs, events, triggers, revisions, automations CASCADE`); err != nil {
 			t.Errorf("reset database: %v", err)
 		}
 	}
