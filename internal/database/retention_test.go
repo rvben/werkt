@@ -52,6 +52,26 @@ func TestRetentionLifecycleIntegration(t *testing.T) {
 	if detached, err := store.DetachRetentionItem(ctx, domain.RetentionKindArtifact, activePath); err != nil || detached {
 		t.Fatalf("active artifact detached=%v err=%v", detached, err)
 	}
+	deploying, created, err := store.CreateDeployment(ctx, "dep_existing_artifact", "existing-artifact", strings.Repeat("d", 64), t.TempDir(), "agent:test")
+	if err != nil || !created {
+		t.Fatalf("deploying=%#v created=%v err=%v", deploying, created, err)
+	}
+	activeDeployment, err := store.AcquireDeployment(ctx, "worker-existing-artifact", time.Minute)
+	if err != nil || activeDeployment == nil || activeDeployment.ID != deploying.ID {
+		t.Fatalf("claimed=%#v err=%v", activeDeployment, err)
+	}
+	if err := store.SetDeploymentStage(ctx, deploying.ID, "worker-existing-artifact", domain.DeploymentBuilding, manifest.Metadata.Name, strings.Repeat("a", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if detached, err := store.DetachRetentionItem(ctx, domain.RetentionKindArtifact, inactivePath); err != nil || detached {
+		t.Fatalf("artifact used by deployment detached=%v err=%v", detached, err)
+	}
+	if _, err := store.RequestDeploymentCancellation(ctx, deploying.ID, "agent:test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteDeploymentCancellation(ctx, deploying.ID, "worker-existing-artifact"); err != nil {
+		t.Fatal(err)
+	}
 	if detached, err := store.DetachRetentionItem(ctx, domain.RetentionKindArtifact, inactivePath); err != nil || !detached {
 		t.Fatalf("inactive artifact detached=%v err=%v", detached, err)
 	}

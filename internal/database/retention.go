@@ -20,12 +20,13 @@ type DeploymentSourceRecord struct {
 }
 
 type RevisionArtifactRecord struct {
-	ID              string
-	AutomationID    string
-	Path            string
-	CreatedAt       time.Time
-	Active          bool
-	ReferencedByRun bool
+	ID                     string
+	AutomationID           string
+	Path                   string
+	CreatedAt              time.Time
+	Active                 bool
+	ReferencedByRun        bool
+	ReferencedByDeployment bool
 }
 
 func (s *Store) ListDeploymentSourceRecords(ctx context.Context) ([]DeploymentSourceRecord, error) {
@@ -51,11 +52,18 @@ func (s *Store) ListRevisionArtifactRecords(ctx context.Context) ([]RevisionArti
 	rows, err := s.pool.Query(ctx, `
 		SELECT r.id, r.automation_id, r.artifact_path, r.created_at,
 			a.active_revision_id = r.id,
-			EXISTS (SELECT 1 FROM runs run WHERE run.revision_id = r.id AND run.status IN ($1, $2))
+			EXISTS (SELECT 1 FROM runs run WHERE run.revision_id = r.id AND run.status IN ($1, $2)),
+			EXISTS (
+				SELECT 1 FROM deployments deployment
+				WHERE deployment.automation_id = r.automation_id
+					AND deployment.content_hash = r.content_hash
+					AND deployment.status IN ($3, $4, $5, $6)
+			)
 		FROM revisions r
 		JOIN automations a ON a.id = r.automation_id
 		WHERE r.artifact_path <> ''
-		ORDER BY r.created_at DESC, r.id DESC`, domain.RunQueued, domain.RunRunning)
+		ORDER BY r.created_at DESC, r.id DESC`, domain.RunQueued, domain.RunRunning,
+		domain.DeploymentValidating, domain.DeploymentBuilding, domain.DeploymentChecking, domain.DeploymentActivating)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +71,8 @@ func (s *Store) ListRevisionArtifactRecords(ctx context.Context) ([]RevisionArti
 	var values []RevisionArtifactRecord
 	for rows.Next() {
 		var value RevisionArtifactRecord
-		if err := rows.Scan(&value.ID, &value.AutomationID, &value.Path, &value.CreatedAt, &value.Active, &value.ReferencedByRun); err != nil {
+		if err := rows.Scan(&value.ID, &value.AutomationID, &value.Path, &value.CreatedAt, &value.Active,
+			&value.ReferencedByRun, &value.ReferencedByDeployment); err != nil {
 			return nil, err
 		}
 		values = append(values, value)
@@ -286,7 +295,15 @@ func (s *Store) DetachRetentionItem(ctx context.Context, kind, path string) (boo
 					SELECT 1 FROM runs run
 					JOIN revisions protected ON protected.id = run.revision_id
 					WHERE protected.artifact_path = $1 AND run.status IN ($2, $3)
-				)`, path, domain.RunQueued, domain.RunRunning)
+				)
+				AND NOT EXISTS (
+					SELECT 1 FROM deployments deployment
+					JOIN revisions protected ON protected.automation_id = deployment.automation_id
+						AND protected.content_hash = deployment.content_hash
+					WHERE protected.artifact_path = $1
+						AND deployment.status IN ($4, $5, $6, $7)
+				)`, path, domain.RunQueued, domain.RunRunning, domain.DeploymentValidating,
+			domain.DeploymentBuilding, domain.DeploymentChecking, domain.DeploymentActivating)
 		if err != nil {
 			return false, err
 		}
