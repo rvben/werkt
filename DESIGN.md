@@ -185,9 +185,9 @@ The workspace is flat by default. One-pixel rules and warm tonal shifts define s
 
 ### Shadow Vocabulary
 
-- **Overlay edge** (`-8px 0 0 oklch(0.15 0.018 43 / 0.08)`): the responsive diagnosis drawer.
-- **Dialog lift** (`0 8px 0 oklch(0.15 0.018 43 / 0.12)`): modal dialogs only.
-- **Toast lift** (`0 6px 0 oklch(0.15 0.018 43 / 0.14)`): transient feedback only.
+- **Overlay edge** (`-0.5rem 0 1.75rem oklch(0.15 0.018 43 / 0.08)`): the responsive diagnosis drawer.
+- **Dialog lift** (`0 0.75rem 2.5rem oklch(0.15 0.018 43 / 0.12)`): modal dialogs only.
+- **Toast lift** (`0 0.5rem 1.75rem oklch(0.15 0.018 43 / 0.14)`): transient feedback only.
 
 ### Named Rules
 
@@ -201,6 +201,8 @@ The workspace is flat by default. One-pixel rules and warm tonal shifts define s
 - **Primary:** Signal Orange, white text, `0.5rem 0.85rem` padding; one clear primary action per local context.
 - **Hover / Focus:** one-pixel upward movement on hover; a two-pixel orange outline plus offset on keyboard focus.
 - **Quiet:** paper surface, hairline border, Soft Ink text.
+- **Danger:** paper surface, Failure Red border and text; reserve it for cancellation, rollback, or another scoped risky action.
+- **Confirmation:** explain the exact scope and recovery semantics, show failures inline, and focus the safe dismissal before the danger action.
 
 ### Chips
 
@@ -227,9 +229,9 @@ The workspace is flat by default. One-pixel rules and warm tonal shifts define s
 - **State:** selected items use the pale orange surface plus a short Signal Orange underline. Hover uses only a neutral tonal shift.
 - **Narrow screens:** at `42rem` and below, bottom-navigation items stack the icon above the label, share the available width evenly, and keep the label visible.
 
-### Run Diagnosis
+### Diagnosis
 
-The diagnosis pane is the signature component. It keeps run identity, lifecycle state, attempt count, exact error, logs, and output together. It is a fourth desktop pane, a side drawer at tablet widths, and a focused full-screen surface on mobile.
+The diagnosis pane is the signature component. Run diagnosis keeps identity, lifecycle state, attempt count, exact error, logs, and output together. Deployment diagnosis keeps package and revision identity with ordered promotion-step state, duration, bounded logs, errors, and recovery controls. It is a fourth desktop pane, a side drawer at tablet widths, and a focused full-screen surface on mobile.
 
 ## 6. Do's and Don'ts
 

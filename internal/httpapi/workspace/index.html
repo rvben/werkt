@@ -31,6 +31,8 @@
     <symbol id="icon-code" viewBox="0 0 24 24"><path d="m8 9-4 3 4 3m8-6 4 3-4 3m-2-9-4 12"/></symbol>
     <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></symbol>
     <symbol id="icon-arrow-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+    <symbol id="icon-rollback" viewBox="0 0 24 24"><path d="M4 8v6h6"/><path d="M5.5 13.5A8 8 0 1 0 7 6l-3 3"/></symbol>
+    <symbol id="icon-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
   </svg>
 
   <div class="app-shell" id="app-shell">
@@ -145,6 +147,22 @@
         <button class="button button-primary" type="submit">
           <svg class="icon" aria-hidden="true"><use href="#icon-play"></use></svg>Queue run
         </button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="action-dialog" id="action-dialog" aria-labelledby="action-dialog-title">
+    <form method="dialog" id="action-form">
+      <button class="icon-button dialog-close" type="button" data-close-dialog="action" aria-label="Close confirmation">
+        <svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg>
+      </button>
+      <span class="dialog-symbol" aria-hidden="true"><svg class="icon"><use id="action-icon-use" href="#icon-rollback"></use></svg></span>
+      <h2 id="action-dialog-title">Confirm action</h2>
+      <p id="action-dialog-message"></p>
+      <p class="field-message" id="action-error" role="alert"></p>
+      <div class="dialog-actions">
+        <button class="button button-quiet" id="action-dismiss" type="button" data-close-dialog="action">Keep current state</button>
+        <button class="button button-danger" id="action-submit" type="submit">Confirm</button>
       </div>
     </form>
   </dialog>
