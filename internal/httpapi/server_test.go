@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -88,6 +89,32 @@ func (s *fakeStore) GetRun(_ context.Context, runID string) (domain.Run, error) 
 
 func (s *fakeStore) ListAuditEvents(context.Context, string, int) ([]database.AuditEvent, error) {
 	return []database.AuditEvent{}, nil
+}
+
+func (s *fakeStore) ListDeploymentsFiltered(context.Context, string, string, int) ([]domain.Deployment, error) {
+	return []domain.Deployment{{ID: "dep_example", Status: domain.DeploymentSucceeded}}, nil
+}
+
+func (s *fakeStore) GetDeployment(_ context.Context, deploymentID string) (domain.Deployment, error) {
+	if deploymentID == "missing" {
+		return domain.Deployment{}, database.ErrDeploymentNotFound
+	}
+	return domain.Deployment{ID: deploymentID, Status: domain.DeploymentSucceeded}, nil
+}
+
+type fakeDeploymentIntake struct {
+	expectedDigest string
+	idempotencyKey string
+	actor          string
+	created        bool
+}
+
+func (i *fakeDeploymentIntake) Accept(_ context.Context, reader io.Reader, expectedDigest, idempotencyKey, actor string) (domain.Deployment, bool, error) {
+	_, _ = io.Copy(io.Discard, reader)
+	i.expectedDigest = expectedDigest
+	i.idempotencyKey = idempotencyKey
+	i.actor = actor
+	return domain.Deployment{ID: "dep_created", Status: domain.DeploymentQueued, PackageDigest: expectedDigest, Actor: actor}, i.created, nil
 }
 
 func TestManagementRoutesRequireBearerTokenButTriggerIngressDoesNot(t *testing.T) {
@@ -306,6 +333,40 @@ func TestManagementMutationsValidateInputAndPreserveActor(t *testing.T) {
 	}
 }
 
+func TestDeploymentIntakeRequiresArchiveContractAndPreservesAttribution(t *testing.T) {
+	store := &fakeStore{}
+	intake := &fakeDeploymentIntake{created: true}
+	server := New(store, ":0", "management-secret", WithDeploymentIntake(intake))
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/deployments", strings.NewReader("not-an-archive"))
+	request.Header.Set("Authorization", "Bearer management-secret")
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("content-type status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	digest := strings.Repeat("a", 64)
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/deployments", strings.NewReader("archive"))
+	request.Header.Set("Authorization", "Bearer management-secret")
+	request.Header.Set("Content-Type", "application/gzip")
+	request.Header.Set("Idempotency-Key", "deploy-example-1")
+	request.Header.Set("X-Werkt-Content-SHA256", digest)
+	request.Header.Set("X-Werkt-Actor", "agent:builder")
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("deployment status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response.Header().Get("Location") != "/api/v1/deployments/dep_created" || response.Header().Get("Retry-After") != "1" {
+		t.Fatalf("location=%q retry-after=%q", response.Header().Get("Location"), response.Header().Get("Retry-After"))
+	}
+	if intake.expectedDigest != digest || intake.idempotencyKey != "deploy-example-1" || intake.actor != "agent:builder" {
+		t.Fatalf("intake digest=%q idempotency=%q actor=%q", intake.expectedDigest, intake.idempotencyKey, intake.actor)
+	}
+}
+
 func TestManagementQueryValidation(t *testing.T) {
 	store := &fakeStore{}
 	server := New(store, ":0", "")
@@ -348,6 +409,7 @@ func TestOpenAPIContractIsPublicAndDocumentsManagementRoutes(t *testing.T) {
 	for _, path := range []string{
 		"/api/v1/automations", "/api/v1/automations/{automation}",
 		"/api/v1/automations/{automation}/runs", "/api/v1/runs", "/api/v1/audit",
+		"/api/v1/deployments", "/api/v1/deployments/{deployment}",
 	} {
 		if _, exists := document.Paths[path]; !exists {
 			t.Errorf("OpenAPI path %q is missing", path)

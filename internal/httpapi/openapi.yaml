@@ -105,6 +105,75 @@ paths:
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+  /api/v1/deployments:
+    post:
+      operationId: createDeployment
+      security: [{BearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Actor"}
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Replay key for this deployment request. Reuse with a different package digest returns 409.
+          schema: {type: string, minLength: 1, maxLength: 255}
+        - name: X-Werkt-Content-SHA256
+          in: header
+          required: true
+          description: Expected lowercase hexadecimal SHA-256 digest of the exact compressed request body.
+          schema: {type: string, pattern: "^[a-fA-F0-9]{64}$"}
+      requestBody:
+        required: true
+        description: Gzip-compressed tar archive rooted at automation.yaml. Compressed, expanded, and entry-count limits are configured by the server.
+        content:
+          application/gzip:
+            schema: {type: string, format: binary}
+      responses:
+        "202": {$ref: "#/components/responses/DeploymentAccepted"}
+        "200": {$ref: "#/components/responses/DeploymentAccepted"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+        "415": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+    get:
+      operationId: listDeployments
+      security: [{BearerAuth: []}]
+      parameters:
+        - name: automation
+          in: query
+          schema: {type: string}
+        - name: status
+          in: query
+          schema: {type: string, enum: [queued, validating, building, activating, succeeded, failed]}
+        - {$ref: "#/components/parameters/Limit"}
+      responses:
+        "200":
+          description: Deployment jobs newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/Deployment"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+  /api/v1/deployments/{deployment}:
+    get:
+      operationId: getDeployment
+      security: [{BearerAuth: []}]
+      parameters:
+        - name: deployment
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Current deployment lifecycle and diagnostics. Nonterminal responses include Retry-After.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Deployment"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
   /api/v1/runs:
     get:
       operationId: listRuns
@@ -284,6 +353,21 @@ components:
               runId: {type: string}
               created: {type: boolean}
             required: [runId, created]
+    DeploymentAccepted:
+      description: Deployment was accepted or an idempotent retry found the existing deployment.
+      headers:
+        Location:
+          schema: {type: string}
+        Retry-After:
+          schema: {type: string}
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              deployment: {$ref: "#/components/schemas/Deployment"}
+              created: {type: boolean}
+            required: [deployment, created]
   schemas:
     Error:
       type: object
@@ -347,6 +431,22 @@ components:
         error: {type: string}
         result: {}
       required: [id, automationId, revisionId, eventId, status, attempt, maxAttempts, createdAt]
+    Deployment:
+      type: object
+      properties:
+        id: {type: string}
+        status: {type: string, enum: [queued, validating, building, activating, succeeded, failed]}
+        automationId: {type: string}
+        packageDigest: {type: string, pattern: "^[a-f0-9]{64}$"}
+        contentHash: {type: string, pattern: "^[a-f0-9]{64}$"}
+        revisionId: {type: string}
+        actor: {type: string}
+        error: {type: string}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        finishedAt: {type: string, format: date-time}
+      required: [id, status, packageDigest, actor, createdAt, updatedAt]
     AuditEvent:
       type: object
       properties:

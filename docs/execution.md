@@ -2,9 +2,15 @@
 
 Werkt owns automation definitions, triggers, durable events, revision history, queueing, retries, concurrency, and run results. Executors own the mechanics and isolation of one attempt. Husker is an execution plane, not a second scheduler.
 
+## Deployment lifecycle
+
+Agents upload a deterministic package to the management API. Werkt verifies the digest while streaming the bounded body to disk, safely extracts it into private staging, and records an idempotent `queued` deployment. A lease-backed worker then advances it through `validating`, `building`, and `activating`. Expired leases can be reacquired after a worker crash.
+
+The source package stays private to the control plane and is removed when the job reaches `succeeded` or `failed`. Activation publishes the immutable revision, replaces effective triggers, and marks the deployment successful in one transaction, so clients cannot observe an active revision paired with a failed or unfinished job.
+
 ## Build lifecycle
 
-When a manifest defines `runtime.build`, deployment copies the source into a private staging directory before invoking the selected builder. The process backend invokes the command on the Werkt host for local development. The Husker backend instead:
+When a manifest defines `runtime.build`, deployment copies the source into a private staging directory before invoking the selected builder. The process backend invokes the command on the Werkt host for trusted local development only. The Husker backend instead:
 
 1. Creates a fresh VM from `runtime.buildImage`, falling back to `runtime.image` and then the daemon-wide rootfs setting.
 2. Gives the VM an independent hard expiration and `owner: werkt/build/<automation-id>`.

@@ -17,7 +17,9 @@ import (
 	"github.com/rvben/werkt/internal/config"
 	"github.com/rvben/werkt/internal/database"
 	"github.com/rvben/werkt/internal/httpapi"
+	"github.com/rvben/werkt/internal/managementclient"
 	"github.com/rvben/werkt/internal/manifest"
+	"github.com/rvben/werkt/internal/packageio"
 	"github.com/rvben/werkt/internal/runner"
 	"github.com/rvben/werkt/internal/service"
 )
@@ -78,7 +80,11 @@ func validate(arguments []string) error {
 }
 
 func deploy(arguments []string) error {
+	configuration := config.Load()
 	flags := flag.NewFlagSet("deploy", flag.ContinueOnError)
+	apiURL := flags.String("api", configuration.APIURL, "Werkt management API URL")
+	idempotencyKey := flags.String("idempotency-key", "", "deployment replay key (defaults to the package digest)")
+	wait := flags.Bool("wait", true, "wait for validation, build, and activation")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -86,22 +92,49 @@ func deploy(arguments []string) error {
 	if flags.NArg() > 0 {
 		directory = flags.Arg(0)
 	}
-	configuration := config.Load()
 	ctx, cancel := context.WithTimeout(context.Background(), configuration.DeployTimeout)
 	defer cancel()
-	store, err := openStore(ctx, configuration)
+	archive, err := os.CreateTemp("", "werkt-deploy-*.tar.gz")
 	if err != nil {
 		return err
 	}
-	defer store.Close()
-	builder, err := newBuilder(configuration)
+	archivePath := archive.Name()
+	defer os.Remove(archivePath) //nolint:errcheck
+	digest, err := packageio.WriteArchive(directory, archive)
+	if err != nil {
+		_ = archive.Close()
+		return err
+	}
+	if err := archive.Close(); err != nil {
+		return err
+	}
+	if *idempotencyKey == "" {
+		*idempotencyKey = "deploy-" + digest
+	}
+	client, err := managementclient.New(*apiURL, configuration.ManagementToken, nil)
 	if err != nil {
 		return err
 	}
-	deployer := service.NewDeployer(store, configuration.DataDir, builder)
-	result, err := deployer.Deploy(ctx, directory)
+	archive, err = os.Open(archivePath)
 	if err != nil {
 		return err
+	}
+	result, _, uploadErr := client.CreateDeployment(ctx, archive, digest, *idempotencyKey, "cli")
+	closeErr := archive.Close()
+	if err := errors.Join(uploadErr, closeErr); err != nil {
+		return err
+	}
+	if *wait {
+		result, err = client.WaitDeployment(ctx, result, configuration.DeploymentPoll)
+		if err != nil {
+			return err
+		}
+		if result.Status == "failed" {
+			if err := printJSON(result); err != nil {
+				return err
+			}
+			return fmt.Errorf("deployment %s failed: %s", result.ID, result.Error)
+		}
 	}
 	return printJSON(result)
 }
@@ -133,13 +166,28 @@ func serve(arguments []string) error {
 		workerID := fmt.Sprintf("%s-%d-%d", hostname, os.Getpid(), index)
 		go service.NewWorker(store, executor, workerID, configuration.WorkerPoll).Run(ctx)
 	}
+	builder, err := newBuilder(configuration)
+	if err != nil {
+		return err
+	}
+	deployer := service.NewDeployer(store, configuration.DataDir, builder)
+	deploymentWorkerID := fmt.Sprintf("%s-%d-deployments", hostname, os.Getpid())
+	go service.NewDeploymentWorker(store, deployer, deploymentWorkerID, configuration.DeploymentPoll).Run(ctx)
 	go service.NewScheduler(store, configuration.SchedulerPoll).Run(ctx)
 	go service.NewNtfyReconciler(store).Run(ctx)
 
 	if configuration.ManagementToken == "" {
 		slog.Warn("management API authentication is disabled; set WERKT_MANAGEMENT_TOKEN outside local development")
 	}
-	api := httpapi.New(store, configuration.ListenAddress, configuration.ManagementToken)
+	if configuration.Executor == "process" {
+		slog.Warn("process executor runs deployed build and runtime commands on this host; use husker before accepting untrusted packages")
+	}
+	intake := service.NewDeploymentIntake(store, configuration.DataDir, packageio.Limits{
+		CompressedBytes: configuration.MaxPackageBytes,
+		ExpandedBytes:   configuration.MaxExpandedPackageBytes,
+		Entries:         configuration.MaxPackageEntries,
+	})
+	api := httpapi.New(store, configuration.ListenAddress, configuration.ManagementToken, httpapi.WithDeploymentIntake(intake))
 	serverErrors := make(chan error, 1)
 	go func() {
 		slog.Info("control plane listening", "address", configuration.ListenAddress, "workers", *workers)
@@ -265,7 +313,7 @@ func usage() {
 	executable := filepath.Base(os.Args[0])
 	fmt.Fprintf(os.Stderr, `Usage:
   %s validate [directory]
-  %s deploy [directory]
+  %s deploy [-api URL] [-idempotency-key KEY] [-wait=true] [directory]
   %s serve [-workers N]
   %s automations
   %s runs [-limit N]

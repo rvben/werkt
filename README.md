@@ -9,7 +9,7 @@ This is an executable MVP, not yet a production sandbox.
 ## What works
 
 - Strict `automation.yaml` manifests with deterministic content hashes
-- Immutable deployment artifacts
+- Durable, idempotent deployment jobs with immutable artifacts
 - PostgreSQL-backed events, run queue, retries, worker leases, and concurrency policies
 - Cron schedules with IANA time zones
 - HMAC-authenticated webhook triggers with idempotency keys
@@ -18,7 +18,7 @@ This is an executable MVP, not yet a production sandbox.
 - A language-neutral execution contract with local-process and Husker backends
 - Bearer-protected management API for external agents and operators
 - Responsive management workspace at `/app/`, backed only by that public API
-- Filtered inventory, automation detail, pause/resume, manual runs, and audit history
+- Filtered inventory, deployment progress, automation detail, pause/resume, manual runs, and audit history
 - Explicit runtime secret mapping without persisted secret values
 - Python, Rust, and Go examples
 - HTTP endpoints for health, automations, hooks, and run history
@@ -32,19 +32,24 @@ Start PostgreSQL:
 docker compose up -d postgres
 ```
 
-Validate and deploy the Python example:
+Validate the Python example:
 
 ```bash
 go run ./cmd/werkt validate ./examples/python-hello
-go run ./cmd/werkt deploy ./examples/python-hello
 ```
 
-Start the control plane and two local workers:
+Start the control plane, deployment worker, and two local run workers:
 
 ```bash
 export PYTHON_HELLO_WEBHOOK_SECRET='development-webhook-secret-change-me'
 export PYTHON_HELLO_EMAIL_TOKEN='development-email-token-change-me-now'
 go run ./cmd/werkt serve -workers 2
+```
+
+Then upload the package through the management API from another terminal. The CLI waits while Werkt validates, builds, and atomically activates the revision:
+
+```bash
+go run ./cmd/werkt deploy ./examples/python-hello
 ```
 
 Open [http://localhost:8080/app/](http://localhost:8080/app/) to use the management workspace. If `WERKT_MANAGEMENT_TOKEN` is set, connect with the same token used by API clients; it remains scoped to the browser tab. The workspace does not have a privileged control path and attributes its mutations as `workspace:operator`.
@@ -186,6 +191,7 @@ The event envelope is stable across every trigger and runtime:
 
 | Environment variable | Default |
 |---|---|
+| `WERKT_API_URL` | `http://127.0.0.1:8080`; management API used by `werkt deploy` |
 | `WERKT_DATABASE_URL` | `postgres://automations:automations@localhost:54329/automations?sslmode=disable` |
 | `WERKT_DATA_DIR` | `./data` |
 | `WERKT_LISTEN_ADDR` | `127.0.0.1:8080` |
@@ -194,6 +200,10 @@ The event envelope is stable across every trigger and runtime:
 | `WERKT_SCHEDULER_POLL` | `1s` |
 | `WERKT_SHUTDOWN_PERIOD` | `10s` |
 | `WERKT_DEPLOY_TIMEOUT` | `30m` |
+| `WERKT_DEPLOYMENT_POLL` | `500ms` |
+| `WERKT_MAX_PACKAGE_BYTES` | `67108864` (64 MiB compressed) |
+| `WERKT_MAX_EXPANDED_PACKAGE_BYTES` | `268435456` (256 MiB extracted) |
+| `WERKT_MAX_PACKAGE_ENTRIES` | `10000` |
 | `WERKT_EXECUTOR` | `process` |
 | `WERKT_HUSKER_URL` | `http://127.0.0.1:8081` |
 | `WERKT_HUSKER_TOKEN` | empty |
