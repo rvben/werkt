@@ -136,6 +136,25 @@ func Validate(value domain.Manifest) error {
 	if len(value.Runtime.Build) > 0 && strings.TrimSpace(value.Runtime.Build[0]) == "" {
 		problems = append(problems, "runtime.build must start with an executable")
 	}
+	checkIDs := make(map[string]struct{}, len(value.Deployment.Checks))
+	for index, check := range value.Deployment.Checks {
+		path := fmt.Sprintf("deployment.checks[%d]", index)
+		if !identifier.MatchString(check.ID) {
+			problems = append(problems, path+".id is invalid")
+		}
+		if _, exists := checkIDs[check.ID]; exists {
+			problems = append(problems, path+".id must be unique")
+		}
+		checkIDs[check.ID] = struct{}{}
+		if len(check.Command) == 0 || strings.TrimSpace(check.Command[0]) == "" {
+			problems = append(problems, path+".command must contain an executable")
+		}
+		if check.Timeout != "" {
+			if duration, err := time.ParseDuration(check.Timeout); err != nil || duration <= 0 {
+				problems = append(problems, path+".timeout must be a positive duration")
+			}
+		}
+	}
 	for key := range value.Runtime.Environment {
 		if !environmentName.MatchString(key) {
 			problems = append(problems, "runtime.environment contains invalid variable name "+key)

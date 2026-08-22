@@ -23,6 +23,12 @@ runtime:
   secrets:
     EXAMPLE_SERVICE_TOKEN: GO_HELLO_SERVICE_TOKEN
 
+deployment:
+  checks:
+    - id: unit
+      command: [go, test, ./...]
+      timeout: 2m
+
 execution:
   timeout: 30s
   retries: 1

@@ -60,7 +60,7 @@ func TestProcessRunnerBuildsWithManifestEnvironment(t *testing.T) {
 		Build:       []string{"/bin/sh", "-c", `printf '%s' "$BUILD_VALUE" > built`},
 		Environment: map[string]string{"BUILD_VALUE": "from-manifest"},
 	}}
-	if err := runner.NewProcessRunner().Build(context.Background(), directory, value); err != nil {
+	if err := runner.NewProcessRunner().Build(context.Background(), directory, value, nil); err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
 	contents, err := os.ReadFile(filepath.Join(directory, "built"))
@@ -69,5 +69,66 @@ func TestProcessRunnerBuildsWithManifestEnvironment(t *testing.T) {
 	}
 	if string(contents) != "from-manifest" {
 		t.Fatalf("built contents = %q", contents)
+	}
+}
+
+func TestProcessRunnerRunsPromotionChecksInOrderAndReportsDiagnostics(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is POSIX-specific")
+	}
+	directory := t.TempDir()
+	value := domain.Manifest{
+		Runtime: domain.Runtime{
+			Build:       []string{"/bin/sh", "-c", `printf build >> order; echo built`},
+			Environment: map[string]string{"CHECK_VALUE": "expected"},
+		},
+		Deployment: domain.DeploymentPolicy{Checks: []domain.DeploymentCheck{
+			{ID: "unit", Command: []string{"/bin/sh", "-c", `test "$CHECK_VALUE" = expected; printf unit >> order; echo checked`}},
+		}},
+	}
+	var updates []domain.DeploymentStepUpdate
+	err := runner.NewProcessRunner().Build(context.Background(), directory, value, func(update domain.DeploymentStepUpdate) error {
+		updates = append(updates, update)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	order, err := os.ReadFile(filepath.Join(directory, "order"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(order) != "buildunit" {
+		t.Fatalf("promotion order=%q", order)
+	}
+	if len(updates) != 4 || updates[0].ID != "build" || updates[1].Logs != "built\n" || updates[2].ID != "check:unit" || updates[3].Status != domain.DeploymentStepSucceeded {
+		t.Fatalf("updates=%#v", updates)
+	}
+}
+
+func TestProcessRunnerStopsAfterFailedPromotionCheck(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is POSIX-specific")
+	}
+	directory := t.TempDir()
+	value := domain.Manifest{
+		Deployment: domain.DeploymentPolicy{Checks: []domain.DeploymentCheck{
+			{ID: "unit", Command: []string{"/bin/sh", "-c", `echo failure-output; exit 7`}},
+			{ID: "later", Command: []string{"/bin/sh", "-c", `touch should-not-run`}},
+		}},
+	}
+	var updates []domain.DeploymentStepUpdate
+	err := runner.NewProcessRunner().Build(context.Background(), directory, value, func(update domain.DeploymentStepUpdate) error {
+		updates = append(updates, update)
+		return nil
+	})
+	if err == nil {
+		t.Fatal("Build() error = nil")
+	}
+	if len(updates) != 2 || updates[1].Status != domain.DeploymentStepFailed || updates[1].Logs != "failure-output\n" {
+		t.Fatalf("updates=%#v", updates)
+	}
+	if _, err := os.Stat(filepath.Join(directory, "should-not-run")); !os.IsNotExist(err) {
+		t.Fatalf("later check ran: %v", err)
 	}
 }

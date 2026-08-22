@@ -267,6 +267,7 @@ func TestHuskerRunnerBuildsInVMAndPromotesOutput(t *testing.T) {
 	readRequests := 0
 	var created createVMRequest
 	buildSeen := false
+	checkSeen := false
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		switch {
 		case request.Method == http.MethodPost && request.URL.Path == "/v1/vms":
@@ -284,7 +285,11 @@ func TestHuskerRunnerBuildsInVMAndPromotesOutput(t *testing.T) {
 				t.Errorf("decode exec: %v", err)
 			}
 			if body.Command == "go" {
-				buildSeen = true
+				if len(body.Args) > 0 && body.Args[0] == "test" {
+					checkSeen = true
+				} else {
+					buildSeen = true
+				}
 				if body.WorkingDir == "" || !strings.HasSuffix(body.WorkingDir, "/work") {
 					t.Errorf("build working dir = %q", body.WorkingDir)
 				}
@@ -332,6 +337,7 @@ func TestHuskerRunnerBuildsInVMAndPromotesOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var updates []domain.DeploymentStepUpdate
 	err = builder.Build(context.Background(), directory, domain.Manifest{
 		Metadata: domain.Metadata{Name: "go-example"},
 		Runtime: domain.Runtime{
@@ -340,6 +346,10 @@ func TestHuskerRunnerBuildsInVMAndPromotesOutput(t *testing.T) {
 			Build:       []string{"go", "build", "-o", "bin/automation", "."},
 			Environment: map[string]string{"CGO_ENABLED": "0"},
 		},
+		Deployment: domain.DeploymentPolicy{Checks: []domain.DeploymentCheck{{ID: "unit", Command: []string{"go", "test", "./..."}, Timeout: "1m"}}},
+	}, func(update domain.DeploymentStepUpdate) error {
+		updates = append(updates, update)
+		return nil
 	})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
@@ -353,8 +363,11 @@ func TestHuskerRunnerBuildsInVMAndPromotesOutput(t *testing.T) {
 	if created.Owner != "werkt/build/go-example" {
 		t.Fatalf("owner = %q", created.Owner)
 	}
-	if !buildSeen || !deleted {
-		t.Fatalf("build seen = %v, deleted = %v", buildSeen, deleted)
+	if !buildSeen || !checkSeen || !deleted {
+		t.Fatalf("build seen = %v, check seen = %v, deleted = %v", buildSeen, checkSeen, deleted)
+	}
+	if len(updates) != 4 || updates[2].ID != "check:unit" || updates[3].Status != domain.DeploymentStepSucceeded {
+		t.Fatalf("updates = %#v", updates)
 	}
 	if readRequests < 2 {
 		t.Fatalf("read requests = %d, want multiple chunks", readRequests)
@@ -415,7 +428,7 @@ func TestHuskerRunnerCleansUpAfterBuildFailure(t *testing.T) {
 	err = builder.Build(context.Background(), directory, domain.Manifest{
 		Metadata: domain.Metadata{Name: "rust-example"},
 		Runtime:  domain.Runtime{Image: "rust:1.88-bookworm", Build: []string{"cargo", "build"}},
-	})
+	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "compiler failed") {
 		t.Fatalf("Build() error = %v", err)
 	}

@@ -23,18 +23,83 @@ func NewProcessRunner() *ProcessRunner {
 	return &ProcessRunner{}
 }
 
-func (r *ProcessRunner) Build(ctx context.Context, directory string, value domain.Manifest) error {
-	if len(value.Runtime.Build) == 0 {
-		return nil
+func (r *ProcessRunner) Build(ctx context.Context, directory string, value domain.Manifest, reporter domain.DeploymentStepReporter) error {
+	if len(value.Runtime.Build) > 0 {
+		if err := runPromotionCommand(ctx, directory, value.Runtime.Environment, "build", "build", value.Runtime.Build, reporter); err != nil {
+			return fmt.Errorf("build automation: %w", err)
+		}
 	}
-	command := exec.CommandContext(ctx, value.Runtime.Build[0], value.Runtime.Build[1:]...)
-	command.Dir = directory
-	command.Env = append(os.Environ(), environment(value.Runtime.Environment)...)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("build automation: %w\n%s", err, strings.TrimSpace(string(output)))
+	for _, check := range value.Deployment.Checks {
+		checkContext, cancel := context.WithTimeout(ctx, check.TimeoutDuration())
+		err := runPromotionCommand(checkContext, directory, value.Runtime.Environment, "check:"+check.ID, "check", check.Command, reporter)
+		cancel()
+		if err != nil {
+			if errors.Is(checkContext.Err(), context.DeadlineExceeded) {
+				return fmt.Errorf("check %s exceeded timeout %s: %w", check.ID, check.TimeoutDuration(), checkContext.Err())
+			}
+			return fmt.Errorf("check %s: %w", check.ID, err)
+		}
 	}
 	return nil
+}
+
+func runPromotionCommand(ctx context.Context, directory string, values map[string]string, id, kind string, argv []string, reporter domain.DeploymentStepReporter) error {
+	if reporter != nil {
+		if err := reporter(domain.DeploymentStepUpdate{ID: id, Kind: kind, Status: domain.DeploymentStepRunning}); err != nil {
+			return err
+		}
+	}
+	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	command.Dir = directory
+	command.Env = append(os.Environ(), environment(values)...)
+	var output limitedBuffer
+	command.Stdout = &output
+	command.Stderr = &output
+	commandErr := command.Run()
+	logs := output.String()
+	status := domain.DeploymentStepSucceeded
+	message := ""
+	if commandErr != nil {
+		status = domain.DeploymentStepFailed
+		message = commandErr.Error()
+	}
+	if reporter != nil {
+		if err := reporter(domain.DeploymentStepUpdate{ID: id, Kind: kind, Status: status, Logs: logs, Error: message}); err != nil {
+			return errors.Join(commandErr, err)
+		}
+	}
+	if commandErr != nil {
+		return fmt.Errorf("process failed: %w%s", commandErr, errorLogs(logs))
+	}
+	return nil
+}
+
+type limitedBuffer struct {
+	buffer    bytes.Buffer
+	truncated bool
+}
+
+func (b *limitedBuffer) Write(value []byte) (int, error) {
+	remaining := maxLogs - b.buffer.Len()
+	if remaining > 0 {
+		written := len(value)
+		if written > remaining {
+			written = remaining
+			b.truncated = true
+		}
+		_, _ = b.buffer.Write(value[:written])
+	} else {
+		b.truncated = true
+	}
+	return len(value), nil
+}
+
+func (b *limitedBuffer) String() string {
+	value := b.buffer.String()
+	if b.truncated {
+		value += "\n[logs truncated]\n"
+	}
+	return value
 }
 
 func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) (Result, error) {
