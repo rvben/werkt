@@ -52,12 +52,15 @@ type Store interface {
 	ListAutomations(context.Context, database.AutomationFilter) ([]database.AutomationSummary, error)
 	GetAutomation(context.Context, string) (database.AutomationDetail, error)
 	SetAutomationEnabled(context.Context, string, bool, string) (bool, error)
+	RollbackAutomation(context.Context, string, string, string) (bool, error)
 	EnqueueManualRun(context.Context, string, string, json.RawMessage, string) (string, bool, error)
 	ListRunsFiltered(context.Context, string, string, int) ([]domain.Run, error)
 	GetRun(context.Context, string) (domain.Run, error)
 	ListAuditEvents(context.Context, string, int) ([]database.AuditEvent, error)
 	ListDeploymentsFiltered(context.Context, string, string, int) ([]domain.Deployment, error)
 	GetDeployment(context.Context, string) (domain.Deployment, error)
+	RequestDeploymentCancellation(context.Context, string, string) (domain.Deployment, error)
+	RetryDeployment(context.Context, string, string, string, string) (domain.Deployment, bool, error)
 }
 
 type DeploymentIntake interface {
@@ -88,12 +91,15 @@ func New(store Store, address, managementToken string, options ...Option) *Serve
 	mux.Handle("GET /api/v1/automations/{automation}", value.requireManagementAuth(http.HandlerFunc(value.automation)))
 	mux.Handle("PATCH /api/v1/automations/{automation}", value.requireManagementAuth(http.HandlerFunc(value.updateAutomation)))
 	mux.Handle("POST /api/v1/automations/{automation}/runs", value.requireManagementAuth(http.HandlerFunc(value.manualRun)))
+	mux.Handle("POST /api/v1/automations/{automation}/rollback", value.requireManagementAuth(http.HandlerFunc(value.rollbackAutomation)))
 	mux.Handle("GET /api/v1/runs", value.requireManagementAuth(http.HandlerFunc(value.runs)))
 	mux.Handle("GET /api/v1/runs/{run}", value.requireManagementAuth(http.HandlerFunc(value.run)))
 	mux.Handle("GET /api/v1/audit", value.requireManagementAuth(http.HandlerFunc(value.audit)))
 	mux.Handle("POST /api/v1/deployments", value.requireManagementAuth(http.HandlerFunc(value.createDeployment)))
 	mux.Handle("GET /api/v1/deployments", value.requireManagementAuth(http.HandlerFunc(value.deployments)))
 	mux.Handle("GET /api/v1/deployments/{deployment}", value.requireManagementAuth(http.HandlerFunc(value.deployment)))
+	mux.Handle("POST /api/v1/deployments/{deployment}/cancel", value.requireManagementAuth(http.HandlerFunc(value.cancelDeployment)))
+	mux.Handle("POST /api/v1/deployments/{deployment}/retry", value.requireManagementAuth(http.HandlerFunc(value.retryDeployment)))
 	value.server = &http.Server{
 		Addr:              address,
 		Handler:           requestLogger(mux),
@@ -140,7 +146,7 @@ func (s *Server) createDeployment(response http.ResponseWriter, request *http.Re
 		status = http.StatusOK
 	}
 	response.Header().Set("Location", "/api/v1/deployments/"+value.ID)
-	if value.Status != domain.DeploymentSucceeded && value.Status != domain.DeploymentFailed {
+	if !terminalDeploymentStatus(value.Status) {
 		response.Header().Set("Retry-After", "1")
 	}
 	writeJSON(response, status, map[string]any{"deployment": value, "created": created})
@@ -154,7 +160,7 @@ func (s *Server) deployments(response http.ResponseWriter, request *http.Request
 	}
 	status := request.URL.Query().Get("status")
 	if status != "" && !validDeploymentStatus(status) {
-		writeError(response, http.StatusBadRequest, "status must be queued, validating, building, activating, succeeded, or failed")
+		writeError(response, http.StatusBadRequest, "status must be queued, validating, building, checking, activating, succeeded, failed, or cancelled")
 		return
 	}
 	values, err := s.store.ListDeploymentsFiltered(request.Context(), request.URL.Query().Get("automation"), status, limit)
@@ -175,7 +181,7 @@ func (s *Server) deployment(response http.ResponseWriter, request *http.Request)
 		writeError(response, http.StatusInternalServerError, "get deployment")
 		return
 	}
-	if value.Status != domain.DeploymentSucceeded && value.Status != domain.DeploymentFailed {
+	if !terminalDeploymentStatus(value.Status) {
 		response.Header().Set("Retry-After", "1")
 	}
 	writeJSON(response, http.StatusOK, value)
@@ -184,10 +190,95 @@ func (s *Server) deployment(response http.ResponseWriter, request *http.Request)
 func validDeploymentStatus(status string) bool {
 	switch status {
 	case domain.DeploymentQueued, domain.DeploymentValidating, domain.DeploymentBuilding,
-		domain.DeploymentActivating, domain.DeploymentSucceeded, domain.DeploymentFailed:
+		domain.DeploymentChecking, domain.DeploymentActivating, domain.DeploymentSucceeded,
+		domain.DeploymentFailed, domain.DeploymentCancelled:
 		return true
 	default:
 		return false
+	}
+}
+
+func terminalDeploymentStatus(status string) bool {
+	return status == domain.DeploymentSucceeded || status == domain.DeploymentFailed || status == domain.DeploymentCancelled
+}
+
+func (s *Server) cancelDeployment(response http.ResponseWriter, request *http.Request) {
+	value, err := s.store.RequestDeploymentCancellation(request.Context(), request.PathValue("deployment"), requestActor(request))
+	switch {
+	case errors.Is(err, database.ErrDeploymentNotFound):
+		writeError(response, http.StatusNotFound, "deployment not found")
+	case errors.Is(err, database.ErrDeploymentNotCancellable):
+		writeError(response, http.StatusConflict, err.Error())
+	case err != nil:
+		writeError(response, http.StatusInternalServerError, "cancel deployment")
+	default:
+		if !terminalDeploymentStatus(value.Status) {
+			response.Header().Set("Retry-After", "1")
+		}
+		writeJSON(response, http.StatusOK, value)
+	}
+}
+
+func (s *Server) retryDeployment(response http.ResponseWriter, request *http.Request) {
+	idempotencyKey := strings.TrimSpace(request.Header.Get("Idempotency-Key"))
+	if err := service.ValidateIdempotencyKey(idempotencyKey); err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	deploymentID, err := service.NewDeploymentID()
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "create deployment identity")
+		return
+	}
+	value, created, err := s.store.RetryDeployment(
+		request.Context(), request.PathValue("deployment"), deploymentID, idempotencyKey, requestActor(request),
+	)
+	switch {
+	case errors.Is(err, database.ErrDeploymentNotFound):
+		writeError(response, http.StatusNotFound, "deployment not found")
+	case errors.Is(err, database.ErrDeploymentNotRetryable), errors.Is(err, database.ErrDeploymentSourceUnavailable), errors.Is(err, database.ErrDeploymentIdempotencyConflict):
+		writeError(response, http.StatusConflict, err.Error())
+	case err != nil:
+		writeError(response, http.StatusInternalServerError, "retry deployment")
+	default:
+		status := http.StatusAccepted
+		if !created {
+			status = http.StatusOK
+		}
+		response.Header().Set("Location", "/api/v1/deployments/"+value.ID)
+		response.Header().Set("Retry-After", "1")
+		writeJSON(response, status, map[string]any{"deployment": value, "created": created})
+	}
+}
+
+func (s *Server) rollbackAutomation(response http.ResponseWriter, request *http.Request) {
+	var body struct {
+		RevisionID string `json:"revisionId"`
+	}
+	if err := decodeJSON(response, request, 1024, &body); err != nil {
+		return
+	}
+	if strings.TrimSpace(body.RevisionID) == "" {
+		writeError(response, http.StatusBadRequest, "revisionId is required")
+		return
+	}
+	changed, err := s.store.RollbackAutomation(
+		request.Context(), request.PathValue("automation"), strings.TrimSpace(body.RevisionID), requestActor(request),
+	)
+	switch {
+	case errors.Is(err, database.ErrAutomationNotFound):
+		writeError(response, http.StatusNotFound, "automation not found")
+	case errors.Is(err, database.ErrRevisionNotFound):
+		writeError(response, http.StatusNotFound, "revision not found for automation")
+	case err != nil:
+		writeError(response, http.StatusInternalServerError, "rollback automation")
+	default:
+		value, getErr := s.store.GetAutomation(request.Context(), request.PathValue("automation"))
+		if getErr != nil {
+			writeError(response, http.StatusInternalServerError, "get rolled back automation")
+			return
+		}
+		writeJSON(response, http.StatusOK, map[string]any{"automation": value, "changed": changed})
 	}
 }
 

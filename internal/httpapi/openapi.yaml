@@ -105,6 +105,37 @@ paths:
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+  /api/v1/automations/{automation}/rollback:
+    post:
+      operationId: rollbackAutomation
+      security: [{BearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/AutomationID"}
+        - {$ref: "#/components/parameters/Actor"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                revisionId: {type: string}
+              required: [revisionId]
+      responses:
+        "200":
+          description: The selected immutable revision is active; repeated requests are no-ops.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  automation: {$ref: "#/components/schemas/AutomationDetail"}
+                  changed: {type: boolean}
+                required: [automation, changed]
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
   /api/v1/deployments:
     post:
       operationId: createDeployment
@@ -145,7 +176,7 @@ paths:
           schema: {type: string}
         - name: status
           in: query
-          schema: {type: string, enum: [queued, validating, building, activating, succeeded, failed]}
+          schema: {type: string, enum: [queued, validating, building, checking, activating, succeeded, failed, cancelled]}
         - {$ref: "#/components/parameters/Limit"}
       responses:
         "200":
@@ -174,6 +205,37 @@ paths:
               schema: {$ref: "#/components/schemas/Deployment"}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+  /api/v1/deployments/{deployment}/cancel:
+    post:
+      operationId: cancelDeployment
+      security: [{BearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/DeploymentID"}
+        - {$ref: "#/components/parameters/Actor"}
+      responses:
+        "200":
+          description: Cancellation was recorded. Active work stops cooperatively and remains pollable.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Deployment"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+  /api/v1/deployments/{deployment}/retry:
+    post:
+      operationId: retryDeployment
+      security: [{BearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/DeploymentID"}
+        - {$ref: "#/components/parameters/Actor"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+      responses:
+        "202": {$ref: "#/components/responses/DeploymentAccepted"}
+        "200": {$ref: "#/components/responses/DeploymentAccepted"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
   /api/v1/runs:
     get:
       operationId: listRuns
@@ -307,6 +369,11 @@ components:
       in: path
       required: true
       schema: {type: string}
+    DeploymentID:
+      name: deployment
+      in: path
+      required: true
+      schema: {type: string}
     TriggerID:
       name: trigger
       in: path
@@ -320,6 +387,7 @@ components:
     IdempotencyKey:
       name: Idempotency-Key
       in: header
+      required: true
       schema: {type: string}
     Project:
       name: project
@@ -435,18 +503,34 @@ components:
       type: object
       properties:
         id: {type: string}
-        status: {type: string, enum: [queued, validating, building, activating, succeeded, failed]}
+        status: {type: string, enum: [queued, validating, building, checking, activating, succeeded, failed, cancelled]}
         automationId: {type: string}
         packageDigest: {type: string, pattern: "^[a-f0-9]{64}$"}
         contentHash: {type: string, pattern: "^[a-f0-9]{64}$"}
         revisionId: {type: string}
+        retryOf: {type: string}
         actor: {type: string}
         error: {type: string}
+        steps:
+          type: array
+          items: {$ref: "#/components/schemas/DeploymentStep"}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
         startedAt: {type: string, format: date-time}
         finishedAt: {type: string, format: date-time}
+        cancelRequestedAt: {type: string, format: date-time}
       required: [id, status, packageDigest, actor, createdAt, updatedAt]
+    DeploymentStep:
+      type: object
+      properties:
+        id: {type: string}
+        kind: {type: string, enum: [validate, build, check, activate]}
+        status: {type: string, enum: [running, succeeded, failed]}
+        logs: {type: string}
+        error: {type: string}
+        startedAt: {type: string, format: date-time}
+        finishedAt: {type: string, format: date-time}
+      required: [id, kind, status, startedAt]
     AuditEvent:
       type: object
       properties:
