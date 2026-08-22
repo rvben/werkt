@@ -4,11 +4,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -18,16 +18,17 @@ import (
 )
 
 type NtfyReconciler struct {
-	store  *database.Store
-	client *http.Client
-	mu     sync.Mutex
-	active map[string]context.CancelFunc
+	store   *database.Store
+	client  *http.Client
+	secrets SecretResolver
+	mu      sync.Mutex
+	active  map[string]context.CancelFunc
 }
 
 type ntfyConfig struct {
-	Server   string `json:"server"`
-	Topic    string `json:"topic"`
-	TokenEnv string `json:"tokenEnv,omitempty"`
+	Server      string `json:"server"`
+	Topic       string `json:"topic"`
+	TokenSecret string `json:"tokenSecret,omitempty"`
 }
 
 type ntfyMessage struct {
@@ -41,11 +42,20 @@ type ntfyMessage struct {
 	Tags     []string `json:"tags,omitempty"`
 }
 
-func NewNtfyReconciler(store *database.Store) *NtfyReconciler {
+type SecretResolver interface {
+	Resolve(context.Context, []string) (map[string]string, error)
+}
+
+func NewNtfyReconciler(store *database.Store, resolvers ...SecretResolver) *NtfyReconciler {
+	var resolver SecretResolver
+	if len(resolvers) > 0 {
+		resolver = resolvers[0]
+	}
 	return &NtfyReconciler{
-		store:  store,
-		client: &http.Client{Timeout: 0},
-		active: make(map[string]context.CancelFunc),
+		store:   store,
+		client:  &http.Client{Timeout: 0},
+		secrets: resolver,
+		active:  make(map[string]context.CancelFunc),
 	}
 }
 
@@ -127,10 +137,17 @@ func (r *NtfyReconciler) consume(ctx context.Context, definition domain.TriggerD
 	if err != nil {
 		return err
 	}
-	if config.TokenEnv != "" {
-		token := os.Getenv(config.TokenEnv)
+	if config.TokenSecret != "" {
+		if r.secrets == nil {
+			return errors.New("secret resolver is not configured")
+		}
+		values, err := r.secrets.Resolve(ctx, []string{config.TokenSecret})
+		if err != nil {
+			return fmt.Errorf("resolve ntfy token secret %q: %w", config.TokenSecret, err)
+		}
+		token := values[config.TokenSecret]
 		if token == "" {
-			return fmt.Errorf("environment variable %s is empty", config.TokenEnv)
+			return fmt.Errorf("ntfy token secret %q is empty", config.TokenSecret)
 		}
 		request.Header.Set("Authorization", "Bearer "+token)
 	}

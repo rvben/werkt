@@ -17,10 +17,16 @@ import (
 
 const maxLogs = 1 << 20
 
-type ProcessRunner struct{}
+type ProcessRunner struct {
+	secrets SecretResolver
+}
 
-func NewProcessRunner() *ProcessRunner {
-	return &ProcessRunner{}
+func NewProcessRunner(resolvers ...SecretResolver) *ProcessRunner {
+	var resolver SecretResolver
+	if len(resolvers) > 0 {
+		resolver = resolvers[0]
+	}
+	return &ProcessRunner{secrets: resolver}
 }
 
 func (r *ProcessRunner) Build(ctx context.Context, directory string, value domain.Manifest, reporter domain.DeploymentStepReporter) error {
@@ -51,7 +57,7 @@ func runPromotionCommand(ctx context.Context, directory string, values map[strin
 	}
 	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	command.Dir = directory
-	command.Env = append(os.Environ(), environment(values)...)
+	command.Env = append(inheritedRuntimeEnvironment(), environment(values)...)
 	var output limitedBuffer
 	command.Stdout = &output
 	command.Stderr = &output
@@ -108,10 +114,11 @@ func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) 
 	}
 	ctx, cancel := context.WithTimeout(parent, run.Manifest.Execution.TimeoutDuration())
 	defer cancel()
-	runtimeValues, err := resolveRuntimeEnvironment(run.Manifest.Runtime)
+	resolved, err := resolveRuntimeEnvironment(parent, r.secrets, run.Manifest.Runtime)
 	if err != nil {
 		return Result{}, err
 	}
+	redactor := newLogRedactor(resolved.secrets)
 
 	runDirectory, err := os.MkdirTemp("", "werkt-run-")
 	if err != nil {
@@ -130,17 +137,17 @@ func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) 
 
 	command := exec.CommandContext(ctx, run.Manifest.Runtime.Command[0], run.Manifest.Runtime.Command[1:]...)
 	command.Dir = run.ArtifactPath
-	command.Env = append(inheritedRuntimeEnvironment(), runtimeEnvironment(run, eventPath, resultPath, runtimeValues)...)
+	command.Env = append(inheritedRuntimeEnvironment(), runtimeEnvironment(run, eventPath, resultPath, resolved.values)...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	commandErr := command.Run()
-	logs := formatLogs(stdout.String(), stderr.String())
+	logs := formatLogs(redactor.Redact(stdout.String()), redactor.Redact(stderr.String()))
 	if ctx.Err() != nil {
 		return Result{Logs: logs}, fmt.Errorf("automation exceeded timeout %s: %w", run.Manifest.Execution.TimeoutDuration(), ctx.Err())
 	}
 	if commandErr != nil {
-		return Result{Logs: logs}, fmt.Errorf("automation process failed: %w", commandErr)
+		return Result{Logs: logs}, fmt.Errorf("automation process failed: %w", redactor.Error(commandErr))
 	}
 
 	resultJSON, err := os.ReadFile(resultPath)
