@@ -27,6 +27,7 @@ func TestSelectRetentionCandidatesProtectsActiveAndRecentStorage(t *testing.T) {
 	artifacts := []database.RevisionArtifactRecord{
 		{ID: "active-revision", AutomationID: "alpha", Path: "/data/artifacts/active", CreatedAt: old, Active: true},
 		{ID: "running-revision", AutomationID: "alpha", Path: "/data/artifacts/running", CreatedAt: old, ReferencedByRun: true},
+		{ID: "deploying-revision", AutomationID: "alpha", Path: "/data/artifacts/deploying", CreatedAt: old, ReferencedByDeployment: true},
 		{ID: "inactive-new", AutomationID: "alpha", Path: "/data/artifacts/inactive-new", CreatedAt: old.Add(time.Hour)},
 		{ID: "inactive-old", AutomationID: "alpha", Path: "/data/artifacts/inactive-old", CreatedAt: old},
 	}

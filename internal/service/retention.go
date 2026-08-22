@@ -251,7 +251,7 @@ func selectRetentionCandidates(now time.Time, policy domain.RetentionPolicy, sou
 		if record.CreatedAt.After(group.newest) {
 			group.newest = record.CreatedAt
 		}
-		group.protected = group.protected || record.Active || record.ReferencedByRun
+		group.protected = group.protected || record.Active || record.ReferencedByRun || record.ReferencedByDeployment
 	}
 	markArtifactCountProtection(artifactGroups, policy.KeepInactiveRevisions)
 
