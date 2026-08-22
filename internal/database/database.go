@@ -29,9 +29,13 @@ var (
 	ErrDeploymentCancelled           = errors.New("deployment cancellation was requested")
 	ErrAutomationNotFound            = errors.New("automation not found")
 	ErrRevisionNotFound              = errors.New("revision not found for automation")
+	ErrRevisionArtifactUnavailable   = errors.New("revision artifact is no longer retained")
 	ErrRunNotFound                   = errors.New("run not found")
 	ErrDeploymentNotFound            = errors.New("deployment not found")
 	ErrTriggerNotFound               = errors.New("enabled trigger not found")
+	ErrRetentionPlanNotFound         = errors.New("retention plan not found")
+	ErrRetentionPlanExpired          = errors.New("retention plan expired")
+	ErrRetentionPlanBusy             = errors.New("retention plan is already being applied")
 )
 
 //go:embed migrations/*.sql
@@ -312,10 +316,17 @@ func (s *Store) RollbackAutomation(ctx context.Context, automationID, revisionID
 		return false, err
 	}
 	var manifestJSON []byte
-	if err := tx.QueryRow(ctx, `SELECT manifest FROM revisions WHERE id = $1 AND automation_id = $2`, revisionID, automationID).Scan(&manifestJSON); errors.Is(err, pgx.ErrNoRows) {
+	var artifactPath string
+	if err := tx.QueryRow(ctx, `
+		SELECT manifest, artifact_path FROM revisions
+		WHERE id = $1 AND automation_id = $2 FOR UPDATE`, revisionID, automationID).
+		Scan(&manifestJSON, &artifactPath); errors.Is(err, pgx.ErrNoRows) {
 		return false, ErrRevisionNotFound
 	} else if err != nil {
 		return false, err
+	}
+	if artifactPath == "" {
+		return false, ErrRevisionArtifactUnavailable
 	}
 	if currentRevision == revisionID {
 		return false, tx.Commit(ctx)
