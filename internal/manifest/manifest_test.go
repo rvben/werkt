@@ -150,13 +150,13 @@ func TestValidateRequiresIngressCredentialReferencesAndValidatesRuntimeSecrets(t
 		Kind:       "Automation",
 		Metadata:   domain.Metadata{Name: "secure-example", Project: "personal"},
 		Triggers: []domain.Trigger{
-			{ID: "hook", Type: "webhook", Config: map[string]any{"secretEnv": "EXAMPLE_WEBHOOK_SECRET"}},
-			{ID: "mail", Type: "email", Config: map[string]any{"tokenEnv": "EXAMPLE_EMAIL_TOKEN"}},
+			{ID: "hook", Type: "webhook", Config: map[string]any{"secret": "personal/webhook-secret"}},
+			{ID: "mail", Type: "email", Config: map[string]any{"tokenSecret": "personal/email-token"}},
 		},
 		Runtime: domain.Runtime{
 			Language: "python",
 			Command:  []string{"python3", "main.py"},
-			Secrets:  map[string]string{"SERVICE_TOKEN": "EXAMPLE_SERVICE_TOKEN"},
+			Secrets:  map[string]string{"SERVICE_TOKEN": "personal/service-token"},
 		},
 	}
 	if err := manifest.Validate(value); err != nil {
@@ -164,12 +164,12 @@ func TestValidateRequiresIngressCredentialReferencesAndValidatesRuntimeSecrets(t
 	}
 
 	value.Triggers[0].Config = nil
-	value.Runtime.Secrets["MANAGEMENT_TOKEN"] = "WERKT_MANAGEMENT_TOKEN"
+	value.Runtime.Secrets["MANAGEMENT_TOKEN"] = "UPPER_CASE"
 	err := manifest.Validate(value)
 	if err == nil {
 		t.Fatal("Validate() error = nil")
 	}
-	if !strings.Contains(err.Error(), "config.secretEnv") || !strings.Contains(err.Error(), "non-WERKT environment variable") {
+	if !strings.Contains(err.Error(), "config.secret") || !strings.Contains(err.Error(), "must name a Werkt secret") {
 		t.Fatalf("Validate() error = %v", err)
 	}
 }

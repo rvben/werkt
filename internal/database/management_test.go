@@ -13,7 +13,6 @@ import (
 
 func TestManagementLifecycleIntegration(t *testing.T) {
 	const runtimeSecretValue = "integration-runtime-secret-value-never-persist"
-	t.Setenv("TEST_RUNTIME_SERVICE_TOKEN", runtimeSecretValue)
 	databaseURL := os.Getenv("WERKT_TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("WERKT_TEST_DATABASE_URL is not set")
@@ -29,12 +28,17 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	reset := func() {
-		if _, err := store.pool.Exec(ctx, `TRUNCATE deployments, audit_events, runs, events, triggers, revisions, automations CASCADE`); err != nil {
+		if _, err := store.pool.Exec(ctx, `TRUNCATE deployments, audit_events, runs, events, triggers, revisions, automations, secrets CASCADE`); err != nil {
 			t.Errorf("reset database: %v", err)
 		}
 	}
 	reset()
 	defer reset()
+	for _, name := range []string{"tests/webhook", "tests/runtime-token"} {
+		if _, _, err := store.PutEncryptedSecret(ctx, name, "fixture", []byte("encrypted-fixture"), "test-key", "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	enabled := true
 	value := domain.Manifest{
@@ -44,13 +48,13 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 			Name: "managed-example", Project: "operations", Folder: "alerts", Labels: []string{"critical"},
 		},
 		Triggers: []domain.Trigger{
-			{ID: "incoming", Type: "webhook", Enabled: &enabled, Config: map[string]any{"secretEnv": "TEST_WEBHOOK_SECRET"}},
+			{ID: "incoming", Type: "webhook", Enabled: &enabled, Config: map[string]any{"secret": "tests/webhook"}},
 			{ID: "minute", Type: "schedule", Enabled: &enabled, Config: map[string]any{"cron": "* * * * *", "timezone": "UTC"}},
 		},
 		Runtime: domain.Runtime{
 			Language: "go",
 			Command:  []string{"./automation"},
-			Secrets:  map[string]string{"SERVICE_TOKEN": "TEST_RUNTIME_SERVICE_TOKEN"},
+			Secrets:  map[string]string{"SERVICE_TOKEN": "tests/runtime-token"},
 		},
 		Execution: domain.Execution{Retries: 1, Concurrency: "forbid"},
 	}
@@ -77,14 +81,14 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 	if len(detail.Triggers) != 2 || len(detail.Revisions) != 1 || !detail.Enabled {
 		t.Fatalf("detail = %#v", detail)
 	}
-	if detail.Manifest.Runtime.Secrets["SERVICE_TOKEN"] != "TEST_RUNTIME_SERVICE_TOKEN" {
+	if detail.Manifest.Runtime.Secrets["SERVICE_TOKEN"] != "tests/runtime-token" {
 		t.Fatalf("runtime secret reference = %#v", detail.Manifest.Runtime.Secrets)
 	}
 	var persistedManifest string
 	if err := store.pool.QueryRow(ctx, `SELECT manifest::text FROM revisions WHERE id = $1`, revisionID).Scan(&persistedManifest); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(persistedManifest, runtimeSecretValue) || !strings.Contains(persistedManifest, "TEST_RUNTIME_SERVICE_TOKEN") {
+	if strings.Contains(persistedManifest, runtimeSecretValue) || !strings.Contains(persistedManifest, "tests/runtime-token") {
 		t.Fatalf("persisted manifest crossed secret boundary: %s", persistedManifest)
 	}
 	policy, err := store.GetTriggerIngressPolicy(ctx, value.Metadata.Name, "incoming", "webhook")

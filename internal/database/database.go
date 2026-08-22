@@ -36,6 +36,8 @@ var (
 	ErrRetentionPlanNotFound         = errors.New("retention plan not found")
 	ErrRetentionPlanExpired          = errors.New("retention plan expired")
 	ErrRetentionPlanBusy             = errors.New("retention plan is already being applied")
+	ErrSecretNotFound                = errors.New("secret not found")
+	ErrSecretInUse                   = errors.New("secret is in use")
 )
 
 //go:embed migrations/*.sql
@@ -222,6 +224,9 @@ func (s *Store) deploy(ctx context.Context, value domain.Manifest, contentHash, 
 	}
 
 	if err := replaceTriggers(ctx, tx, value.Metadata.Name, revisionID, value.Triggers); err != nil {
+		return "", err
+	}
+	if err := replaceSecretReferences(ctx, tx, revisionID, value.SecretReferences()); err != nil {
 		return "", err
 	}
 
