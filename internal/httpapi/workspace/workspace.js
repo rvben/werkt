@@ -19,6 +19,14 @@
   const runError = document.querySelector("#run-error");
   const runPayload = document.querySelector("#run-payload");
   const runIdempotency = document.querySelector("#run-idempotency");
+  const actionDialog = document.querySelector("#action-dialog");
+  const actionForm = document.querySelector("#action-form");
+  const actionTitle = document.querySelector("#action-dialog-title");
+  const actionMessage = document.querySelector("#action-dialog-message");
+  const actionError = document.querySelector("#action-error");
+  const actionSubmit = document.querySelector("#action-submit");
+  const actionDismiss = document.querySelector("#action-dismiss");
+  const actionIconUse = document.querySelector("#action-icon-use");
   const toastRegion = document.querySelector("#toast-region");
 
   class APIError extends Error {
@@ -51,6 +59,7 @@
     deploymentStatusFilter: "all",
     loading: true,
     mutating: false,
+    pendingAction: null,
   };
 
   const icons = {
@@ -347,7 +356,7 @@
 
   function renderRevisions(revisions) {
     if (!revisions.length) return `<div class="empty-state"><div class="empty-state-inner"><h2>No revisions available</h2><p>Deploy the automation package to create its first immutable revision.</p></div></div>`;
-    return `<div class="revision-list">${revisions.slice(0, 8).map((revision) => `<div class="revision-row"><strong class="mono">${escapeHTML(shortID(revision.id, 18))}${revision.active ? " · active" : ""}</strong><span class="mono" title="${escapeHTML(revision.contentHash)}">${escapeHTML(shortID(revision.contentHash, 16))}</span><span class="tabular">${escapeHTML(formatDate(revision.createdAt))}</span></div>`).join("")}</div>`;
+    return `<div class="revision-list">${revisions.slice(0, 8).map((revision) => `<div class="revision-row"><strong class="mono">${escapeHTML(shortID(revision.id, 18))}${revision.active ? " · active" : ""}</strong><span class="mono" title="${escapeHTML(revision.contentHash)}">${escapeHTML(shortID(revision.contentHash, 16))}</span><span class="tabular">${escapeHTML(formatDate(revision.createdAt))}</span><span class="revision-action">${revision.active ? '<span class="muted-value">Current</span>' : `<button class="button button-quiet button-compact" type="button" data-rollback-revision="${escapeHTML(revision.id)}" ${state.mutating ? "disabled" : ""}>${icon("rollback")}Roll back</button>`}</span></div>`).join("")}</div>`;
   }
 
   function renderGlobalRuns() {
@@ -360,7 +369,7 @@
       ? state.deployments
       : state.deployments.filter((deployment) => deployment.status === state.deploymentStatusFilter);
     const activeCount = state.deployments.filter((deployment) => !deployment.finishedAt).length;
-    workspaceContent.innerHTML = `<section class="global-view"><header class="global-view-header"><div><h1>Deployments</h1><p>Package intake, validation, build, and activation across every automation.${activeCount ? ` ${activeCount} ${activeCount === 1 ? "deployment is" : "deployments are"} still in progress.` : ""}</p></div><div class="global-toolbar"><label class="sr-only" for="deployment-status-filter">Filter deployments by status</label><select class="select-control" id="deployment-status-filter"><option value="all">All statuses</option>${["queued", "validating", "building", "activating", "succeeded", "failed"].map((status) => `<option value="${status}"${state.deploymentStatusFilter === status ? " selected" : ""}>${capitalize(status)}</option>`).join("")}</select></div></header>${renderDeploymentsTable(deployments)}</section>`;
+    workspaceContent.innerHTML = `<section class="global-view"><header class="global-view-header"><div><h1>Deployments</h1><p>Package intake, validation, build, checks, and activation across every automation.${activeCount ? ` ${activeCount} ${activeCount === 1 ? "deployment is" : "deployments are"} still in progress.` : ""}</p></div><div class="global-toolbar"><label class="sr-only" for="deployment-status-filter">Filter deployments by status</label><select class="select-control" id="deployment-status-filter"><option value="all">All statuses</option>${["queued", "validating", "building", "checking", "activating", "succeeded", "failed", "cancelled"].map((status) => `<option value="${status}"${state.deploymentStatusFilter === status ? " selected" : ""}>${capitalize(status)}</option>`).join("")}</select></div></header>${renderDeploymentsTable(deployments)}</section>`;
   }
 
   function renderDeploymentsTable(deployments) {
@@ -383,6 +392,7 @@
     shell.classList.add("has-diagnosis");
     diagnosisContent.innerHTML = `<div class="workspace-loading"><div class="skeleton skeleton-title"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-block"></div></div>`;
     try {
+      state.selectedDeployment = null;
       state.selectedRun = await api(`/api/v1/runs/${encodeURIComponent(runID)}`);
       state.diagnosisTab = "summary";
       renderDiagnosis(true);
@@ -399,6 +409,7 @@
     shell.classList.add("has-diagnosis");
     diagnosisContent.innerHTML = `<div class="workspace-loading"><div class="skeleton skeleton-title"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-block"></div></div>`;
     try {
+      state.selectedRun = null;
       state.selectedDeployment = await api(`/api/v1/deployments/${encodeURIComponent(deploymentID)}`);
       renderDeploymentDiagnosis(true);
     } catch (error) {
@@ -430,11 +441,46 @@
   function renderDeploymentDiagnosis(focusPanel = false) {
     const deployment = state.selectedDeployment;
     if (!deployment) return;
-    const failure = deployment.error
+    diagnosisContent.innerHTML = `<div class="diagnosis-header"><div class="diagnosis-header-top"><h2 id="diagnosis-title">Deployment details</h2><button class="icon-button" type="button" data-close-diagnosis aria-label="Close deployment details">${icon("close")}</button></div><div class="diagnosis-run"><span class="status-badge status-${statusClass(deployment.status)}" data-deployment-status>${escapeHTML(capitalize(deployment.status))}</span><code title="${escapeHTML(deployment.id)}">${escapeHTML(deployment.id)}</code></div><p class="diagnosis-meta"><span>${escapeHTML(deployment.automationId || "Manifest not validated yet")}</span><span data-deployment-duration>${escapeHTML(deploymentDuration(deployment))}</span><span>${escapeHTML(deployment.actor)}</span></p><div data-deployment-actions>${deploymentActions(deployment)}</div></div><div class="diagnosis-body">${deploymentDiagnosisBody(deployment)}</div>`;
+    if (focusPanel) diagnosisContent.querySelector("[data-close-diagnosis]").focus();
+  }
+
+  function deploymentActions(deployment) {
+    const terminal = ["succeeded", "failed", "cancelled"].includes(deployment.status);
+    if (!terminal && !deployment.cancelRequestedAt) return `<div class="deployment-actions"><button class="button button-danger" type="button" data-cancel-deployment="${escapeHTML(deployment.id)}" ${state.mutating ? "disabled" : ""}>Cancel deployment</button></div>`;
+    if (["failed", "cancelled"].includes(deployment.status)) return `<div class="deployment-actions"><button class="button button-primary" type="button" data-retry-deployment="${escapeHTML(deployment.id)}" ${state.mutating ? "disabled" : ""}>${icon("refresh")}Retry package</button></div>`;
+    return "";
+  }
+
+  function deploymentDiagnosisBody(deployment) {
+    const failure = deployment.status === "failed" && deployment.error
       ? `<section class="deployment-error" aria-labelledby="deployment-error-title"><h3 id="deployment-error-title">Failure</h3><p>${escapeHTML(deployment.error)}</p></section>`
       : "";
-    diagnosisContent.innerHTML = `<div class="diagnosis-header"><div class="diagnosis-header-top"><h2 id="diagnosis-title">Deployment details</h2><button class="icon-button" type="button" data-close-diagnosis aria-label="Close deployment details">${icon("close")}</button></div><div class="diagnosis-run"><span class="status-badge status-${statusClass(deployment.status)}">${escapeHTML(capitalize(deployment.status))}</span><code title="${escapeHTML(deployment.id)}">${escapeHTML(deployment.id)}</code></div><p class="diagnosis-meta"><span>${escapeHTML(deployment.automationId || "Manifest not validated yet")}</span><span>${escapeHTML(deploymentDuration(deployment))}</span><span>${escapeHTML(deployment.actor)}</span></p></div><div class="diagnosis-body">${failure}<dl class="diagnosis-facts"><dt>Automation</dt><dd>${escapeHTML(deployment.automationId || "Awaiting manifest")}</dd><dt>Revision</dt><dd class="mono">${escapeHTML(deployment.revisionId || "Not activated")}</dd><dt>Package SHA-256</dt><dd class="mono">${escapeHTML(deployment.packageDigest)}</dd><dt>Content hash</dt><dd class="mono">${escapeHTML(deployment.contentHash || "Not built")}</dd><dt>Received</dt><dd class="tabular">${escapeHTML(formatDate(deployment.createdAt))}</dd><dt>Started</dt><dd class="tabular">${escapeHTML(formatDate(deployment.startedAt))}</dd><dt>Finished</dt><dd class="tabular">${escapeHTML(formatDate(deployment.finishedAt))}</dd><dt>Updated</dt><dd class="tabular">${escapeHTML(formatDate(deployment.updatedAt))}</dd></dl></div>`;
-    if (focusPanel) diagnosisContent.querySelector("[data-close-diagnosis]").focus();
+    const cancellation = deployment.cancelRequestedAt && deployment.status !== "cancelled"
+      ? `<section class="deployment-notice" aria-labelledby="deployment-cancellation-title"><h3 id="deployment-cancellation-title">Cancellation requested</h3><p>Werkt is stopping the active promotion command. Requested ${escapeHTML(relativeTime(deployment.cancelRequestedAt))}.</p></section>`
+      : "";
+    return `${failure}${cancellation}${renderDeploymentSteps(deployment.steps || [])}<dl class="diagnosis-facts"><dt>Automation</dt><dd>${escapeHTML(deployment.automationId || "Awaiting manifest")}</dd><dt>Revision</dt><dd class="mono">${escapeHTML(deployment.revisionId || "Not activated")}</dd>${deployment.retryOf ? `<dt>Retry of</dt><dd class="mono">${escapeHTML(deployment.retryOf)}</dd>` : ""}<dt>Package SHA-256</dt><dd class="mono">${escapeHTML(deployment.packageDigest)}</dd><dt>Content hash</dt><dd class="mono">${escapeHTML(deployment.contentHash || "Not built")}</dd><dt>Received</dt><dd class="tabular">${escapeHTML(formatDate(deployment.createdAt))}</dd><dt>Started</dt><dd class="tabular">${escapeHTML(formatDate(deployment.startedAt))}</dd><dt>Finished</dt><dd class="tabular">${escapeHTML(formatDate(deployment.finishedAt))}</dd><dt>Updated</dt><dd class="tabular">${escapeHTML(formatDate(deployment.updatedAt))}</dd></dl>`;
+  }
+
+  function updateDeploymentDiagnosis(deployment) {
+    const status = diagnosisContent.querySelector("[data-deployment-status]");
+    if (!status) {
+      renderDeploymentDiagnosis();
+      return;
+    }
+    status.className = `status-badge status-${statusClass(deployment.status)}`;
+    status.textContent = capitalize(deployment.status);
+    diagnosisContent.querySelector("[data-deployment-duration]").textContent = deploymentDuration(deployment);
+    const focused = document.activeElement;
+    const actions = diagnosisContent.querySelector("[data-deployment-actions]");
+    if (!actions.contains(focused)) actions.innerHTML = deploymentActions(deployment);
+    const body = diagnosisContent.querySelector(".diagnosis-body");
+    if (!body.contains(focused)) body.innerHTML = deploymentDiagnosisBody(deployment);
+  }
+
+  function renderDeploymentSteps(steps) {
+    if (!steps.length) return `<section class="deployment-steps"><div class="deployment-steps-heading"><h3>Promotion steps</h3><span>Waiting for worker</span></div><p class="muted-value">Diagnostics will appear as validation begins.</p></section>`;
+    return `<section class="deployment-steps" aria-labelledby="deployment-steps-title"><div class="deployment-steps-heading"><h3 id="deployment-steps-title">Promotion steps</h3><span>${steps.length} recorded</span></div><div class="step-list">${steps.map((step) => `<article class="step-row"><div class="step-heading"><span class="status-dot ${step.status === "succeeded" ? "is-healthy" : step.status === "failed" ? "is-failed" : "is-running"}" aria-hidden="true"></span><strong>${escapeHTML(step.id === "validate" || step.id === "build" || step.id === "activate" ? capitalize(step.id) : step.id.replace(/^check:/, "Check · "))}</strong><span class="status-badge status-${statusClass(step.status)}">${escapeHTML(capitalize(step.status))}</span><time class="tabular">${escapeHTML(stepDuration(step))}</time></div>${step.error ? `<p class="step-error">${escapeHTML(step.error)}</p>` : ""}${step.logs ? `<pre class="step-logs">${escapeHTML(step.logs)}</pre>` : ""}</article>`).join("")}</div></section>`;
   }
 
   function selectDiagnosisTab(tab, moveFocus = true) {
@@ -517,6 +563,84 @@
     }
   }
 
+  function openAction(action) {
+    state.pendingAction = action;
+    actionError.textContent = "";
+    if (action.kind === "rollback") {
+      actionIconUse.setAttribute("href", "#icon-rollback");
+      actionTitle.textContent = "Roll back revision?";
+      actionMessage.textContent = `Werkt will make ${action.revisionId} active for ${state.detail.id} and replace its effective triggers. Running jobs keep their pinned revision.`;
+      actionSubmit.textContent = "Roll back revision";
+    } else {
+      actionIconUse.setAttribute("href", "#icon-stop");
+      actionTitle.textContent = "Cancel deployment?";
+      actionMessage.textContent = `Werkt will stop ${action.deploymentId} at its current promotion step. Its source and diagnostics remain available for a retry.`;
+      actionSubmit.textContent = "Cancel deployment";
+    }
+    actionDialog.showModal();
+    actionDismiss.focus();
+  }
+
+  async function executeAction() {
+    if (!state.pendingAction || state.mutating) return;
+    const action = state.pendingAction;
+    state.mutating = true;
+    actionSubmit.disabled = true;
+    actionError.textContent = "";
+    try {
+      if (action.kind === "rollback") {
+        await api(`/api/v1/automations/${encodeURIComponent(state.detail.id)}/rollback`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({revisionId: action.revisionId}),
+        });
+        actionDialog.close();
+        showToast(`${action.revisionId} is active.`);
+        await loadWorkspace({preserveSelection: true});
+      } else {
+        const deployment = await api(`/api/v1/deployments/${encodeURIComponent(action.deploymentId)}/cancel`, {method: "POST"});
+        actionDialog.close();
+        state.selectedDeployment = deployment;
+        showToast(deployment.status === "cancelled" ? "Deployment cancelled." : "Cancellation requested.");
+        await refreshDeploymentLists();
+        renderDeploymentDiagnosis();
+      }
+      state.pendingAction = null;
+    } catch (error) {
+      if (!(error instanceof AuthenticationRequired)) actionError.textContent = error.message;
+    } finally {
+      state.mutating = false;
+      actionSubmit.disabled = false;
+      render();
+      if (state.selectedDeployment) renderDeploymentDiagnosis();
+    }
+  }
+
+  async function retryDeployment(deploymentID) {
+    if (state.mutating) return;
+    state.mutating = true;
+    renderDeploymentDiagnosis();
+    try {
+      const response = await api(`/api/v1/deployments/${encodeURIComponent(deploymentID)}/retry`, {
+        method: "POST",
+        headers: {"Idempotency-Key": `workspace-retry-${deploymentID}`},
+      });
+      showToast(response.created ? "Package queued for retry." : "This retry is already queued.");
+      await refreshDeploymentLists();
+      await openDeployment(response.deployment.id);
+    } catch (error) {
+      if (!(error instanceof AuthenticationRequired)) showToast(error.message, true);
+    } finally {
+      state.mutating = false;
+      if (state.selectedDeployment) renderDeploymentDiagnosis();
+    }
+  }
+
+  async function refreshDeploymentLists() {
+    state.deployments = await api("/api/v1/deployments?limit=100");
+    if (state.view === "deployments") renderGlobalDeployments();
+  }
+
   function openConnection(message = "") {
     connectionError.textContent = message;
     tokenInput.value = state.token;
@@ -540,8 +664,8 @@
   }
 
   function statusClass(status) {
-    if (["validating", "building", "activating"].includes(status)) return "running";
-    return ["queued", "running", "succeeded", "failed"].includes(status) ? status : "queued";
+    if (["validating", "building", "checking", "activating"].includes(status)) return "running";
+    return ["queued", "running", "succeeded", "failed", "cancelled"].includes(status) ? status : "queued";
   }
 
   function capitalize(value) {
@@ -596,6 +720,11 @@
     return `${Math.floor(milliseconds / 60000)}m ${Math.round((milliseconds % 60000) / 1000)}s`;
   }
 
+  function stepDuration(step) {
+    if (!step.startedAt) return "Not started";
+    return deploymentDuration({createdAt: step.startedAt, finishedAt: step.finishedAt});
+  }
+
   function prettyJSON(value) {
     if (value === undefined || value === null || value === "") return "";
     try {
@@ -611,6 +740,8 @@
       "automation.deployed": "Automation deployed",
       "deployment.succeeded": "Deployment succeeded",
       "deployment.failed": "Deployment failed",
+      "deployment.cancel_requested": "Deployment cancellation requested",
+      "automation.rolled_back": "Automation rolled back",
       "automation.paused": "Automation paused",
       "automation.resumed": "Automation resumed",
       "run.queued_manually": "Manual run queued",
@@ -643,6 +774,12 @@
     if (runButton) { openRun(runButton.dataset.run); return; }
     const deploymentButton = event.target.closest("[data-deployment]");
     if (deploymentButton) { openDeployment(deploymentButton.dataset.deployment); return; }
+    const cancelDeploymentButton = event.target.closest("[data-cancel-deployment]");
+    if (cancelDeploymentButton) { openAction({kind: "cancel", deploymentId: cancelDeploymentButton.dataset.cancelDeployment}); return; }
+    const retryDeploymentButton = event.target.closest("[data-retry-deployment]");
+    if (retryDeploymentButton) { retryDeployment(retryDeploymentButton.dataset.retryDeployment); return; }
+    const rollbackButton = event.target.closest("[data-rollback-revision]");
+    if (rollbackButton && state.detail) { openAction({kind: "rollback", revisionId: rollbackButton.dataset.rollbackRevision}); return; }
     if (event.target.closest("[data-close-diagnosis]")) { closeDiagnosis(); return; }
     const diagnosisTab = event.target.closest("[data-diagnosis-tab]");
     if (diagnosisTab) { selectDiagnosisTab(diagnosisTab.dataset.diagnosisTab); return; }
@@ -659,7 +796,11 @@
     const closeDialog = event.target.closest("[data-close-dialog]");
     if (closeDialog) {
       if (closeDialog.dataset.closeDialog === "connection") connectionDialog.close();
-      else runDialog.close();
+      else if (closeDialog.dataset.closeDialog === "run") runDialog.close();
+      else {
+        actionDialog.close();
+        state.pendingAction = null;
+      }
       return;
     }
     if (event.target.closest("[data-retry]")) { loadWorkspace(); }
@@ -710,6 +851,11 @@
     queueManualRun();
   });
 
+  actionForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    executeAction();
+  });
+
   document.addEventListener("keydown", (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k") {
       event.preventDefault();
@@ -724,8 +870,24 @@
       const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
       selectDiagnosisTab(tabs[next]);
     }
-    if (event.key === "Escape" && diagnosisPane.hidden === false && !connectionDialog.open && !runDialog.open) closeDiagnosis();
+    if (event.key === "Escape" && diagnosisPane.hidden === false && !connectionDialog.open && !runDialog.open && !actionDialog.open) closeDiagnosis();
   });
+
+  window.setInterval(async () => {
+    const deployment = state.selectedDeployment;
+    if (!deployment || state.mutating || ["succeeded", "failed", "cancelled"].includes(deployment.status)) return;
+    try {
+      const refreshed = await api(`/api/v1/deployments/${encodeURIComponent(deployment.id)}`);
+      if (diagnosisPane.hidden || state.selectedRun || state.selectedDeployment?.id !== deployment.id) return;
+      state.selectedDeployment = refreshed;
+      const summary = state.deployments.find((item) => item.id === deployment.id);
+      if (summary) Object.assign(summary, refreshed);
+      updateDeploymentDiagnosis(refreshed);
+      if (state.view === "deployments") renderGlobalDeployments();
+    } catch (error) {
+      if (!(error instanceof AuthenticationRequired)) showToast(`Deployment refresh failed: ${error.message}`, true);
+    }
+  }, 2000);
 
   loadWorkspace({preserveSelection: false});
 })();
