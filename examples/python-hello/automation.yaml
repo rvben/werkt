@@ -30,6 +30,12 @@ runtime:
   image: python:3.13-alpine
   command: [python3, main.py]
 
+deployment:
+  checks:
+    - id: syntax
+      command: [python3, -m, py_compile, main.py]
+      timeout: 30s
+
 execution:
   timeout: 30s
   retries: 2

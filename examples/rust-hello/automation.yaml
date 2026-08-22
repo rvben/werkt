@@ -30,6 +30,12 @@ runtime:
   environment:
     RUST_BACKTRACE: "1"
 
+deployment:
+  checks:
+    - id: unit
+      command: [cargo, test, --release]
+      timeout: 5m
+
 execution:
   timeout: 30s
   retries: 1

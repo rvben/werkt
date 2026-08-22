@@ -6,20 +6,22 @@ Werkt owns automation definitions, triggers, durable events, revision history, q
 
 Agents upload a deterministic package to the management API. Werkt verifies the digest while streaming the bounded body to disk, safely extracts it into private staging, and records an idempotent `queued` deployment. A lease-backed worker then advances it through `validating`, `building`, and `activating`. Expired leases can be reacquired after a worker crash.
 
-The source package stays private to the control plane and is removed when the job reaches `succeeded` or `failed`. Activation publishes the immutable revision, replaces effective triggers, and marks the deployment successful in one transaction, so clients cannot observe an active revision paired with a failed or unfinished job.
+The source package stays private to the control plane and is retained after a terminal result so an operator or agent can retry the exact same bytes without uploading a subtly different package. A future bounded garbage collector will own expiry. Activation publishes the immutable revision, replaces effective triggers, and marks the deployment successful in one transaction, so clients cannot observe an active revision paired with a failed or unfinished job.
 
 ## Build lifecycle
 
-When a manifest defines `runtime.build`, deployment copies the source into a private staging directory before invoking the selected builder. The process backend invokes the command on the Werkt host for trusted local development only. The Husker backend instead:
+When a manifest defines `runtime.build` or `deployment.checks`, deployment copies the source into a private staging directory before invoking the selected builder. Checks are ordered command arrays with stable IDs and independent timeouts. They run after the optional build and must all pass before activation. The process backend invokes these commands on the Werkt host for trusted local development only. The Husker backend instead:
 
 1. Creates a fresh VM from `runtime.buildImage`, falling back to `runtime.image` and then the daemon-wide rootfs setting.
 2. Gives the VM an independent hard expiration and `owner: werkt/build/<automation-id>`.
-3. Uploads and extracts the source, then invokes the build array directly without a shell.
+3. Uploads and extracts the source, then invokes the build and check arrays directly without a shell in the same disposable VM.
 4. Archives the completed guest workspace and downloads it using bounded ranged reads.
 5. Extracts into a second staging directory, rejecting absolute paths, traversal, links, and special files.
 6. Atomically replaces the unbuilt staging tree and destroys the builder VM. Only then can deployment publish the content-addressed revision.
 
 Builder networking defaults to `nat` because dependency resolution commonly needs outbound access. Runtime networking remains independently set to `none`. Fully vendored builds can set `WERKT_HUSKER_BUILD_NETWORK=none`. `runtime.buildImage` should contain the compiler and `/bin/tar`; `runtime.image` only needs the final runtime and `/bin/tar`.
+
+Validation, build, every check, and activation are durable deployment steps with timestamps, bounded logs, and a terminal error. Cancellation is immediate for queued work and cooperative for active commands; the worker context terminates the local process or guest request. Failed and cancelled jobs can be retried from their retained source. Rollback is different: it atomically makes an already-published immutable revision active again and reconstructs its trigger set without rebuilding code.
 
 ## Stable automation contract
 

@@ -15,6 +15,7 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/rvben/werkt/internal/domain"
 )
@@ -28,8 +29,8 @@ const (
 // Build compiles an automation in a disposable VM and replaces directory with
 // the exact workspace produced by that VM. The caller only publishes it after
 // this method succeeds.
-func (r *HuskerRunner) Build(parent context.Context, directory string, value domain.Manifest) error {
-	if len(value.Runtime.Build) == 0 {
+func (r *HuskerRunner) Build(parent context.Context, directory string, value domain.Manifest, reporter domain.DeploymentStepReporter) error {
+	if len(value.Runtime.Build) == 0 && len(value.Deployment.Checks) == 0 {
 		return nil
 	}
 	rootFS := value.Runtime.BuildImage
@@ -40,7 +41,7 @@ func (r *HuskerRunner) Build(parent context.Context, directory string, value dom
 		rootFS = r.rootFS
 	}
 	if strings.TrimSpace(rootFS) == "" {
-		return errors.New("runtime.buildImage, runtime.image, or the husker rootfs fallback is required for a build")
+		return errors.New("runtime.buildImage, runtime.image, or the husker rootfs fallback is required for deployment commands")
 	}
 
 	source, err := archiveDirectory(directory)
@@ -56,7 +57,14 @@ func (r *HuskerRunner) Build(parent context.Context, directory string, value dom
 	inputPath := guestRoot + ".tar.gz"
 	workspacePath := guestRoot + "/work"
 	outputPath := guestRoot + ".built.tar.gz"
-	lifetime := r.provisionTimeout + r.buildTimeout + r.cleanupTimeout + 2*guestCommandGrace
+	commandBudget := time.Duration(0)
+	if len(value.Runtime.Build) > 0 {
+		commandBudget += r.buildTimeout
+	}
+	for _, check := range value.Deployment.Checks {
+		commandBudget += check.TimeoutDuration()
+	}
+	lifetime := r.provisionTimeout + commandBudget + r.cleanupTimeout + 2*guestCommandGrace
 
 	provisionContext, cancelProvision := context.WithTimeout(parent, r.provisionTimeout)
 	defer cancelProvision()
@@ -88,28 +96,19 @@ func (r *HuskerRunner) Build(parent context.Context, directory string, value dom
 	}
 	cancelProvision()
 
-	buildContext, cancelBuild := context.WithTimeout(parent, r.buildTimeout+r.provisionTimeout+guestCommandGrace)
+	buildContext, cancelBuild := context.WithTimeout(parent, commandBudget+r.provisionTimeout+guestCommandGrace)
 	defer cancelBuild()
-	command := value.Runtime.Build
-	response, executeErr := r.exec(buildContext, vmName, execRequest{
-		Command:     command[0],
-		Args:        command[1:],
-		WorkingDir:  workspacePath,
-		Environment: value.Runtime.Environment,
-		Timeout:     durationSeconds(r.buildTimeout),
-	})
-	logs := formatLogs(response.Stdout, response.Stderr)
-	if executeErr != nil {
-		if buildContext.Err() != nil {
-			return fmt.Errorf("build exceeded timeout %s: %w", r.buildTimeout, buildContext.Err())
+	if len(value.Runtime.Build) > 0 {
+		if err := r.runPromotionCommand(buildContext, vmName, workspacePath, value.Runtime.Environment,
+			"build", "build", value.Runtime.Build, r.buildTimeout, reporter); err != nil {
+			return fmt.Errorf("build automation in husker VM: %w", err)
 		}
-		return fmt.Errorf("build automation in husker VM: %w%s", executeErr, errorLogs(logs))
 	}
-	if response.ExitCode == 124 {
-		return fmt.Errorf("build exceeded timeout %s%s", r.buildTimeout, errorLogs(logs))
-	}
-	if response.ExitCode != 0 {
-		return fmt.Errorf("build process exited with code %d%s", response.ExitCode, errorLogs(logs))
+	for _, check := range value.Deployment.Checks {
+		if err := r.runPromotionCommand(buildContext, vmName, workspacePath, value.Runtime.Environment,
+			"check:"+check.ID, "check", check.Command, check.TimeoutDuration(), reporter); err != nil {
+			return fmt.Errorf("check %s in husker VM: %w", check.ID, err)
+		}
 	}
 	if _, err := r.exec(buildContext, vmName, execRequest{
 		Command: "/bin/tar",
@@ -124,6 +123,47 @@ func (r *HuskerRunner) Build(parent context.Context, directory string, value dom
 	}
 	if err := replaceDirectoryFromArchive(directory, artifact); err != nil {
 		return fmt.Errorf("promote build output: %w", err)
+	}
+	return nil
+}
+
+func (r *HuskerRunner) runPromotionCommand(parent context.Context, vmName, workspacePath string, environment map[string]string, id, kind string, command []string, timeout time.Duration, reporter domain.DeploymentStepReporter) error {
+	if reporter != nil {
+		if err := reporter(domain.DeploymentStepUpdate{ID: id, Kind: kind, Status: domain.DeploymentStepRunning}); err != nil {
+			return err
+		}
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout+guestCommandGrace)
+	defer cancel()
+	response, executeErr := r.exec(ctx, vmName, execRequest{
+		Command:     command[0],
+		Args:        command[1:],
+		WorkingDir:  workspacePath,
+		Environment: environment,
+		Timeout:     durationSeconds(timeout),
+	})
+	logs := formatLogs(response.Stdout, response.Stderr)
+	commandErr := executeErr
+	if ctx.Err() != nil {
+		commandErr = fmt.Errorf("exceeded timeout %s: %w", timeout, ctx.Err())
+	} else if executeErr == nil && response.ExitCode == 124 {
+		commandErr = fmt.Errorf("exceeded timeout %s", timeout)
+	} else if executeErr == nil && response.ExitCode != 0 {
+		commandErr = fmt.Errorf("process exited with code %d", response.ExitCode)
+	}
+	status := domain.DeploymentStepSucceeded
+	message := ""
+	if commandErr != nil {
+		status = domain.DeploymentStepFailed
+		message = commandErr.Error()
+	}
+	if reporter != nil {
+		if err := reporter(domain.DeploymentStepUpdate{ID: id, Kind: kind, Status: status, Logs: logs, Error: message}); err != nil {
+			return errors.Join(commandErr, err)
+		}
+	}
+	if commandErr != nil {
+		return fmt.Errorf("%w%s", commandErr, errorLogs(logs))
 	}
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rvben/werkt/internal/domain"
 	"github.com/rvben/werkt/internal/manifest"
@@ -27,6 +28,11 @@ runtime:
   image: python:3.13-alpine
   buildImage: python:3.13-alpine
   command: [python3, main.py]
+deployment:
+  checks:
+    - id: unit
+      command: [python3, -m, unittest]
+      timeout: 2m
 execution:
   timeout: 30s
   retries: 2
@@ -50,6 +56,33 @@ execution:
 	}
 	if value.Runtime.BuildImage != "python:3.13-alpine" {
 		t.Fatalf("build image = %q, want python:3.13-alpine", value.Runtime.BuildImage)
+	}
+	if len(value.Deployment.Checks) != 1 || value.Deployment.Checks[0].TimeoutDuration() != 2*time.Minute {
+		t.Fatalf("deployment checks = %#v", value.Deployment.Checks)
+	}
+}
+
+func TestValidateRejectsInvalidDeploymentChecks(t *testing.T) {
+	value := domain.Manifest{
+		APIVersion: "werkt.dev/v1",
+		Kind:       "Automation",
+		Metadata:   domain.Metadata{Name: "example", Project: "personal"},
+		Triggers:   []domain.Trigger{{ID: "hourly", Type: "schedule", Config: map[string]any{"cron": "0 * * * *"}}},
+		Runtime:    domain.Runtime{Language: "go", Command: []string{"./example"}},
+		Deployment: domain.DeploymentPolicy{Checks: []domain.DeploymentCheck{
+			{ID: "unit", Command: []string{"go", "test", "./..."}, Timeout: "1m"},
+			{ID: "unit", Command: []string{" "}, Timeout: "never"},
+		}},
+	}
+
+	err := manifest.Validate(value)
+	if err == nil {
+		t.Fatal("Validate() error = nil")
+	}
+	for _, want := range []string{"id must be unique", "command must contain an executable", "timeout must be a positive duration"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Validate() error = %v, want %q", err, want)
+		}
 	}
 }
 

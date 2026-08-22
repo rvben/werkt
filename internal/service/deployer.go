@@ -22,7 +22,7 @@ type Deployer struct {
 // Builder turns a copied source tree into the artifact that a revision runs.
 // Implementations may build locally or cross the isolation boundary.
 type Builder interface {
-	Build(context.Context, string, domain.Manifest) error
+	Build(context.Context, string, domain.Manifest, domain.DeploymentStepReporter) error
 }
 
 type Deployment struct {
@@ -52,7 +52,7 @@ func (d *Deployer) Deploy(ctx context.Context, sourceDirectory string) (Deployme
 	if err != nil {
 		return Deployment{}, err
 	}
-	built, err := d.BuildArtifact(ctx, prepared)
+	built, err := d.BuildArtifact(ctx, prepared, nil)
 	if err != nil {
 		return Deployment{}, err
 	}
@@ -75,7 +75,7 @@ func (d *Deployer) Prepare(sourceDirectory string) (PreparedDeployment, error) {
 	return PreparedDeployment{SourceDirectory: absoluteSource, Manifest: value, ContentHash: contentHash}, nil
 }
 
-func (d *Deployer) BuildArtifact(ctx context.Context, prepared PreparedDeployment) (BuiltDeployment, error) {
+func (d *Deployer) BuildArtifact(ctx context.Context, prepared PreparedDeployment, reporter domain.DeploymentStepReporter) (BuiltDeployment, error) {
 	artifactsDir := filepath.Join(d.dataDir, "artifacts")
 	if err := os.MkdirAll(artifactsDir, 0o750); err != nil {
 		return BuiltDeployment{}, fmt.Errorf("create artifacts directory: %w", err)
@@ -85,6 +85,7 @@ func (d *Deployer) BuildArtifact(ctx context.Context, prepared PreparedDeploymen
 		return BuiltDeployment{}, err
 	}
 	artifactInfo, statErr := os.Stat(artifactPath)
+	requiresPromotion := len(prepared.Manifest.Runtime.Build) > 0 || len(prepared.Manifest.Deployment.Checks) > 0
 	if os.IsNotExist(statErr) {
 		temporary, err := os.MkdirTemp(artifactsDir, ".deploy-")
 		if err != nil {
@@ -99,11 +100,11 @@ func (d *Deployer) BuildArtifact(ctx context.Context, prepared PreparedDeploymen
 		if err := copyDirectory(prepared.SourceDirectory, temporary); err != nil {
 			return BuiltDeployment{}, err
 		}
-		if len(prepared.Manifest.Runtime.Build) > 0 {
+		if requiresPromotion {
 			if d.builder == nil {
 				return BuiltDeployment{}, errors.New("deployment builder is not configured")
 			}
-			if err := d.builder.Build(ctx, temporary, prepared.Manifest); err != nil {
+			if err := d.builder.Build(ctx, temporary, prepared.Manifest, reporter); err != nil {
 				return BuiltDeployment{}, err
 			}
 		}
@@ -122,6 +123,21 @@ func (d *Deployer) BuildArtifact(ctx context.Context, prepared PreparedDeploymen
 		return BuiltDeployment{}, statErr
 	} else if !artifactInfo.IsDir() {
 		return BuiltDeployment{}, fmt.Errorf("artifact path is not a directory: %s", artifactPath)
+	} else if requiresPromotion {
+		if d.builder == nil {
+			return BuiltDeployment{}, errors.New("deployment builder is not configured")
+		}
+		temporary, err := os.MkdirTemp(artifactsDir, ".verify-")
+		if err != nil {
+			return BuiltDeployment{}, err
+		}
+		defer os.RemoveAll(temporary) //nolint:errcheck
+		if err := copyDirectory(prepared.SourceDirectory, temporary); err != nil {
+			return BuiltDeployment{}, err
+		}
+		if err := d.builder.Build(ctx, temporary, prepared.Manifest, reporter); err != nil {
+			return BuiltDeployment{}, err
+		}
 	}
 	return BuiltDeployment{PreparedDeployment: prepared, ArtifactPath: artifactPath}, nil
 }

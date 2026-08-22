@@ -14,18 +14,25 @@ const (
 	DeploymentQueued     = "queued"
 	DeploymentValidating = "validating"
 	DeploymentBuilding   = "building"
+	DeploymentChecking   = "checking"
 	DeploymentActivating = "activating"
 	DeploymentSucceeded  = "succeeded"
 	DeploymentFailed     = "failed"
+	DeploymentCancelled  = "cancelled"
+
+	DeploymentStepRunning   = "running"
+	DeploymentStepSucceeded = "succeeded"
+	DeploymentStepFailed    = "failed"
 )
 
 type Manifest struct {
-	APIVersion string    `yaml:"apiVersion" json:"apiVersion"`
-	Kind       string    `yaml:"kind" json:"kind"`
-	Metadata   Metadata  `yaml:"metadata" json:"metadata"`
-	Triggers   []Trigger `yaml:"triggers" json:"triggers"`
-	Runtime    Runtime   `yaml:"runtime" json:"runtime"`
-	Execution  Execution `yaml:"execution" json:"execution"`
+	APIVersion string           `yaml:"apiVersion" json:"apiVersion"`
+	Kind       string           `yaml:"kind" json:"kind"`
+	Metadata   Metadata         `yaml:"metadata" json:"metadata"`
+	Triggers   []Trigger        `yaml:"triggers" json:"triggers"`
+	Runtime    Runtime          `yaml:"runtime" json:"runtime"`
+	Deployment DeploymentPolicy `yaml:"deployment,omitempty" json:"deployment,omitempty"`
+	Execution  Execution        `yaml:"execution" json:"execution"`
 }
 
 type Metadata struct {
@@ -55,6 +62,30 @@ type Runtime struct {
 	Command     []string          `yaml:"command" json:"command"`
 	Environment map[string]string `yaml:"environment,omitempty" json:"environment,omitempty"`
 	Secrets     map[string]string `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+}
+
+// DeploymentPolicy defines language-neutral commands that must pass before a
+// revision can become active. Checks run in the build plane, never in the
+// runtime attempt environment, and therefore never receive runtime secrets.
+type DeploymentPolicy struct {
+	Checks []DeploymentCheck `yaml:"checks,omitempty" json:"checks,omitempty"`
+}
+
+type DeploymentCheck struct {
+	ID      string   `yaml:"id" json:"id"`
+	Command []string `yaml:"command" json:"command"`
+	Timeout string   `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+}
+
+func (c DeploymentCheck) TimeoutDuration() time.Duration {
+	if c.Timeout == "" {
+		return 10 * time.Minute
+	}
+	duration, err := time.ParseDuration(c.Timeout)
+	if err != nil {
+		return 10 * time.Minute
+	}
+	return duration
 }
 
 type Execution struct {
@@ -124,21 +155,44 @@ type RunnableRun struct {
 // Deployment is the durable, agent-visible lifecycle of one uploaded package.
 // SourcePath and the idempotency key stay internal to the control plane.
 type Deployment struct {
-	ID            string     `json:"id"`
-	Status        string     `json:"status"`
-	AutomationID  string     `json:"automationId,omitempty"`
-	PackageDigest string     `json:"packageDigest"`
-	ContentHash   string     `json:"contentHash,omitempty"`
-	RevisionID    string     `json:"revisionId,omitempty"`
-	Actor         string     `json:"actor"`
-	Error         string     `json:"error,omitempty"`
-	CreatedAt     time.Time  `json:"createdAt"`
-	UpdatedAt     time.Time  `json:"updatedAt"`
-	StartedAt     *time.Time `json:"startedAt,omitempty"`
-	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
+	ID                string           `json:"id"`
+	Status            string           `json:"status"`
+	AutomationID      string           `json:"automationId,omitempty"`
+	PackageDigest     string           `json:"packageDigest"`
+	ContentHash       string           `json:"contentHash,omitempty"`
+	RevisionID        string           `json:"revisionId,omitempty"`
+	RetryOf           string           `json:"retryOf,omitempty"`
+	Actor             string           `json:"actor"`
+	Error             string           `json:"error,omitempty"`
+	Steps             []DeploymentStep `json:"steps,omitempty"`
+	CreatedAt         time.Time        `json:"createdAt"`
+	UpdatedAt         time.Time        `json:"updatedAt"`
+	StartedAt         *time.Time       `json:"startedAt,omitempty"`
+	FinishedAt        *time.Time       `json:"finishedAt,omitempty"`
+	CancelRequestedAt *time.Time       `json:"cancelRequestedAt,omitempty"`
 }
 
 type RunnableDeployment struct {
 	Deployment
 	SourcePath string
 }
+
+type DeploymentStep struct {
+	ID         string     `json:"id"`
+	Kind       string     `json:"kind"`
+	Status     string     `json:"status"`
+	Logs       string     `json:"logs,omitempty"`
+	Error      string     `json:"error,omitempty"`
+	StartedAt  time.Time  `json:"startedAt"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+}
+
+type DeploymentStepUpdate struct {
+	ID     string
+	Kind   string
+	Status string
+	Logs   string
+	Error  string
+}
+
+type DeploymentStepReporter func(DeploymentStepUpdate) error
