@@ -3,6 +3,7 @@ package runner_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,14 +13,27 @@ import (
 	"github.com/rvben/werkt/internal/runner"
 )
 
+type staticSecrets map[string]string
+
+func (s staticSecrets) Resolve(_ context.Context, names []string) (map[string]string, error) {
+	values := make(map[string]string, len(names))
+	for _, name := range names {
+		value, ok := s[name]
+		if !ok {
+			return nil, errors.New("secret not found")
+		}
+		values[name] = value
+	}
+	return values, nil
+}
+
 func TestProcessRunnerUsesLanguageNeutralContract(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture is POSIX-specific")
 	}
 	directory := t.TempDir()
-	t.Setenv("EXAMPLE_RUNTIME_SECRET", "runtime-secret-value")
 	t.Setenv("WERKT_MANAGEMENT_TOKEN", "must-not-be-inherited")
-	script := []byte("#!/bin/sh\nset -eu\ntest \"$SERVICE_TOKEN\" = runtime-secret-value\ntest -z \"${WERKT_MANAGEMENT_TOKEN+x}\"\necho running\nprintf '{\"ok\":true}' > \"$WERKT_RESULT_PATH\"\n")
+	script := []byte("#!/bin/sh\nset -eu\ntest \"$SERVICE_TOKEN\" = runtime-secret-value\ntest -z \"${WERKT_MANAGEMENT_TOKEN+x}\"\necho \"running $SERVICE_TOKEN\"\nprintf '{\"ok\":true}' > \"$WERKT_RESULT_PATH\"\n")
 	path := filepath.Join(directory, "run.sh")
 	if err := os.WriteFile(path, script, 0o700); err != nil {
 		t.Fatal(err)
@@ -32,21 +46,21 @@ func TestProcessRunnerUsesLanguageNeutralContract(t *testing.T) {
 			Runtime: domain.Runtime{
 				Language: "shell",
 				Command:  []string{"./run.sh"},
-				Secrets:  map[string]string{"SERVICE_TOKEN": "EXAMPLE_RUNTIME_SECRET"},
+				Secrets:  map[string]string{"SERVICE_TOKEN": "ops/runtime-token"},
 			},
 			Execution: domain.Execution{Timeout: "5s"},
 		},
 		Event: domain.EventEnvelope{ID: "evt_test", Data: eventData},
 	}
 
-	result, err := runner.NewProcessRunner().Execute(context.Background(), value)
+	result, err := runner.NewProcessRunner(staticSecrets{"ops/runtime-token": "runtime-secret-value"}).Execute(context.Background(), value)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	if string(result.Output) != `{"ok":true}` {
 		t.Fatalf("output = %s", result.Output)
 	}
-	if result.Logs != "[stdout]\nrunning\n" {
+	if result.Logs != "[stdout]\nrunning [REDACTED]\n" {
 		t.Fatalf("logs = %q", result.Logs)
 	}
 }
@@ -56,8 +70,9 @@ func TestProcessRunnerBuildsWithManifestEnvironment(t *testing.T) {
 		t.Skip("shell fixture is POSIX-specific")
 	}
 	directory := t.TempDir()
+	t.Setenv("WERKT_SECRET_KEY", "must-not-reach-build")
 	value := domain.Manifest{Runtime: domain.Runtime{
-		Build:       []string{"/bin/sh", "-c", `printf '%s' "$BUILD_VALUE" > built`},
+		Build:       []string{"/bin/sh", "-c", `test -z "${WERKT_SECRET_KEY+x}"; printf '%s' "$BUILD_VALUE" > built`},
 		Environment: map[string]string{"BUILD_VALUE": "from-manifest"},
 	}}
 	if err := runner.NewProcessRunner().Build(context.Background(), directory, value, nil); err != nil {

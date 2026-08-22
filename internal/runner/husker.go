@@ -49,6 +49,7 @@ type HuskerConfig struct {
 	UploadChunkSize   int
 	DownloadChunkSize int
 	HTTPClient        *http.Client
+	Secrets           SecretResolver
 }
 
 type HuskerRunner struct {
@@ -66,6 +67,7 @@ type HuskerRunner struct {
 	uploadChunkSize   int
 	downloadChunkSize int
 	client            *http.Client
+	secrets           SecretResolver
 }
 
 func NewHuskerRunner(config HuskerConfig) (*HuskerRunner, error) {
@@ -124,6 +126,7 @@ func NewHuskerRunner(config HuskerConfig) (*HuskerRunner, error) {
 		uploadChunkSize:   config.UploadChunkSize,
 		downloadChunkSize: config.DownloadChunkSize,
 		client:            config.HTTPClient,
+		secrets:           config.Secrets,
 	}, nil
 }
 
@@ -138,10 +141,11 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 	if strings.TrimSpace(rootFS) == "" {
 		return Result{}, errors.New("runtime.image or the husker rootfs fallback is required")
 	}
-	runtimeValues, err := resolveRuntimeEnvironment(run.Manifest.Runtime)
+	resolved, err := resolveRuntimeEnvironment(parent, r.secrets, run.Manifest.Runtime)
 	if err != nil {
 		return Result{}, err
 	}
+	redactor := newLogRedactor(resolved.secrets)
 	artifact, err := archiveDirectory(run.ArtifactPath)
 	if err != nil {
 		return Result{}, fmt.Errorf("package automation artifact: %w", err)
@@ -207,12 +211,13 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 			run,
 			eventPath,
 			resultPath,
-			runtimeValues,
+			resolved.values,
 		),
 		Timeout: durationSeconds(runtimeTimeout),
 	})
-	logs := formatLogs(response.Stdout, response.Stderr)
+	logs := formatLogs(redactor.Redact(response.Stdout), redactor.Redact(response.Stderr))
 	if executeErr != nil {
+		executeErr = redactor.Error(executeErr)
 		if executionContext.Err() != nil {
 			return Result{Logs: logs}, fmt.Errorf("automation exceeded timeout %s: %w", runtimeTimeout, executionContext.Err())
 		}

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,8 +22,21 @@ import (
 	"github.com/rvben/werkt/internal/domain"
 )
 
+type testSecretResolver map[string]string
+
+func (r testSecretResolver) Resolve(_ context.Context, names []string) (map[string]string, error) {
+	values := make(map[string]string, len(names))
+	for _, name := range names {
+		value, ok := r[name]
+		if !ok {
+			return nil, fmt.Errorf("secret %s not found", name)
+		}
+		values[name] = value
+	}
+	return values, nil
+}
+
 func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
-	t.Setenv("EXAMPLE_RUNTIME_SECRET", "guest-secret-value")
 	directory := t.TempDir()
 	if err := os.WriteFile(filepath.Join(directory, "main.py"), []byte("print('hello')\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -91,7 +105,7 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 					t.Errorf("SERVICE_TOKEN was not resolved")
 				}
 			}
-			writeJSON(t, response, execResponse{ExitCode: 0, Stdout: "running\n"})
+			writeJSON(t, response, execResponse{ExitCode: 0, Stdout: "running guest-secret-value\n"})
 		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/files/read"):
 			writeJSON(t, response, map[string]any{
 				"data": base64.StdEncoding.EncodeToString([]byte(`{"ok":true}`)),
@@ -114,6 +128,7 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 		CleanupTimeout:   time.Second,
 		UploadChunkSize:  16,
 		HTTPClient:       server.Client(),
+		Secrets:          testSecretResolver{"ops/guest-token": "guest-secret-value"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +142,7 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 				Image:       "python:3.13-alpine",
 				Command:     []string{"python3", "main.py"},
 				Environment: map[string]string{"CUSTOM": "value"},
-				Secrets:     map[string]string{"SERVICE_TOKEN": "EXAMPLE_RUNTIME_SECRET"},
+				Secrets:     map[string]string{"SERVICE_TOKEN": "ops/guest-token"},
 			},
 			Execution: domain.Execution{Timeout: "5s"},
 		},
@@ -141,7 +156,7 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 	if string(result.Output) != `{"ok":true}` {
 		t.Fatalf("output = %s", result.Output)
 	}
-	if result.Logs != "[stdout]\nrunning\n" {
+	if result.Logs != "[stdout]\nrunning [REDACTED]\n" {
 		t.Fatalf("logs = %q", result.Logs)
 	}
 	if createNetwork != "none" {
@@ -170,14 +185,13 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 }
 
 func TestHuskerRunnerRejectsMissingRuntimeSecretBeforeCreatingVM(t *testing.T) {
-	t.Setenv("WERKT_TEST_DEFINITELY_UNSET_SECRET", "")
 	called := false
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		called = true
 		http.Error(response, "unexpected", http.StatusInternalServerError)
 	}))
 	defer server.Close()
-	runner, err := NewHuskerRunner(HuskerConfig{URL: server.URL, HTTPClient: server.Client()})
+	runner, err := NewHuskerRunner(HuskerConfig{URL: server.URL, HTTPClient: server.Client(), Secrets: testSecretResolver{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,10 +201,10 @@ func TestHuskerRunnerRejectsMissingRuntimeSecretBeforeCreatingVM(t *testing.T) {
 		Manifest: domain.Manifest{Runtime: domain.Runtime{
 			Image:   "alpine:3.22",
 			Command: []string{"true"},
-			Secrets: map[string]string{"SERVICE_TOKEN": "WERKT_TEST_DEFINITELY_UNSET_SECRET"},
+			Secrets: map[string]string{"SERVICE_TOKEN": "ops/missing"},
 		}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "WERKT_TEST_DEFINITELY_UNSET_SECRET") {
+	if err == nil || !strings.Contains(err.Error(), "ops/missing") {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	if called {
