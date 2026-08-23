@@ -944,6 +944,21 @@ func (s *Store) EnqueueManualRun(ctx context.Context, automationID, externalID, 
 	if err != nil {
 		return "", false, err
 	}
+	if externalID != "" {
+		var existingRunID string
+		err := tx.QueryRow(ctx, `
+			SELECT r.id FROM runs r JOIN events e ON e.id = r.event_id
+			WHERE e.trigger_key = $1 AND e.external_id = $2`, automationID+":manual", externalID).Scan(&existingRunID)
+		if err == nil {
+			if err := tx.Commit(ctx); err != nil {
+				return "", false, err
+			}
+			return existingRunID, false, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return "", false, err
+		}
+	}
 	if expectedRevisionID != "" && revisionID != expectedRevisionID {
 		return "", false, ErrAutomationRevisionChanged
 	}
