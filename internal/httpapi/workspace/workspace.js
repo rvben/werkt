@@ -594,13 +594,13 @@
     diagnosisController = new AbortController();
     deploymentPollRequest += 1;
     deploymentPollController?.abort();
+    state.selectedDeployment = null;
     state.diagnosisReturnFocus = document.activeElement;
     diagnosisPane.hidden = false;
     shell.classList.add("has-diagnosis");
     renderDiagnosisLoading("Loading run diagnosis…");
     syncDiagnosisModality();
     try {
-      state.selectedDeployment = null;
       const run = await api(`/api/v1/runs/${encodeURIComponent(runID)}`, {signal: diagnosisController.signal});
       if (request !== diagnosisRequest) return;
       state.selectedRun = run;
@@ -608,7 +608,7 @@
       renderDiagnosis(true);
     } catch (error) {
       if (!isAbort(error) && !(error instanceof AuthenticationRequired)) {
-        diagnosisContent.innerHTML = `<div class="error-state"><div class="error-state-inner"><h2>Run could not be loaded</h2><p>${escapeHTML(error.message)}</p><button class="button button-quiet" type="button" data-close-diagnosis>Close diagnosis</button></div></div>`;
+        diagnosisContent.innerHTML = `<div class="error-state"><div class="error-state-inner"><h2>Run could not be loaded</h2><p>${escapeHTML(recoveryGuidance(error))}</p><button class="button button-quiet" type="button" data-close-diagnosis>Close diagnosis</button></div></div>`;
       }
     }
   }
@@ -619,20 +619,21 @@
     diagnosisController = new AbortController();
     deploymentPollRequest += 1;
     deploymentPollController?.abort();
+    state.selectedDeployment = null;
+    state.selectedRun = null;
     state.diagnosisReturnFocus = document.activeElement;
     diagnosisPane.hidden = false;
     shell.classList.add("has-diagnosis");
     renderDiagnosisLoading("Loading deployment details…");
     syncDiagnosisModality();
     try {
-      state.selectedRun = null;
       const deployment = await api(`/api/v1/deployments/${encodeURIComponent(deploymentID)}`, {signal: diagnosisController.signal});
       if (request !== diagnosisRequest) return;
       state.selectedDeployment = deployment;
       renderDeploymentDiagnosis(true);
     } catch (error) {
       if (!isAbort(error) && !(error instanceof AuthenticationRequired)) {
-        diagnosisContent.innerHTML = `<div class="error-state"><div class="error-state-inner"><h2>Deployment could not be loaded</h2><p>${escapeHTML(error.message)}</p><button class="button button-quiet" type="button" data-close-diagnosis>Close details</button></div></div>`;
+        diagnosisContent.innerHTML = `<div class="error-state"><div class="error-state-inner"><h2>Deployment could not be loaded</h2><p>${escapeHTML(recoveryGuidance(error))}</p><button class="button button-quiet" type="button" data-close-diagnosis>Close details</button></div></div>`;
       }
     }
   }
