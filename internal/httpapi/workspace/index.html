@@ -33,6 +33,7 @@
     <symbol id="icon-arrow-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
     <symbol id="icon-rollback" viewBox="0 0 24 24"><path d="M4 8v6h6"/><path d="M5.5 13.5A8 8 0 1 0 7 6l-3 3"/></symbol>
     <symbol id="icon-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
+    <symbol id="icon-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.4 2.4 0 1 1 3.6 2.1c-.9.5-1.4 1.1-1.4 2.1v.3M12 17h.01"/></symbol>
   </svg>
 
   <div class="app-shell" id="app-shell">
@@ -40,39 +41,42 @@
       <a class="brand" href="/app/" aria-label="Werkt workspace">
         <span class="brand-mark" aria-hidden="true"></span><span>Werkt</span>
       </a>
-      <div class="connection" id="connection-state" aria-live="polite">
-        <span class="connection-dot" aria-hidden="true"></span><span>Connecting</span>
+      <div class="connection" id="connection-state" role="status" aria-live="polite" aria-atomic="true">
+        <span class="connection-dot" aria-hidden="true"></span><span id="connection-state-label">Connecting</span>
       </div>
       <div class="topbar-actions">
-        <label class="global-search" for="automation-search">
+        <div class="global-search" id="global-search-control">
           <svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg>
-          <span class="sr-only">Search automations</span>
-          <input id="automation-search" type="search" placeholder="Find an automation" autocomplete="off">
-          <kbd>⌘ K</kbd>
-        </label>
+          <label class="sr-only" for="automation-search">Search automations</label>
+          <input id="automation-search" type="search" placeholder="Find an automation" autocomplete="off" aria-controls="inventory-list" aria-describedby="inventory-results" aria-keyshortcuts="Control+K Meta+K">
+          <kbd aria-hidden="true">⌘ K</kbd>
+        </div>
         <button class="icon-button" id="refresh-button" type="button" aria-label="Refresh workspace" title="Refresh workspace">
           <svg class="icon" aria-hidden="true"><use href="#icon-refresh"></use></svg>
         </button>
-        <button class="icon-button compact-only" id="mobile-search-button" type="button" aria-label="Search automations">
+        <button class="icon-button compact-only" id="mobile-search-button" type="button" aria-label="Search automations" aria-controls="global-search-control" aria-expanded="false">
           <svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg>
         </button>
-        <button class="button button-quiet" id="connection-button" type="button">
+        <button class="icon-button" id="help-button" type="button" aria-label="Keyboard shortcuts and help" aria-keyshortcuts="?" title="Keyboard shortcuts and help">
+          <svg class="icon" aria-hidden="true"><use href="#icon-help"></use></svg>
+        </button>
+        <button class="button button-quiet" id="connection-button" type="button" aria-label="Connection settings" aria-describedby="connection-state-label">
           <svg class="icon" aria-hidden="true"><use href="#icon-key"></use></svg><span>Connection</span>
         </button>
       </div>
     </header>
 
     <nav class="primary-nav" aria-label="Workspace">
-      <button class="nav-item is-active" type="button" data-view="automations" aria-current="page">
+      <button class="nav-item is-active" type="button" data-view="automations" aria-current="page" aria-keyshortcuts="Alt+1">
         <svg class="icon" aria-hidden="true"><use href="#icon-bolt"></use></svg><span>Automations</span>
       </button>
-      <button class="nav-item" type="button" data-view="runs">
+      <button class="nav-item" type="button" data-view="runs" aria-keyshortcuts="Alt+2">
         <svg class="icon" aria-hidden="true"><use href="#icon-runs"></use></svg><span>Runs</span>
       </button>
-      <button class="nav-item" type="button" data-view="deployments">
+      <button class="nav-item" type="button" data-view="deployments" aria-keyshortcuts="Alt+3">
         <svg class="icon" aria-hidden="true"><use href="#icon-package"></use></svg><span>Deployments</span>
       </button>
-      <button class="nav-item" type="button" data-view="audit">
+      <button class="nav-item" type="button" data-view="audit" aria-keyshortcuts="Alt+4">
         <svg class="icon" aria-hidden="true"><use href="#icon-audit"></use></svg><span>Audit</span>
       </button>
       <div class="nav-foot">
@@ -87,7 +91,7 @@
           <svg class="icon" aria-hidden="true"><use href="#icon-refresh"></use></svg>
         </button>
       </div>
-      <div class="inventory-filters" aria-label="Inventory filters">
+      <div class="inventory-filters" role="group" aria-label="Inventory filters">
         <button class="filter-chip is-active" type="button" data-enabled-filter="all" aria-pressed="true">All</button>
         <button class="filter-chip" type="button" data-enabled-filter="failed" aria-pressed="false">Needs attention <span id="failed-filter-count">0</span></button>
         <button class="filter-chip" type="button" data-enabled-filter="enabled" aria-pressed="false">Active</button>
@@ -98,7 +102,8 @@
     </aside>
 
     <main class="workspace-main" id="workspace-main" tabindex="-1">
-      <div class="workspace-loading" id="workspace-loading" aria-label="Loading workspace">
+      <div class="workspace-loading" id="workspace-loading" role="status" aria-live="polite">
+        <span class="sr-only">Loading workspace…</span>
         <div class="skeleton skeleton-title"></div>
         <div class="skeleton skeleton-line"></div>
         <div class="skeleton skeleton-block"></div>
@@ -107,7 +112,7 @@
       <div id="workspace-content" hidden></div>
     </main>
 
-    <aside class="diagnosis-pane" id="diagnosis-pane" aria-labelledby="diagnosis-title" hidden>
+    <aside class="diagnosis-pane" id="diagnosis-pane" aria-labelledby="diagnosis-title" tabindex="-1" hidden>
       <div id="diagnosis-content"></div>
     </aside>
   </div>
@@ -121,12 +126,32 @@
       <h2 id="connection-dialog-title">Connect to Werkt</h2>
       <p>The workspace uses the same bearer-protected management API as external agents. The token stays in this browser tab and is cleared when the tab closes.</p>
       <label for="management-token">Management token</label>
-      <input id="management-token" name="token" type="password" autocomplete="current-password" spellcheck="false">
+      <input id="management-token" name="token" type="password" autocomplete="current-password" spellcheck="false" aria-describedby="connection-error">
       <p class="field-message" id="connection-error" role="alert"></p>
       <div class="dialog-actions">
         <button class="button button-quiet" type="button" id="clear-token-button">Clear token</button>
         <button class="button button-primary" type="submit">Connect</button>
       </div>
+    </form>
+  </dialog>
+
+  <dialog class="help-dialog" id="help-dialog" aria-labelledby="help-dialog-title" aria-describedby="help-dialog-description">
+    <form method="dialog">
+      <button class="icon-button dialog-close" type="submit" aria-label="Close help">
+        <svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg>
+      </button>
+      <span class="dialog-symbol" aria-hidden="true"><svg class="icon"><use href="#icon-help"></use></svg></span>
+      <h2 id="help-dialog-title">Operate from the keyboard</h2>
+      <p id="help-dialog-description">Shortcuts stay inside this workspace. Destructive and state-changing actions still require their visible confirmation or submit step.</p>
+      <dl class="shortcut-list">
+        <div><dt><kbd>⌘/Ctrl</kbd> <kbd>K</kbd></dt><dd>Search automations</dd></div>
+        <div><dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move through the inventory</dd></div>
+        <div><dt><kbd>Enter</kbd></dt><dd>Open the focused automation</dd></div>
+        <div><dt><kbd>Alt</kbd> <kbd>1–4</kbd></dt><dd>Open Automations, Runs, Deployments, or Audit</dd></div>
+        <div><dt><kbd>?</kbd></dt><dd>Open this help</dd></div>
+        <div><dt><kbd>Esc</kbd></dt><dd>Close search, details, or a dialog</dd></div>
+      </dl>
+      <div class="dialog-actions"><button class="button button-primary" type="submit">Done</button></div>
     </form>
   </dialog>
 

@@ -11,7 +11,12 @@
   const diagnosisPane = document.querySelector("#diagnosis-pane");
   const diagnosisContent = document.querySelector("#diagnosis-content");
   const connectionState = document.querySelector("#connection-state");
+  const connectionStateLabel = document.querySelector("#connection-state-label");
   const searchInput = document.querySelector("#automation-search");
+  const globalSearch = document.querySelector("#global-search-control");
+  const mobileSearchButton = document.querySelector("#mobile-search-button");
+  const helpButton = document.querySelector("#help-button");
+  const helpDialog = document.querySelector("#help-dialog");
   const connectionDialog = document.querySelector("#connection-dialog");
   const connectionForm = document.querySelector("#connection-form");
   const connectionError = document.querySelector("#connection-error");
@@ -46,6 +51,7 @@
   let detailController = null;
   let diagnosisRequest = 0;
   let diagnosisController = null;
+  const diagnosisModalQuery = window.matchMedia("(max-width: 74rem)");
 
   class APIError extends Error {
     constructor(message, status) {
@@ -207,7 +213,7 @@
 
   function setConnection(kind, label) {
     connectionState.className = `connection${kind ? ` is-${kind}` : ""}`;
-    connectionState.querySelector("span:last-child").textContent = label;
+    connectionStateLabel.textContent = label;
   }
 
   async function loadWorkspace({preserveSelection = true} = {}) {
@@ -396,12 +402,19 @@
       const countLabel = failures ? `${failures} failed · ${count} total` : `${count} total`;
       return `<section class="inventory-group"><div class="inventory-group-title"><span>${escapeHTML(project)}</span><span class="${failures ? "has-failures" : ""}">${countLabel}</span></div>${[...folders.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([folder, items]) => `<div class="inventory-folder"><div class="inventory-folder-label">${escapeHTML(folder)}</div>${items.sort((a, b) => Number(automationHealth(b).needsAttention) - Number(automationHealth(a).needsAttention) || a.id.localeCompare(b.id)).map(renderInventoryItem).join("")}</div>`).join("")}</section>`;
     }).join("");
+    syncInventoryRoving();
+  }
+
+  function syncInventoryRoving() {
+    const items = [...inventoryList.querySelectorAll(".inventory-item")];
+    const target = items.find((item) => item.dataset.automation === state.selectedAutomation) || items[0];
+    items.forEach((item) => { item.tabIndex = item === target ? 0 : -1; });
   }
 
   function renderInventoryItem(automation) {
     const health = automationHealth(automation);
     const selected = automation.id === state.selectedAutomation;
-    return `<button class="inventory-item${selected ? " is-selected" : ""}" type="button" data-automation="${escapeHTML(automation.id)}" ${selected ? 'aria-current="true"' : ""} aria-label="${escapeHTML(automation.id)}, ${escapeHTML(health.label)}" title="${escapeHTML(automation.description || automation.id)}">
+    return `<button class="inventory-item${selected ? " is-selected" : ""}" type="button" data-automation="${escapeHTML(automation.id)}" ${selected ? 'aria-current="true"' : ""} aria-label="${escapeHTML(automation.id)}, ${escapeHTML(health.label)}" aria-keyshortcuts="ArrowUp ArrowDown Home End Enter" title="${escapeHTML(automation.description || automation.id)}">
       <span class="status-dot ${health.className}" aria-hidden="true"></span>
       <span><span class="inventory-name">${escapeHTML(automation.id)}</span><span class="inventory-meta ${health.className}">${health.htmlLabel}</span></span>
       <span class="revision-pill mono">${escapeHTML(shortID(automation.activeRevisionId, 7))}</span>
@@ -418,7 +431,7 @@
   }
 
   function showDetailLoading() {
-    workspaceContent.innerHTML = `<div class="workspace-loading" aria-label="Loading automation"><div class="skeleton skeleton-title"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-block"></div><div class="skeleton skeleton-block short"></div></div>`;
+    workspaceContent.innerHTML = `<div class="workspace-loading" role="status"><span class="sr-only">Loading automation…</span><div class="skeleton skeleton-title"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-block"></div><div class="skeleton skeleton-block short"></div></div>`;
   }
 
   function renderEmptyWorkspace() {
@@ -536,7 +549,8 @@
     state.diagnosisReturnFocus = document.activeElement;
     diagnosisPane.hidden = false;
     shell.classList.add("has-diagnosis");
-    diagnosisContent.innerHTML = `<div class="workspace-loading"><div class="skeleton skeleton-title"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-block"></div></div>`;
+    renderDiagnosisLoading("Loading run diagnosis…");
+    syncDiagnosisModality();
     try {
       state.selectedDeployment = null;
       const run = await api(`/api/v1/runs/${encodeURIComponent(runID)}`, {signal: diagnosisController.signal});
@@ -558,7 +572,8 @@
     state.diagnosisReturnFocus = document.activeElement;
     diagnosisPane.hidden = false;
     shell.classList.add("has-diagnosis");
-    diagnosisContent.innerHTML = `<div class="workspace-loading"><div class="skeleton skeleton-title"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-block"></div></div>`;
+    renderDiagnosisLoading("Loading deployment details…");
+    syncDiagnosisModality();
     try {
       state.selectedRun = null;
       const deployment = await api(`/api/v1/deployments/${encodeURIComponent(deploymentID)}`, {signal: diagnosisController.signal});
@@ -577,6 +592,7 @@
     diagnosisController?.abort();
     diagnosisPane.hidden = true;
     shell.classList.remove("has-diagnosis");
+    syncDiagnosisModality();
     state.selectedRun = null;
     state.selectedDeployment = null;
     const returnFocus = state.diagnosisReturnFocus;
@@ -584,6 +600,25 @@
     if (!restoreFocus) return;
     if (returnFocus?.isConnected) returnFocus.focus();
     else document.querySelector("#workspace-main")?.focus();
+  }
+
+  function renderDiagnosisLoading(label) {
+    diagnosisContent.innerHTML = `<div class="diagnosis-header"><div class="diagnosis-header-top"><h2 id="diagnosis-title">Details</h2><button class="icon-button" type="button" data-close-diagnosis aria-label="Close details">${icon("close")}</button></div></div><div class="workspace-loading" role="status"><span class="sr-only">${escapeHTML(label)}</span><div class="skeleton skeleton-title"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-block"></div></div>`;
+    diagnosisContent.querySelector("[data-close-diagnosis]")?.focus();
+  }
+
+  function syncDiagnosisModality() {
+    const modal = !diagnosisPane.hidden && diagnosisModalQuery.matches;
+    if (modal) {
+      diagnosisPane.setAttribute("role", "dialog");
+      diagnosisPane.setAttribute("aria-modal", "true");
+    } else {
+      diagnosisPane.removeAttribute("role");
+      diagnosisPane.removeAttribute("aria-modal");
+    }
+    document.querySelectorAll(".topbar, .primary-nav, .inventory-pane, .workspace-main").forEach((element) => {
+      element.inert = modal;
+    });
   }
 
   function renderDiagnosis(focusPanel = false) {
@@ -939,10 +974,14 @@
 
   function openConnection(message = "") {
     if (connectionDialog.open) {
-      if (message && !connectionError.textContent) connectionError.textContent = message;
+      if (message && !connectionError.textContent) {
+        connectionError.textContent = message;
+        tokenInput.setAttribute("aria-invalid", "true");
+      }
       return;
     }
     connectionError.textContent = message;
+    tokenInput.toggleAttribute("aria-invalid", Boolean(message));
     tokenInput.value = state.token;
     if (!connectionDialog.open) connectionDialog.showModal();
     tokenInput.focus();
@@ -1088,14 +1127,31 @@
     return values[action] || String(action || "Activity").replaceAll(".", " ");
   }
 
+  function setMobileSearch(open) {
+    globalSearch.classList.toggle("is-open", open);
+    mobileSearchButton.setAttribute("aria-expanded", String(open));
+    if (open) searchInput.focus();
+  }
+
+  function closeMobileDetail() {
+    shell.classList.remove("has-selection");
+    inventoryList.querySelector(`[data-automation="${CSS.escape(state.selectedAutomation)}"]`)?.focus();
+  }
+
+  function openHelp() {
+    if (helpDialog.open || connectionDialog.open || runDialog.open || actionDialog.open || (!diagnosisPane.hidden && diagnosisModalQuery.matches)) return;
+    helpDialog.showModal();
+    helpDialog.querySelector("button")?.focus();
+  }
+
   document.addEventListener("click", (event) => {
+    if (globalSearch.classList.contains("is-open") && !globalSearch.contains(event.target) && !mobileSearchButton.contains(event.target)) setMobileSearch(false);
     const viewButton = event.target.closest("[data-view], [data-view-link]");
     if (viewButton) {
       state.view = viewButton.dataset.view || viewButton.dataset.viewLink;
       closeDiagnosis();
       writeRoute("push");
       render();
-      refreshFeed("audit");
       document.querySelector("#workspace-main")?.focus();
       return;
     }
@@ -1147,7 +1203,7 @@
       return;
     }
     if (event.target.closest("[data-open-run]")) { openManualRun(); return; }
-    if (event.target.closest("[data-mobile-back]")) { shell.classList.remove("has-selection"); return; }
+    if (event.target.closest("[data-mobile-back]")) { closeMobileDetail(); return; }
     const closeDialog = event.target.closest("[data-close-dialog]");
     if (closeDialog) {
       if (closeDialog.dataset.closeDialog === "connection") connectionDialog.close();
@@ -1170,21 +1226,22 @@
       closeDiagnosis();
       writeRoute("push");
       render();
+      refreshFeed("audit");
       document.querySelector("#workspace-main")?.focus();
+      return;
     }
   });
 
   document.querySelector("#refresh-button").addEventListener("click", () => loadWorkspace());
   document.querySelector("#mobile-refresh-button").addEventListener("click", () => loadWorkspace());
-  document.querySelector("#mobile-search-button").addEventListener("click", () => {
-    searchInput.closest(".global-search").classList.toggle("is-open");
-    searchInput.focus();
-  });
+  mobileSearchButton.addEventListener("click", () => setMobileSearch(!globalSearch.classList.contains("is-open")));
+  helpButton.addEventListener("click", openHelp);
   document.querySelector("#connection-button").addEventListener("click", () => openConnection());
   document.querySelector("#clear-token-button").addEventListener("click", () => {
     state.token = "";
     writeToken("");
     tokenInput.value = "";
+    tokenInput.removeAttribute("aria-invalid");
     connectionDialog.close();
     loadWorkspace({preserveSelection: true});
   });
@@ -1213,6 +1270,7 @@
     state.token = tokenInput.value.trim();
     writeToken(state.token);
     connectionError.textContent = "";
+    tokenInput.removeAttribute("aria-invalid");
     connectionDialog.close();
     loadWorkspace({preserveSelection: true});
   });
@@ -1239,10 +1297,32 @@
   });
 
   document.addEventListener("keydown", (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k") {
+    const typing = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement || event.target?.isContentEditable;
+    const nativeDialogOpen = connectionDialog.open || runDialog.open || actionDialog.open || helpDialog.open;
+    if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k" && !nativeDialogOpen) {
       event.preventDefault();
-      searchInput.closest(".global-search").classList.add("is-open");
-      searchInput.focus();
+      setMobileSearch(true);
+      return;
+    }
+    if (event.key === "?" && !typing && !nativeDialogOpen) {
+      event.preventDefault();
+      openHelp();
+      return;
+    }
+    if (event.altKey && !event.metaKey && !event.ctrlKey && ["1", "2", "3", "4"].includes(event.key) && !nativeDialogOpen && diagnosisPane.hidden) {
+      event.preventDefault();
+      document.querySelectorAll("[data-view]")[Number(event.key) - 1]?.click();
+      return;
+    }
+    const inventoryItem = event.target.closest?.(".inventory-item");
+    if (inventoryItem && ["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      const items = [...inventoryList.querySelectorAll(".inventory-item")];
+      const current = items.indexOf(inventoryItem);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+      items.forEach((item, index) => { item.tabIndex = index === next ? 0 : -1; });
+      items[next]?.focus();
+      return;
     }
     const diagnosisTab = event.target.closest?.("[data-diagnosis-tab]");
     if (diagnosisTab && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
@@ -1251,9 +1331,27 @@
       const current = tabs.indexOf(diagnosisTab.dataset.diagnosisTab);
       const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
       selectDiagnosisTab(tabs[next]);
+      return;
     }
-    if (event.key === "Escape" && diagnosisPane.hidden === false && !connectionDialog.open && !runDialog.open && !actionDialog.open) closeDiagnosis();
+    if (event.key === "Tab" && !diagnosisPane.hidden && diagnosisModalQuery.matches && !nativeDialogOpen) {
+      const focusable = [...diagnosisPane.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')].filter((element) => !element.hidden && element.getClientRects().length);
+      if (focusable.length) {
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      }
+    }
+    if (event.key === "Escape" && globalSearch.classList.contains("is-open")) {
+      event.preventDefault();
+      setMobileSearch(false);
+      mobileSearchButton.focus();
+      return;
+    }
+    if (event.key === "Escape" && diagnosisPane.hidden === false && !nativeDialogOpen) closeDiagnosis();
   });
+
+  diagnosisModalQuery.addEventListener("change", syncDiagnosisModality);
 
   window.addEventListener("popstate", applyRouteState);
 
