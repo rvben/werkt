@@ -11,10 +11,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime/debug"
 	"syscall"
 	"time"
 
+	"github.com/rvben/werkt/internal/buildinfo"
 	"github.com/rvben/werkt/internal/config"
 	"github.com/rvben/werkt/internal/database"
 	"github.com/rvben/werkt/internal/domain"
@@ -542,10 +542,7 @@ func printJSON(value any) error {
 }
 
 func version() string {
-	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
-		return info.Main.Version
-	}
-	return "dev"
+	return buildinfo.Current().Version
 }
 
 func usage() {
