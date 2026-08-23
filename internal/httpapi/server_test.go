@@ -655,6 +655,23 @@ func TestManagementMutationsValidateInputAndPreserveActor(t *testing.T) {
 		t.Fatalf("enabled = %v, actor = %q", store.setEnabled, store.setActor)
 	}
 
+	for name, key := range map[string]string{
+		"missing":   "",
+		"oversized": strings.Repeat("x", 256),
+		"control":   "diagnostic\ninvalid",
+	} {
+		t.Run("manual run rejects "+name+" idempotency key", func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/automations/example/runs", strings.NewReader(`{}`))
+			request.Header.Set("Authorization", "Bearer management-secret")
+			request.Header.Set("Idempotency-Key", key)
+			response := httptest.NewRecorder()
+			server.server.Handler.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+
 	request = httptest.NewRequest(http.MethodPost, "/api/v1/automations/example/runs", strings.NewReader(`{"reason":"diagnostic"}`))
 	request.Header.Set("Authorization", "Bearer management-secret")
 	request.Header.Set("Idempotency-Key", "diagnostic-1")

@@ -179,4 +179,42 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 			t.Errorf("audit action %q missing from %#v", action, actions)
 		}
 	}
+
+	const concurrentRevisionID = "rev_concurrent_activation"
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO revisions (id, automation_id, content_hash, manifest, artifact_path)
+		SELECT $1, automation_id, $2, manifest, artifact_path FROM revisions WHERE id = $3`,
+		concurrentRevisionID, strings.Repeat("a", 64), revisionID); err != nil {
+		t.Fatal(err)
+	}
+	activation, err := store.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer activation.Rollback(ctx) //nolint:errcheck
+	if _, err := activation.Exec(ctx, `
+		UPDATE automations SET active_revision_id = $2, updated_at = now()
+		WHERE id = $1`, value.Metadata.Name, concurrentRevisionID); err != nil {
+		t.Fatal(err)
+	}
+	type enqueueResult struct{ err error }
+	result := make(chan enqueueResult, 1)
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		_, _, enqueueErr := store.EnqueueManualRun(context.Background(), value.Metadata.Name, "manual-concurrent-target", revisionID, json.RawMessage(`{}`), "agent:test")
+		result <- enqueueResult{err: enqueueErr}
+	}()
+	<-started
+	if err := activation.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-result:
+		if got.err != ErrAutomationRevisionChanged {
+			t.Fatalf("concurrent activation manual-run error = %v", got.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("manual run did not resume after concurrent activation committed")
+	}
 }
