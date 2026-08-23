@@ -103,7 +103,7 @@ func Validate(value domain.Manifest) error {
 			if provider != "" && provider != "werkt" && provider != "github" {
 				problems = append(problems, path+".config.provider must be werkt or github")
 			}
-			allowed := []string{"secret", "provider"}
+			allowed := []string{"secret", "provider", "deliveryDelay"}
 			if provider == "" || provider == "werkt" {
 				allowed = append(allowed, "signatureHeader")
 			}
@@ -116,6 +116,13 @@ func Validate(value domain.Manifest) error {
 				signatureHeader, valid := raw.(string)
 				if !valid || signatureHeader == "" || !headerName.MatchString(signatureHeader) {
 					problems = append(problems, path+".config.signatureHeader is invalid")
+				}
+			}
+			if raw, exists := trigger.Config["deliveryDelay"]; exists {
+				delay, valid := raw.(string)
+				duration, err := time.ParseDuration(delay)
+				if !valid || err != nil || duration <= 0 || duration > 24*time.Hour {
+					problems = append(problems, path+".config.deliveryDelay must be a positive duration of at most 24h")
 				}
 			}
 		case "email":

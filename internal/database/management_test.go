@@ -48,7 +48,7 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 			Name: "managed-example", Project: "operations", Folder: "alerts", Labels: []string{"critical"},
 		},
 		Triggers: []domain.Trigger{
-			{ID: "incoming", Type: "webhook", Enabled: &enabled, Config: map[string]any{"secret": "tests/webhook"}},
+			{ID: "incoming", Type: "webhook", Enabled: &enabled, Config: map[string]any{"secret": "tests/webhook", "deliveryDelay": "5m"}},
 			{ID: "minute", Type: "schedule", Enabled: &enabled, Config: map[string]any{"cron": "* * * * *", "timezone": "UTC"}},
 		},
 		Runtime: domain.Runtime{
@@ -140,6 +140,13 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 	}
 	if _, created, err := store.IngestEvent(ctx, value.Metadata.Name, "incoming", "webhook", "resumed-hook", time.Now(), json.RawMessage(`{}`), nil); err != nil || !created {
 		t.Fatalf("resumed webhook created=%v err=%v", created, err)
+	}
+	var webhookAvailableAt time.Time
+	if err := store.pool.QueryRow(ctx, `SELECT available_at FROM runs r JOIN events e ON e.id = r.event_id WHERE e.external_id = 'resumed-hook'`).Scan(&webhookAvailableAt); err != nil {
+		t.Fatal(err)
+	}
+	if webhookAvailableAt.Before(time.Now().Add(4 * time.Minute)) {
+		t.Fatalf("delayed webhook available_at=%s", webhookAvailableAt)
 	}
 
 	runs, err := store.ListRunsFiltered(ctx, value.Metadata.Name, domain.RunQueued, 10)
