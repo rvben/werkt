@@ -108,7 +108,7 @@ Artifact retention intentionally makes sufficiently old inactive revisions unava
 
 ## Automations
 
-`GET /api/v1/automations` returns the organized inventory. Optional filters are `project`, `folder`, `label`, `q`, and `enabled`.
+`GET /api/v1/automations` returns the organized inventory. Each summary includes the authoritative latest run identity, status, and creation time when the automation has run, so clients do not need to infer health from a bounded global history window. Optional filters are `project`, `folder`, `label`, `q`, and `enabled`.
 
 `GET /api/v1/automations/{id}` returns metadata, the active manifest, effective trigger state, and revision history.
 

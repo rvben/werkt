@@ -63,6 +63,10 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runID, created, err := store.EnqueueManualRun(ctx, value.Metadata.Name, "summary-latest-run", json.RawMessage(`{"source":"summary"}`), "agent:test")
+	if err != nil || !created {
+		t.Fatalf("enqueue summary run created=%v err=%v", created, err)
+	}
 
 	onlyEnabled := true
 	automations, err := store.ListAutomations(ctx, AutomationFilter{
@@ -74,12 +78,18 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 	if len(automations) != 1 || automations[0].ActiveRevisionID != revisionID {
 		t.Fatalf("automations = %#v", automations)
 	}
+	if automations[0].LatestRun == nil || automations[0].LatestRun.ID != runID || automations[0].LatestRun.Status != domain.RunQueued {
+		t.Fatalf("latest run summary = %#v", automations[0].LatestRun)
+	}
 	detail, err := store.GetAutomation(ctx, value.Metadata.Name)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(detail.Triggers) != 2 || len(detail.Revisions) != 1 || !detail.Enabled {
 		t.Fatalf("detail = %#v", detail)
+	}
+	if detail.LatestRun == nil || detail.LatestRun.ID != runID {
+		t.Fatalf("detail latest run = %#v", detail.LatestRun)
 	}
 	if detail.Manifest.Runtime.Secrets["SERVICE_TOKEN"] != "tests/runtime-token" {
 		t.Fatalf("runtime secret reference = %#v", detail.Manifest.Runtime.Secrets)

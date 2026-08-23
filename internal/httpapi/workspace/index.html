@@ -88,11 +88,13 @@
         </button>
       </div>
       <div class="inventory-filters" aria-label="Inventory filters">
-        <button class="filter-chip is-active" type="button" data-enabled-filter="all">All</button>
-        <button class="filter-chip" type="button" data-enabled-filter="enabled">Active</button>
-        <button class="filter-chip" type="button" data-enabled-filter="disabled">Paused</button>
+        <button class="filter-chip is-active" type="button" data-enabled-filter="all" aria-pressed="true">All</button>
+        <button class="filter-chip" type="button" data-enabled-filter="failed" aria-pressed="false">Needs attention <span id="failed-filter-count">0</span></button>
+        <button class="filter-chip" type="button" data-enabled-filter="enabled" aria-pressed="false">Active</button>
+        <button class="filter-chip" type="button" data-enabled-filter="disabled" aria-pressed="false">Paused</button>
       </div>
-      <div class="inventory-list" id="inventory-list" aria-live="polite"></div>
+      <p class="sr-only" id="inventory-results" role="status" aria-live="polite" aria-atomic="true"></p>
+      <div class="inventory-list" id="inventory-list"></div>
     </aside>
 
     <main class="workspace-main" id="workspace-main" tabindex="-1">
