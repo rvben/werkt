@@ -13,7 +13,7 @@ This is an executable MVP, not yet a production sandbox.
 - PostgreSQL-backed events, run queue, retries, worker leases, and concurrency policies
 - Optional transactional per-automation JSON state for idempotency and small state machines
 - Cron schedules with IANA time zones
-- HMAC-authenticated webhook triggers with idempotency keys
+- HMAC-authenticated webhook triggers with idempotency keys and native GitHub delivery verification
 - Bearer-authenticated RFC 5322 email ingestion
 - ntfy subscriptions using its streaming JSON API
 - A language-neutral execution contract with local-process and Husker backends

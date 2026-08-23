@@ -21,21 +21,27 @@ import (
 )
 
 type fakeStore struct {
-	listFilter       database.AutomationFilter
-	listCalled       bool
-	setEnabled       *bool
-	setActor         string
-	manualData       json.RawMessage
-	manualExternalID string
-	manualActor      string
-	ingested         bool
-	ingressConfig    json.RawMessage
+	listFilter         database.AutomationFilter
+	listCalled         bool
+	setEnabled         *bool
+	setActor           string
+	manualData         json.RawMessage
+	manualExternalID   string
+	manualActor        string
+	ingested           bool
+	ingressConfig      json.RawMessage
+	ingestedExternalID string
+	ingestedData       json.RawMessage
+	ingestedMetadata   map[string]any
 }
 
 func (s *fakeStore) Ping(context.Context) error { return nil }
 
-func (s *fakeStore) IngestEvent(context.Context, string, string, string, string, time.Time, json.RawMessage, map[string]any) (string, bool, error) {
+func (s *fakeStore) IngestEvent(_ context.Context, _, _, _, externalID string, _ time.Time, data json.RawMessage, metadata map[string]any) (string, bool, error) {
 	s.ingested = true
+	s.ingestedExternalID = externalID
+	s.ingestedData = data
+	s.ingestedMetadata = metadata
 	return "run_hook", true, nil
 }
 
@@ -453,6 +459,38 @@ func TestWebhookRejectsStaleSignatureAndMissingIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestGitHubWebhookVerifiesProviderSignatureAndUsesSignedBodyForIdempotency(t *testing.T) {
+	const webhookSecret = "github-webhook-secret-at-least-32-bytes"
+	store := &fakeStore{ingressConfig: json.RawMessage(`{"provider":"github","secret":"tests/github-webhook"}`)}
+	server := New(store, ":0", "", WithSecretManager(testSecretManager(map[string]string{"tests/github-webhook": webhookSecret})))
+	body := []byte(`{"action":"opened","issue":{"number":42}}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/example/github-issues", strings.NewReader(string(body)))
+	request.Header.Set("X-GitHub-Delivery", "delivery-1")
+	request.Header.Set("X-GitHub-Event", "issues")
+	request.Header.Set("X-Hub-Signature-256", githubWebhookSignature(webhookSecret, body))
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || !store.ingested {
+		t.Fatalf("status=%d ingested=%v body=%s", response.Code, store.ingested, response.Body.String())
+	}
+	if !strings.HasPrefix(store.ingestedExternalID, "github:") || store.ingestedMetadata["deliveryId"] != "delivery-1" || store.ingestedMetadata["githubEvent"] != "issues" {
+		t.Fatalf("externalID=%q metadata=%#v", store.ingestedExternalID, store.ingestedMetadata)
+	}
+	if string(store.ingestedData) != string(body) {
+		t.Fatalf("data=%s", store.ingestedData)
+	}
+
+	store.ingested = false
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/hooks/example/github-issues", strings.NewReader(string(body)))
+	request.Header.Set("X-GitHub-Delivery", "delivery-2")
+	request.Header.Set("X-Hub-Signature-256", "sha256=00")
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || store.ingested {
+		t.Fatalf("invalid signature status=%d ingested=%v", response.Code, store.ingested)
+	}
+}
+
 func TestAuthenticatedEmailIngress(t *testing.T) {
 	const emailToken = "test-email-token-at-least-32-bytes-long"
 	store := &fakeStore{}
@@ -651,6 +689,12 @@ func TestOpenAPIContractIsPublicAndDocumentsManagementRoutes(t *testing.T) {
 func webhookSignature(secret, timestamp, idempotencyKey string, body []byte) string {
 	digest := hmac.New(sha256.New, []byte(secret))
 	_, _ = digest.Write([]byte(timestamp + "." + idempotencyKey + "."))
+	_, _ = digest.Write(body)
+	return "sha256=" + hex.EncodeToString(digest.Sum(nil))
+}
+
+func githubWebhookSignature(secret string, body []byte) string {
+	digest := hmac.New(sha256.New, []byte(secret))
 	_, _ = digest.Write(body)
 	return "sha256=" + hex.EncodeToString(digest.Sum(nil))
 }

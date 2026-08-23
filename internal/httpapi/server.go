@@ -583,8 +583,9 @@ func (s *Server) webhook(response http.ResponseWriter, request *http.Request) {
 	var config struct {
 		Secret          string `json:"secret"`
 		SignatureHeader string `json:"signatureHeader"`
+		Provider        string `json:"provider"`
 	}
-	if err := json.Unmarshal(policy.Config, &config); err != nil || config.Secret == "" {
+	if err := json.Unmarshal(policy.Config, &config); err != nil || config.Secret == "" || (config.Provider != "" && config.Provider != "werkt" && config.Provider != "github") {
 		slog.Error("webhook trigger has invalid credential configuration", "automation", request.PathValue("automation"), "trigger", request.PathValue("trigger"))
 		writeError(response, http.StatusServiceUnavailable, "trigger credential unavailable")
 		return
@@ -596,6 +597,10 @@ func (s *Server) webhook(response http.ResponseWriter, request *http.Request) {
 	header := config.SignatureHeader
 	if header == "" {
 		header = defaultWebhookSignatureHeader
+	}
+	if config.Provider == "github" {
+		s.githubWebhook(response, request, body, secret)
+		return
 	}
 	idempotencyKey := request.Header.Get("Idempotency-Key")
 	if idempotencyKey == "" {
@@ -637,6 +642,55 @@ func (s *Server) webhook(response http.ResponseWriter, request *http.Request) {
 	runID, created, err := s.store.IngestEvent(
 		request.Context(), request.PathValue("automation"), request.PathValue("trigger"),
 		"webhook", request.Header.Get("Idempotency-Key"), time.Now().UTC(), data, metadata,
+	)
+	if err != nil {
+		writeError(response, http.StatusNotFound, err.Error())
+		return
+	}
+	status := http.StatusAccepted
+	if !created {
+		status = http.StatusOK
+	}
+	writeJSON(response, status, map[string]any{"runId": runID, "created": created})
+}
+
+func (s *Server) githubWebhook(response http.ResponseWriter, request *http.Request, body, secret []byte) {
+	deliveryID := request.Header.Get("X-GitHub-Delivery")
+	if deliveryID == "" {
+		writeError(response, http.StatusBadRequest, "X-GitHub-Delivery is required")
+		return
+	}
+	if len(deliveryID) > 255 {
+		writeError(response, http.StatusBadRequest, "X-GitHub-Delivery cannot exceed 255 bytes")
+		return
+	}
+	provided, found := strings.CutPrefix(request.Header.Get("X-Hub-Signature-256"), "sha256=")
+	providedDigest, decodeErr := hex.DecodeString(provided)
+	expectedDigest := hmac.New(sha256.New, secret)
+	_, _ = expectedDigest.Write(body)
+	if !found || decodeErr != nil || len(providedDigest) != sha256.Size || !hmac.Equal(expectedDigest.Sum(nil), providedDigest) {
+		writeError(response, http.StatusUnauthorized, "invalid GitHub webhook signature")
+		return
+	}
+	if len(body) == 0 || !json.Valid(body) {
+		writeError(response, http.StatusBadRequest, "GitHub webhook body must be JSON")
+		return
+	}
+	bodyDigest := sha256.Sum256(body)
+	externalID := "github:" + hex.EncodeToString(bodyDigest[:])
+	metadata := map[string]any{
+		"source":         "webhook",
+		"provider":       "github",
+		"deliveryId":     deliveryID,
+		"githubEvent":    request.Header.Get("X-GitHub-Event"),
+		"githubHookId":   request.Header.Get("X-GitHub-Hook-ID"),
+		"githubTargetId": request.Header.Get("X-GitHub-Hook-Installation-Target-ID"),
+		"contentType":    request.Header.Get("Content-Type"),
+		"userAgent":      request.UserAgent(),
+	}
+	runID, created, err := s.store.IngestEvent(
+		request.Context(), request.PathValue("automation"), request.PathValue("trigger"),
+		"webhook", externalID, time.Now().UTC(), json.RawMessage(body), metadata,
 	)
 	if err != nil {
 		writeError(response, http.StatusNotFound, err.Error())
