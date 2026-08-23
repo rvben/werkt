@@ -595,6 +595,7 @@
     deploymentPollRequest += 1;
     deploymentPollController?.abort();
     state.selectedDeployment = null;
+    state.selectedRun = null;
     state.diagnosisReturnFocus = document.activeElement;
     diagnosisPane.hidden = false;
     shell.classList.add("has-diagnosis");
