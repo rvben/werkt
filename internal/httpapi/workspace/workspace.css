@@ -447,6 +447,10 @@ a { color: inherit; }
 .deployment-notice { margin-bottom: var(--space-5); padding: var(--space-4); border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--surface-raised); }
 .deployment-notice h3 { margin: 0 0 var(--space-1); font-size: 0.8125rem; }
 .deployment-notice p { margin: 0; color: var(--ink-soft); font-size: 0.75rem; }
+.run-failure { margin-bottom: var(--space-5); padding: var(--space-4); border: 1px solid var(--error); border-radius: var(--radius-md); background: var(--error-bg); }
+.run-failure h3 { margin: 0 0 var(--space-1); color: var(--error); font-size: 0.8125rem; }
+.run-failure p { margin: 0; color: var(--ink-soft); font-size: 0.75rem; overflow-wrap: anywhere; }
+.run-failure-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); }
 .deployment-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); }
 .deployment-steps { margin-bottom: var(--space-6); }
 .deployment-steps > .muted-value { margin: var(--space-3) 0 0; font-size: 0.75rem; }
@@ -502,7 +506,15 @@ dialog textarea { resize: vertical; line-height: 1.55; }
 dialog input:focus, dialog textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--focus); background: var(--surface); }
 .field-message { min-height: 1.25rem; margin: var(--space-2) 0 0; color: var(--error); font-size: 0.75rem; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-5); }
+.run-target { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: var(--space-2) var(--space-3); margin: var(--space-4) 0 var(--space-5); padding: var(--space-3) 0; border-block: 1px solid var(--line); font-size: 0.75rem; }
+.run-target dt { color: var(--muted); }
+.run-target dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--ink); }
 
+.receipt-region { position: fixed; z-index: var(--z-toast); top: 5rem; right: var(--space-4); display: grid; gap: var(--space-2); width: min(31rem, calc(100vw - 2rem)); pointer-events: none; }
+.receipt { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); padding: var(--space-4); border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--surface); box-shadow: 0 0.5rem 1.75rem oklch(0.15 0.018 43 / 0.14); pointer-events: auto; }
+.receipt strong { display: block; color: var(--ink); font-size: 0.8125rem; }
+.receipt p { margin: var(--space-1) 0 0; color: var(--muted); font-size: 0.75rem; }
+.receipt-actions { display: flex; align-items: center; gap: var(--space-2); flex: 0 0 auto; }
 .toast-region { position: fixed; z-index: var(--z-toast); right: var(--space-4); bottom: var(--space-4); display: grid; gap: var(--space-2); width: min(23rem, calc(100vw - 2rem)); pointer-events: none; }
 .toast { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--ink); color: var(--surface); box-shadow: 0 0.5rem 1.75rem oklch(0.15 0.018 43 / 0.14); font-size: 0.8125rem; animation: toast-in var(--duration) var(--ease); }
 .toast::before { content: ""; width: 0.5rem; height: 0.5rem; margin-top: 0.35rem; border-radius: 50%; background: var(--success); flex: 0 0 auto; }
@@ -589,7 +601,9 @@ dialog input:focus, dialog textarea:focus { border-color: var(--primary); box-sh
   .global-view-header { display: block; margin-bottom: var(--space-5); }
   .global-toolbar { margin-top: var(--space-3); }
   .diagnosis-pane { top: 0; bottom: 0; width: 100vw; }
+  .receipt-region { top: 4.5rem; }
   .toast-region { bottom: 5rem; }
+  .run-failure-actions .button { width: 100%; }
   dialog form { padding: var(--space-5); }
 }
 
@@ -602,7 +616,7 @@ dialog input:focus, dialog textarea:focus { border-color: var(--primary); box-sh
 }
 
 @media print {
-  .topbar, .primary-nav, .inventory-pane, .diagnosis-pane, dialog, .toast-region, .detail-actions { display: none !important; }
+  .topbar, .primary-nav, .inventory-pane, .diagnosis-pane, dialog, .receipt-region, .toast-region, .detail-actions { display: none !important; }
   .app-shell, .app-shell.has-diagnosis { display: block; height: auto; overflow: visible; }
   .workspace-main { overflow: visible; }
   .detail-header { position: static; }

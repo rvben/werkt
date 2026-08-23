@@ -51,7 +51,7 @@ func TestTransactionalAutomationStateIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	firstID, created, err := store.EnqueueManualRun(ctx, manifest.Metadata.Name, "state-1", json.RawMessage(`{}`), "test")
+	firstID, created, err := store.EnqueueManualRun(ctx, manifest.Metadata.Name, "state-1", "", json.RawMessage(`{}`), "test")
 	if err != nil || !created {
 		t.Fatalf("first run id=%q created=%v err=%v", firstID, created, err)
 	}
@@ -66,7 +66,7 @@ func TestTransactionalAutomationStateIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	secondID, created, err := store.EnqueueManualRun(ctx, manifest.Metadata.Name, "state-2", json.RawMessage(`{}`), "test")
+	secondID, created, err := store.EnqueueManualRun(ctx, manifest.Metadata.Name, "state-2", "", json.RawMessage(`{}`), "test")
 	if err != nil || !created {
 		t.Fatalf("second run id=%q created=%v err=%v", secondID, created, err)
 	}

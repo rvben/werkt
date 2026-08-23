@@ -52,7 +52,9 @@ type fakeStore struct {
 	setActor           string
 	manualData         json.RawMessage
 	manualExternalID   string
+	manualExpectedRev  string
 	manualActor        string
+	manualErr          error
 	ingested           bool
 	ingressConfig      json.RawMessage
 	ingestedExternalID string
@@ -167,10 +169,14 @@ func (s *fakeStore) RollbackAutomation(context.Context, string, string, string) 
 	return true, nil
 }
 
-func (s *fakeStore) EnqueueManualRun(_ context.Context, _ string, externalID string, data json.RawMessage, actor string) (string, bool, error) {
+func (s *fakeStore) EnqueueManualRun(_ context.Context, _ string, externalID, expectedRevision string, data json.RawMessage, actor string) (string, bool, error) {
 	s.manualExternalID = externalID
+	s.manualExpectedRev = expectedRevision
 	s.manualData = append(json.RawMessage(nil), data...)
 	s.manualActor = actor
+	if s.manualErr != nil {
+		return "", false, s.manualErr
+	}
 	return "run_manual", true, nil
 }
 
@@ -618,14 +624,26 @@ func TestManagementMutationsValidateInputAndPreserveActor(t *testing.T) {
 	request = httptest.NewRequest(http.MethodPost, "/api/v1/automations/example/runs", strings.NewReader(`{"reason":"diagnostic"}`))
 	request.Header.Set("Authorization", "Bearer management-secret")
 	request.Header.Set("Idempotency-Key", "diagnostic-1")
+	request.Header.Set("X-Werkt-Expected-Revision", "rev-reviewed")
 	request.Header.Set("X-Werkt-Actor", "agent:operator")
 	response = httptest.NewRecorder()
 	server.server.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("manual-run status = %d, body = %s", response.Code, response.Body.String())
 	}
-	if store.manualExternalID != "diagnostic-1" || store.manualActor != "agent:operator" || string(store.manualData) != `{"reason":"diagnostic"}` {
-		t.Fatalf("manual run external=%q actor=%q data=%s", store.manualExternalID, store.manualActor, store.manualData)
+	if store.manualExternalID != "diagnostic-1" || store.manualExpectedRev != "rev-reviewed" || store.manualActor != "agent:operator" || string(store.manualData) != `{"reason":"diagnostic"}` {
+		t.Fatalf("manual run external=%q expected=%q actor=%q data=%s", store.manualExternalID, store.manualExpectedRev, store.manualActor, store.manualData)
+	}
+
+	store.manualErr = database.ErrAutomationRevisionChanged
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/automations/example/runs", strings.NewReader(`{}`))
+	request.Header.Set("Authorization", "Bearer management-secret")
+	request.Header.Set("Idempotency-Key", "diagnostic-stale")
+	request.Header.Set("X-Werkt-Expected-Revision", "rev-stale")
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "active revision changed") {
+		t.Fatalf("stale revision status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

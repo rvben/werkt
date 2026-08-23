@@ -21,6 +21,9 @@
   const runError = document.querySelector("#run-error");
   const runPayload = document.querySelector("#run-payload");
   const runIdempotency = document.querySelector("#run-idempotency");
+  const runTargetAutomation = document.querySelector("#run-target-automation");
+  const runTargetRevision = document.querySelector("#run-target-revision");
+  const runTargetLifecycle = document.querySelector("#run-target-lifecycle");
   const actionDialog = document.querySelector("#action-dialog");
   const actionForm = document.querySelector("#action-form");
   const actionTitle = document.querySelector("#action-dialog-title");
@@ -29,6 +32,7 @@
   const actionSubmit = document.querySelector("#action-submit");
   const actionDismiss = document.querySelector("#action-dismiss");
   const actionIconUse = document.querySelector("#action-icon-use");
+  const receiptRegion = document.querySelector("#receipt-region");
   const toastRegion = document.querySelector("#toast-region");
 
   const HISTORY_LIMIT = 100;
@@ -73,6 +77,7 @@
     loading: true,
     mutating: false,
     pendingAction: null,
+    pendingManualRun: null,
     feedErrors: {runs: "", deployments: "", audit: ""},
     feedLoading: {runs: true, deployments: true, audit: true},
     detailRunsError: "",
@@ -454,12 +459,12 @@
         </section>
 
         <section class="workspace-section" aria-labelledby="runs-heading">
-          <div class="section-heading"><div><h3 id="runs-heading">Recent runs</h3><p>Newest attempts for this automation · ${escapeHTML(historyScope(state.detailRuns.length))}</p></div><button class="section-link" type="button" data-view-link="runs">View all runs</button></div>
+          <div class="section-heading"><div><h3 id="runs-heading">Recent runs</h3><p>Newest attempts for this automation · ${escapeHTML(historyScope(state.detailRuns.length))}</p></div><button class="section-link" type="button" data-view-link="runs">Browse recent runs</button></div>
           ${state.detailRunsError ? `<div class="inline-notice is-error" role="status"><span>${escapeHTML(state.detailRunsError)}</span><button class="button button-quiet button-compact" type="button" data-retry-detail-runs>Try again</button></div>` : renderRunsTable(recentRuns, true)}
         </section>
 
         <section class="workspace-section" aria-labelledby="revisions-heading">
-          <div class="section-heading"><div><h3 id="revisions-heading">Revisions</h3><p>Immutable deployment history</p></div></div>
+          <div class="section-heading"><div><h3 id="revisions-heading">Latest revisions</h3><p>${Math.min(detail.revisions?.length || 0, 8)} most recent immutable revisions</p></div></div>
           ${renderRevisions(detail.revisions || [])}
         </section>
       </div>
@@ -485,7 +490,7 @@
 
   function renderRunsTable(runs, compact = false) {
     if (!runs.length) return `<div class="empty-state"><div class="empty-state-inner"><h2>No runs yet</h2><p>Trigger this automation or queue a manual diagnostic run to see execution history.</p></div></div>`;
-    return `<table class="data-table"><thead><tr><th class="status-column">Status</th>${compact ? "" : "<th>Automation</th>"}<th>Started</th><th class="hide-tablet">Attempt</th><th class="wide">Run ID</th><th class="hide-tablet">Duration</th><th class="action-column"><span class="sr-only">Open</span></th></tr></thead><tbody>${runs.map((run) => `<tr><td data-label="Status"><span class="status-badge status-${statusClass(run.status)}">${escapeHTML(capitalize(run.status))}</span></td>${compact ? "" : `<td data-label="Automation"><button class="table-button" type="button" data-automation="${escapeHTML(run.automationId)}">${escapeHTML(run.automationId)}</button></td>`}<td data-label="Started" class="tabular">${relativeTimeElement(run.startedAt || run.createdAt)}</td><td data-label="Attempt" class="hide-tablet">${escapeHTML(`${run.attempt}/${run.maxAttempts}`)}</td><td data-label="Run"><button class="table-button" type="button" data-run="${escapeHTML(run.id)}"><span class="mono">${escapeHTML(shortID(run.id, compact ? 18 : 26))}</span></button></td><td data-label="Duration" class="hide-tablet tabular">${escapeHTML(runDuration(run))}</td><td class="action-column"><button class="icon-button" type="button" data-run="${escapeHTML(run.id)}" aria-label="Diagnose run ${escapeHTML(run.id)}">${icon("chevron")}</button></td></tr>`).join("")}</tbody></table>`;
+    return `<table class="data-table"><thead><tr><th class="status-column">Status</th>${compact ? "" : "<th>Automation</th>"}<th>Started</th><th class="hide-tablet">Attempt</th><th class="wide">Run ID</th><th class="hide-tablet">Duration</th></tr></thead><tbody>${runs.map((run) => `<tr><td data-label="Status"><span class="status-badge status-${statusClass(run.status)}">${escapeHTML(capitalize(run.status))}</span></td>${compact ? "" : `<td data-label="Automation"><button class="table-button" type="button" data-automation="${escapeHTML(run.automationId)}">${escapeHTML(run.automationId)}</button></td>`}<td data-label="Started" class="tabular">${relativeTimeElement(run.startedAt || run.createdAt)}</td><td data-label="Attempt" class="hide-tablet">${escapeHTML(`${run.attempt}/${run.maxAttempts}`)}</td><td data-label="Run"><button class="table-button" type="button" data-run="${escapeHTML(run.id)}" aria-label="Diagnose run ${escapeHTML(run.id)}"><span class="mono">${escapeHTML(shortID(run.id, compact ? 18 : 26))}</span></button></td><td data-label="Duration" class="hide-tablet tabular">${escapeHTML(runDuration(run))}</td></tr>`).join("")}</tbody></table>`;
   }
 
   function renderRevisions(revisions) {
@@ -585,7 +590,8 @@
     const run = state.selectedRun;
     if (!run) return;
     const tabs = ["summary", "logs", "output"];
-    diagnosisContent.innerHTML = `<div class="diagnosis-header"><div class="diagnosis-header-top"><h2 id="diagnosis-title">Run diagnosis</h2><button class="icon-button" type="button" data-close-diagnosis aria-label="Close run diagnosis">${icon("close")}</button></div><div class="diagnosis-run"><span class="status-badge status-${statusClass(run.status)}">${escapeHTML(capitalize(run.status))}</span><code title="${escapeHTML(run.id)}">${escapeHTML(run.id)}</code></div><p class="diagnosis-meta"><span>${escapeHTML(run.automationId)}</span><span>${escapeHTML(runDuration(run))}</span><span>attempt ${escapeHTML(`${run.attempt}/${run.maxAttempts}`)}</span></p><div class="diagnosis-tabs" role="tablist" aria-label="Run detail">${tabs.map((tab) => `<button class="tab-button" type="button" role="tab" data-diagnosis-tab="${tab}" aria-selected="${state.diagnosisTab === tab}" tabindex="${state.diagnosisTab === tab ? "0" : "-1"}">${capitalize(tab)}</button>`).join("")}</div></div><div class="diagnosis-body">${diagnosisTabContent(run)}</div>`;
+    const activeTab = state.diagnosisTab;
+    diagnosisContent.innerHTML = `<div class="diagnosis-header"><div class="diagnosis-header-top"><h2 id="diagnosis-title">Run diagnosis</h2><button class="icon-button" type="button" data-close-diagnosis aria-label="Close run diagnosis">${icon("close")}</button></div><div class="diagnosis-run"><span class="status-badge status-${statusClass(run.status)}">${escapeHTML(capitalize(run.status))}</span><code title="${escapeHTML(run.id)}">${escapeHTML(run.id)}</code></div><p class="diagnosis-meta"><span>${escapeHTML(run.automationId)}</span><span>${escapeHTML(runDuration(run))}</span><span>attempt ${escapeHTML(`${run.attempt}/${run.maxAttempts}`)}</span></p><div class="diagnosis-tabs" role="tablist" aria-label="Run detail">${tabs.map((tab) => `<button id="diagnosis-tab-${tab}" class="tab-button" type="button" role="tab" data-diagnosis-tab="${tab}" aria-controls="diagnosis-panel-${tab}" aria-selected="${activeTab === tab}" tabindex="${activeTab === tab ? "0" : "-1"}">${capitalize(tab)}</button>`).join("")}</div></div><div class="diagnosis-body">${renderRunFailure(run)}${tabs.map((tab) => `<div id="diagnosis-panel-${tab}" role="tabpanel" aria-labelledby="diagnosis-tab-${tab}" tabindex="0" ${activeTab === tab ? "" : "hidden"}>${activeTab === tab ? diagnosisTabContent(run) : ""}</div>`).join("")}</div>`;
     if (focusPanel) diagnosisContent.querySelector("[data-close-diagnosis]").focus();
   }
 
@@ -647,7 +653,31 @@
     if (state.diagnosisTab === "output") {
       return `<div class="copy-row"><button class="button button-quiet" type="button" data-copy="output">${icon("copy")}Copy output</button></div><pre class="code-block">${escapeHTML(prettyJSON(run.result) || "This run produced no structured result.")}</pre>`;
     }
-    return `<dl class="diagnosis-facts"><dt>Automation</dt><dd>${escapeHTML(run.automationId)}</dd><dt>Revision</dt><dd class="mono">${escapeHTML(run.revisionId)}</dd><dt>Event</dt><dd class="mono">${escapeHTML(run.eventId)}</dd><dt>Created</dt><dd class="tabular">${escapeHTML(formatDate(run.createdAt))}</dd><dt>Started</dt><dd class="tabular">${escapeHTML(formatDate(run.startedAt))}</dd><dt>Finished</dt><dd class="tabular">${escapeHTML(formatDate(run.finishedAt))}</dd><dt>Attempts</dt><dd>${escapeHTML(`${run.attempt} of ${run.maxAttempts}`)}</dd><dt>Error</dt><dd>${escapeHTML(run.error || "None")}</dd></dl>`;
+    return `<dl class="diagnosis-facts"><dt>Automation</dt><dd>${escapeHTML(run.automationId)}</dd><dt>Revision</dt><dd class="mono">${escapeHTML(run.revisionId)}</dd><dt>Event</dt><dd class="mono">${escapeHTML(run.eventId)}</dd><dt>Created</dt><dd class="tabular">${escapeHTML(formatDate(run.createdAt))}</dd><dt>Started</dt><dd class="tabular">${escapeHTML(formatDate(run.startedAt))}</dd><dt>Finished</dt><dd class="tabular">${escapeHTML(formatDate(run.finishedAt))}</dd><dt>Attempts</dt><dd>${escapeHTML(`${run.attempt} of ${run.maxAttempts}`)}</dd></dl>`;
+  }
+
+  function renderRunFailure(run) {
+    if (run.status !== "failed") return "";
+    const error = run.error || "Werkt recorded a failed terminal state without an error message.";
+    return `<section class="run-failure" aria-labelledby="run-failure-title"><h3 id="run-failure-title">Run failed on attempt ${escapeHTML(run.attempt)} of ${escapeHTML(run.maxAttempts)}</h3><p>${escapeHTML(error)}</p><div class="run-failure-actions"><button class="button button-primary" type="button" data-diagnosis-tab-action="logs">Open logs</button><button class="button button-quiet" type="button" data-copy-diagnostic>${icon("copy")}Copy diagnostic bundle</button><button class="button button-quiet" type="button" data-queue-diagnostic="${escapeHTML(run.automationId)}">${icon("play")}Queue diagnostic run</button></div></section>`;
+  }
+
+  function diagnosticBundle(run) {
+    return JSON.stringify({
+      runId: run.id,
+      automationId: run.automationId,
+      revisionId: run.revisionId,
+      eventId: run.eventId,
+      status: run.status,
+      attempt: run.attempt,
+      maxAttempts: run.maxAttempts,
+      createdAt: run.createdAt,
+      startedAt: run.startedAt || null,
+      finishedAt: run.finishedAt || null,
+      error: run.error || null,
+      logs: run.logs || "",
+      output: run.result ?? null,
+    }, null, 2);
   }
 
   async function toggleAutomation(enabled) {
@@ -656,15 +686,16 @@
     state.mutating = true;
     renderAutomationDetail();
     try {
-      const response = await api(`/api/v1/automations/${encodeURIComponent(automationID)}`, {
-        method: "PATCH",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({enabled}),
-      });
-      if (state.selectedAutomation === automationID) state.detail = response.automation;
-      const summary = state.automations.find((item) => item.id === automationID);
-      if (summary) Object.assign(summary, response.automation);
-      showToast(`${automationID} is now ${enabled ? "active" : "paused"}.`);
+      const response = await updateAutomationEnabled(automationID, enabled);
+      showReceipt(
+        enabled ? "Automation resumed" : "Automation paused",
+        response.changed
+          ? (enabled
+            ? `${automationID} is active. Future schedules were recalculated; missed intervals were not replayed.`
+            : `${automationID} ingress stopped. Queued and running jobs continue.`)
+          : `No change — ${automationID} was already ${enabled ? "active" : "paused"}.`,
+        {audit: response.changed},
+      );
     } catch (error) {
       if (!(error instanceof AuthenticationRequired)) showToast(error.message, true);
     } finally {
@@ -673,41 +704,98 @@
     }
   }
 
-  function openManualRun() {
-    if (!state.detail) return;
+  async function updateAutomationEnabled(automationID, enabled) {
+    const response = await api(`/api/v1/automations/${encodeURIComponent(automationID)}`, {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({enabled}),
+    });
+    if (state.selectedAutomation === automationID) state.detail = response.automation;
+    const summary = state.automations.find((item) => item.id === automationID);
+    if (summary) Object.assign(summary, response.automation);
+    return response;
+  }
+
+  async function openManualRun(automationID = state.detail?.id, sourceRunID = "") {
+    if (!automationID) return;
     runError.textContent = "";
-    runPayload.value = '{\n  "reason": "operator diagnostic"\n}';
-    runIdempotency.value = `workspace-${state.detail.id}-${Date.now()}`;
+    runPayload.removeAttribute("aria-invalid");
+    runIdempotency.removeAttribute("aria-invalid");
+    let detail = state.detail?.id === automationID ? state.detail : null;
+    try {
+      if (!detail) detail = await api(`/api/v1/automations/${encodeURIComponent(automationID)}`);
+    } catch (error) {
+      if (!(error instanceof AuthenticationRequired)) showToast(`Run target could not be loaded: ${error.message}`, true);
+      return;
+    }
+    state.pendingManualRun = {
+      automationId: automationID,
+      expectedRevisionId: detail.activeRevisionId,
+      sourceRunId: sourceRunID,
+    };
+    runTargetAutomation.textContent = automationID;
+    runTargetRevision.textContent = detail.activeRevisionId;
+    runTargetLifecycle.textContent = detail.enabled ? "Active" : "Paused · manual runs remain available";
+    runPayload.value = sourceRunID
+      ? `{\n  "reason": "diagnose ${sourceRunID}"\n}`
+      : '{\n  "reason": "operator diagnostic"\n}';
+    runIdempotency.value = `workspace-${automationID}-${Date.now()}`;
     runDialog.showModal();
     runPayload.focus();
   }
 
   async function queueManualRun() {
-    if (!state.detail || state.mutating) return;
+    const target = state.pendingManualRun;
+    if (!target || state.mutating) return;
     let parsed;
     try {
       parsed = JSON.parse(runPayload.value);
     } catch (_) {
       runError.textContent = "Event data must be valid JSON before a run can be queued.";
+      runPayload.setAttribute("aria-invalid", "true");
       runPayload.focus();
       return;
     }
     runError.textContent = "";
+    runPayload.removeAttribute("aria-invalid");
     const submitButton = runForm.querySelector('button[type="submit"]');
     submitButton.disabled = true;
     state.mutating = true;
     try {
-      const response = await api(`/api/v1/automations/${encodeURIComponent(state.detail.id)}/runs`, {
+      const current = await api(`/api/v1/automations/${encodeURIComponent(target.automationId)}`);
+      if (current.activeRevisionId !== target.expectedRevisionId) {
+        const previous = target.expectedRevisionId;
+        target.expectedRevisionId = current.activeRevisionId;
+        runTargetRevision.textContent = current.activeRevisionId;
+        runTargetLifecycle.textContent = current.enabled ? "Active" : "Paused · manual runs remain available";
+        runError.textContent = `Active revision changed from ${previous} to ${current.activeRevisionId}. Review the new target, then queue again.`;
+        runTargetRevision.focus();
+        return;
+      }
+      const response = await api(`/api/v1/automations/${encodeURIComponent(target.automationId)}/runs`, {
         method: "POST",
-        headers: {"Content-Type": "application/json", "Idempotency-Key": runIdempotency.value.trim()},
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": runIdempotency.value.trim(),
+          "X-Werkt-Expected-Revision": target.expectedRevisionId,
+        },
         body: JSON.stringify(parsed),
       });
       runDialog.close();
-      showToast(response.created ? "Manual run queued." : "That idempotency key already points to an existing run.");
+      showReceipt(
+        response.created ? "Manual run queued" : "Existing manual run opened",
+        `${response.runId} targets ${target.expectedRevisionId} for ${target.automationId}.`,
+        {audit: true},
+      );
+      state.pendingManualRun = null;
       await loadWorkspace();
       await openRun(response.runId);
     } catch (error) {
-      if (!(error instanceof AuthenticationRequired)) runError.textContent = error.message;
+      if (!(error instanceof AuthenticationRequired)) {
+        runError.textContent = error.status === 409
+          ? "The active revision changed while this request was being queued. Review the current automation, then open the manual run form again."
+          : error.message;
+      }
     } finally {
       state.mutating = false;
       submitButton.disabled = false;
@@ -721,13 +809,21 @@
     if (action.kind === "rollback") {
       actionIconUse.setAttribute("href", "#icon-rollback");
       actionTitle.textContent = "Roll back revision?";
-      actionMessage.textContent = `Werkt will make ${action.revisionId} active for ${state.detail.id} and replace its effective triggers. Running jobs keep their pinned revision.`;
+      actionMessage.textContent = `Werkt will make ${action.revisionId} active for ${action.automationId} and replace its effective triggers. Running jobs keep their pinned revision.`;
       actionSubmit.textContent = "Roll back revision";
+      actionDismiss.textContent = "Keep current revision";
+    } else if (action.kind === "pause") {
+      actionIconUse.setAttribute("href", "#icon-pause");
+      actionTitle.textContent = `Pause ${action.automationId}?`;
+      actionMessage.textContent = "Schedule, webhook, email, and ntfy ingestion will stop. Queued and running jobs continue on their pinned revisions. Manual diagnostic runs remain available. When resumed, missed schedule intervals are not replayed.";
+      actionSubmit.textContent = "Pause automation";
+      actionDismiss.textContent = "Keep active";
     } else {
       actionIconUse.setAttribute("href", "#icon-stop");
       actionTitle.textContent = "Cancel deployment?";
       actionMessage.textContent = `Werkt will stop ${action.deploymentId} at its current promotion step. Its source and diagnostics remain available for a retry.`;
       actionSubmit.textContent = "Cancel deployment";
+      actionDismiss.textContent = "Keep deployment running";
     }
     actionDialog.showModal();
     actionDismiss.focus();
@@ -741,19 +837,33 @@
     actionError.textContent = "";
     try {
       if (action.kind === "rollback") {
-        await api(`/api/v1/automations/${encodeURIComponent(state.detail.id)}/rollback`, {
+        await api(`/api/v1/automations/${encodeURIComponent(action.automationId)}/rollback`, {
           method: "POST",
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({revisionId: action.revisionId}),
         });
         actionDialog.close();
-        showToast(`${action.revisionId} is active.`);
+        showReceipt("Revision activated", `${action.automationId} now uses ${action.revisionId}. Running jobs kept their pinned revisions.`, {audit: true});
         await loadWorkspace({preserveSelection: true});
+      } else if (action.kind === "pause") {
+        const response = await updateAutomationEnabled(action.automationId, false);
+        actionDialog.close();
+        showReceipt(
+          response.changed ? "Automation paused" : "Automation already paused",
+          response.changed
+            ? `${action.automationId} ingress stopped. Queued and running jobs continue.`
+            : `No change — ${action.automationId} was already paused.`,
+          {audit: response.changed},
+        );
       } else {
         const deployment = await api(`/api/v1/deployments/${encodeURIComponent(action.deploymentId)}/cancel`, {method: "POST"});
         actionDialog.close();
         state.selectedDeployment = deployment;
-        showToast(deployment.status === "cancelled" ? "Deployment cancelled." : "Cancellation requested.");
+        showReceipt(
+          deployment.status === "cancelled" ? "Deployment cancelled" : "Deployment cancellation requested",
+          `${deployment.id} ${deployment.status === "cancelled" ? "stopped" : "is stopping at its current promotion step"}. Its source and diagnostics remain available.`,
+          {audit: true},
+        );
         await refreshDeploymentLists();
         renderDeploymentDiagnosis();
       }
@@ -777,7 +887,11 @@
         method: "POST",
         headers: {"Idempotency-Key": `workspace-retry-${deploymentID}`},
       });
-      showToast(response.created ? "Package queued for retry." : "This retry is already queued.");
+      showReceipt(
+        response.created ? "Retry queued" : "Existing retry opened",
+        `${response.deployment.id} retries the retained package from ${deploymentID}.`,
+        {audit: response.created},
+      );
       await refreshDeploymentLists();
       await openDeployment(response.deployment.id);
     } catch (error) {
@@ -789,7 +903,7 @@
   }
 
   async function refreshDeploymentLists() {
-    state.deployments = await api("/api/v1/deployments?limit=100");
+    state.deployments = await api(`/api/v1/deployments?limit=${HISTORY_LIMIT}`);
     if (state.view === "deployments") renderGlobalDeployments();
   }
 
@@ -840,6 +954,14 @@
     toast.textContent = message;
     toastRegion.append(toast);
     window.setTimeout(() => toast.remove(), 4200);
+  }
+
+  function showReceipt(title, message, {audit = false} = {}) {
+    const receipt = document.createElement("article");
+    receipt.className = "receipt";
+    receipt.innerHTML = `<div><strong>${escapeHTML(title)}</strong><p>${escapeHTML(message)}</p></div><div class="receipt-actions">${audit ? '<button class="button button-quiet button-compact" type="button" data-receipt-view="audit">View audit</button>' : ""}<button class="icon-button" type="button" data-dismiss-receipt aria-label="Dismiss receipt">${icon("close")}</button></div>`;
+    receiptRegion.prepend(receipt);
+    [...receiptRegion.children].slice(3).forEach((item) => item.remove());
   }
 
   function renderFatalError(error) {
@@ -973,6 +1095,7 @@
       closeDiagnosis();
       writeRoute("push");
       render();
+      refreshFeed("audit");
       document.querySelector("#workspace-main")?.focus();
       return;
     }
@@ -998,10 +1121,18 @@
     const retryDeploymentButton = event.target.closest("[data-retry-deployment]");
     if (retryDeploymentButton) { retryDeployment(retryDeploymentButton.dataset.retryDeployment); return; }
     const rollbackButton = event.target.closest("[data-rollback-revision]");
-    if (rollbackButton && state.detail) { openAction({kind: "rollback", revisionId: rollbackButton.dataset.rollbackRevision}); return; }
+    if (rollbackButton && state.detail) { openAction({kind: "rollback", automationId: state.detail.id, revisionId: rollbackButton.dataset.rollbackRevision}); return; }
     if (event.target.closest("[data-close-diagnosis]")) { closeDiagnosis(); return; }
     const diagnosisTab = event.target.closest("[data-diagnosis-tab]");
     if (diagnosisTab) { selectDiagnosisTab(diagnosisTab.dataset.diagnosisTab); return; }
+    const diagnosisTabAction = event.target.closest("[data-diagnosis-tab-action]");
+    if (diagnosisTabAction) { selectDiagnosisTab(diagnosisTabAction.dataset.diagnosisTabAction); return; }
+    if (event.target.closest("[data-copy-diagnostic]") && state.selectedRun) {
+      navigator.clipboard.writeText(diagnosticBundle(state.selectedRun)).then(() => showToast("Diagnostic bundle copied."), () => showToast("Clipboard access was unavailable.", true));
+      return;
+    }
+    const diagnosticRun = event.target.closest("[data-queue-diagnostic]");
+    if (diagnosticRun && state.selectedRun) { openManualRun(diagnosticRun.dataset.queueDiagnostic, state.selectedRun.id); return; }
     const copyButton = event.target.closest("[data-copy]");
     if (copyButton && state.selectedRun) {
       const text = copyButton.dataset.copy === "logs" ? state.selectedRun.logs : prettyJSON(state.selectedRun.result);
@@ -1009,7 +1140,12 @@
       return;
     }
     const toggleButton = event.target.closest("[data-toggle-enabled]");
-    if (toggleButton) { toggleAutomation(toggleButton.dataset.toggleEnabled === "true"); return; }
+    if (toggleButton) {
+      const enabled = toggleButton.dataset.toggleEnabled === "true";
+      if (enabled) toggleAutomation(true);
+      else if (state.detail) openAction({kind: "pause", automationId: state.detail.id});
+      return;
+    }
     if (event.target.closest("[data-open-run]")) { openManualRun(); return; }
     if (event.target.closest("[data-mobile-back]")) { shell.classList.remove("has-selection"); return; }
     const closeDialog = event.target.closest("[data-close-dialog]");
@@ -1027,6 +1163,15 @@
     if (retryFeed) { refreshFeed(retryFeed.dataset.retryFeed); return; }
     if (event.target.closest("[data-retry-detail]")) { loadAutomation(state.selectedAutomation); return; }
     if (event.target.closest("[data-retry-detail-runs]")) { refreshDetailRuns(); }
+    if (event.target.closest("[data-dismiss-receipt]")) { event.target.closest(".receipt")?.remove(); return; }
+    const receiptView = event.target.closest("[data-receipt-view]");
+    if (receiptView) {
+      state.view = receiptView.dataset.receiptView;
+      closeDiagnosis();
+      writeRoute("push");
+      render();
+      document.querySelector("#workspace-main")?.focus();
+    }
   });
 
   document.querySelector("#refresh-button").addEventListener("click", () => loadWorkspace());
@@ -1075,6 +1220,17 @@
   runForm.addEventListener("submit", (event) => {
     event.preventDefault();
     queueManualRun();
+  });
+
+  runDialog.addEventListener("close", () => {
+    state.pendingManualRun = null;
+    runError.textContent = "";
+    runPayload.removeAttribute("aria-invalid");
+    runIdempotency.removeAttribute("aria-invalid");
+  });
+
+  actionDialog.addEventListener("close", () => {
+    if (!state.mutating) state.pendingAction = null;
   });
 
   actionForm.addEventListener("submit", (event) => {

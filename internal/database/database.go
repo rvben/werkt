@@ -28,6 +28,7 @@ var (
 	ErrDeploymentNotCancellable      = errors.New("deployment is already terminal")
 	ErrDeploymentCancelled           = errors.New("deployment cancellation was requested")
 	ErrAutomationNotFound            = errors.New("automation not found")
+	ErrAutomationRevisionChanged     = errors.New("automation active revision changed")
 	ErrRevisionNotFound              = errors.New("revision not found for automation")
 	ErrRevisionArtifactUnavailable   = errors.New("revision artifact is no longer retained")
 	ErrRunNotFound                   = errors.New("run not found")
@@ -908,12 +909,27 @@ func (s *Store) SetAutomationEnabled(ctx context.Context, automationID string, e
 	return true, nil
 }
 
-func (s *Store) EnqueueManualRun(ctx context.Context, automationID, externalID string, data json.RawMessage, actor string) (string, bool, error) {
+func (s *Store) EnqueueManualRun(ctx context.Context, automationID, externalID, expectedRevisionID string, data json.RawMessage, actor string) (string, bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return "", false, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
+	if externalID != "" {
+		var existingRunID string
+		err := tx.QueryRow(ctx, `
+			SELECT r.id FROM runs r JOIN events e ON e.id = r.event_id
+			WHERE e.trigger_key = $1 AND e.external_id = $2`, automationID+":manual", externalID).Scan(&existingRunID)
+		if err == nil {
+			if err := tx.Commit(ctx); err != nil {
+				return "", false, err
+			}
+			return existingRunID, false, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return "", false, err
+		}
+	}
 	var revisionID string
 	var manifestJSON []byte
 	err = tx.QueryRow(ctx, `
@@ -926,6 +942,9 @@ func (s *Store) EnqueueManualRun(ctx context.Context, automationID, externalID s
 	}
 	if err != nil {
 		return "", false, err
+	}
+	if expectedRevisionID != "" && revisionID != expectedRevisionID {
+		return "", false, ErrAutomationRevisionChanged
 	}
 	if externalID == "" {
 		externalID = newID("external")
