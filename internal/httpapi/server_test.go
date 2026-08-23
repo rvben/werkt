@@ -20,6 +20,31 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func TestHealthReportsBuildIdentity(t *testing.T) {
+	server := New(&fakeStore{}, "127.0.0.1:0", "")
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	response := httptest.NewRecorder()
+
+	server.server.Handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	var body struct {
+		Status  string `json:"status"`
+		Version string `json:"version"`
+		Commit  string `json:"commit"`
+		BuiltAt string `json:"builtAt"`
+		Dirty   bool   `json:"dirty"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode health response: %v", err)
+	}
+	if body.Status != "ok" || body.Version == "" || body.Commit == "" {
+		t.Fatalf("health response = %#v", body)
+	}
+}
+
 type fakeStore struct {
 	listFilter         database.AutomationFilter
 	listCalled         bool

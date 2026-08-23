@@ -22,6 +22,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/rvben/werkt/internal/buildinfo"
 	"github.com/rvben/werkt/internal/database"
 	"github.com/rvben/werkt/internal/domain"
 	"github.com/rvben/werkt/internal/packageio"
@@ -553,7 +554,11 @@ func (s *Server) health(response http.ResponseWriter, request *http.Request) {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	writeJSON(response, http.StatusOK, map[string]string{"status": "ok"})
+	identity := buildinfo.Current()
+	writeJSON(response, http.StatusOK, struct {
+		Status string `json:"status"`
+		buildinfo.Info
+	}{Status: "ok", Info: identity})
 }
 
 func (s *Server) openAPI(response http.ResponseWriter, _ *http.Request) {

@@ -18,7 +18,11 @@ paths:
                 type: object
                 properties:
                   status: {type: string, const: ok}
-                required: [status]
+                  version: {type: string}
+                  commit: {type: string}
+                  builtAt: {type: string}
+                  dirty: {type: boolean}
+                required: [status, version, commit, builtAt, dirty]
         "503": {$ref: "#/components/responses/Error"}
   /api/v1/automations:
     get:
