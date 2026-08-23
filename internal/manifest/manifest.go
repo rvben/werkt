@@ -96,12 +96,23 @@ func Validate(value domain.Manifest) error {
 				}
 			}
 		case "webhook":
-			problems = append(problems, unexpectedTriggerConfig(path, trigger.Config, "secret", "signatureHeader")...)
+			provider, providerIsString := trigger.Config["provider"].(string)
+			if _, exists := trigger.Config["provider"]; exists && !providerIsString {
+				problems = append(problems, path+".config.provider must be a string")
+			}
+			if provider != "" && provider != "werkt" && provider != "github" {
+				problems = append(problems, path+".config.provider must be werkt or github")
+			}
+			allowed := []string{"secret", "provider"}
+			if provider == "" || provider == "werkt" {
+				allowed = append(allowed, "signatureHeader")
+			}
+			problems = append(problems, unexpectedTriggerConfig(path, trigger.Config, allowed...)...)
 			secret, _ := trigger.Config["secret"].(string)
 			if !validSecretReference(secret) {
 				problems = append(problems, path+".config.secret must name a Werkt secret")
 			}
-			if raw, exists := trigger.Config["signatureHeader"]; exists {
+			if raw, exists := trigger.Config["signatureHeader"]; exists && provider != "github" {
 				signatureHeader, valid := raw.(string)
 				if !valid || signatureHeader == "" || !headerName.MatchString(signatureHeader) {
 					problems = append(problems, path+".config.signatureHeader is invalid")

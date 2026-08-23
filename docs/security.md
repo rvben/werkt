@@ -60,6 +60,24 @@ X-Werkt-Signature: sha256=<64 hexadecimal characters>
 
 Werkt accepts timestamps within five minutes, verifies the digest with a constant-time comparison, and uses the signed idempotency key to collapse replays into the original run. Missing or oversized idempotency keys receive `400`; stale timestamps and malformed or incorrect signatures receive `401`. A missing, undecryptable, or too-short credential fails closed with `503` and never becomes a queued run.
 
+GitHub webhooks use GitHub's native delivery contract instead:
+
+```yaml
+triggers:
+  - id: github-issues
+    type: webhook
+    config:
+      provider: github
+      secret: infrastructure/github/issues-webhook
+```
+
+Werkt verifies `X-Hub-Signature-256` as HMAC-SHA256 over the exact request
+body, requires `X-GitHub-Delivery`, and records the GitHub event and delivery
+metadata. Replay identity is derived from the signed body digest rather than
+the unsigned delivery header, so changing that header cannot bypass
+idempotency. Invalid signatures receive `401`; missing delivery identity or a
+non-JSON body receives `400`.
+
 ## Email and ntfy credentials
 
 An email trigger requires `config.tokenSecret`. The sender supplies the resolved value as `Authorization: Bearer <token>`. Tokens must be at least 32 bytes and are compared in constant time before Werkt parses the RFC 5322 message. Each message must carry `Message-Id` or an `Idempotency-Key`, which prevents provider retries from creating duplicate runs. Because bearer tokens are replayable credentials, expose this endpoint only over TLS outside local development.
