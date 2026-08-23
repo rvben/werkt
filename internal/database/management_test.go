@@ -199,13 +199,29 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 	}
 	type enqueueResult struct{ err error }
 	result := make(chan enqueueResult, 1)
-	started := make(chan struct{})
 	go func() {
-		close(started)
-		_, _, enqueueErr := store.EnqueueManualRun(context.Background(), value.Metadata.Name, "manual-concurrent-target", revisionID, json.RawMessage(`{}`), "agent:test")
+		_, _, enqueueErr := store.EnqueueManualRun(ctx, value.Metadata.Name, "manual-concurrent-target", revisionID, json.RawMessage(`{}`), "agent:test")
 		result <- enqueueResult{err: enqueueErr}
 	}()
-	<-started
+	waitForLockWaiters := func(want int) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			var count int
+			if err := store.pool.QueryRow(ctx, `
+				SELECT count(*) FROM pg_stat_activity
+				WHERE datname = current_database() AND pid <> pg_backend_pid()
+					AND wait_event_type = 'Lock'`).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if count >= want {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for %d blocked database request(s)", want)
+	}
+	waitForLockWaiters(1)
 	if err := activation.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -216,5 +232,62 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("manual run did not resume after concurrent activation committed")
+	}
+
+	original, err := store.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer original.Rollback(ctx) //nolint:errcheck
+	var replayExpectedRevisionID string
+	if err := original.QueryRow(ctx, `SELECT active_revision_id FROM automations WHERE id = $1 FOR UPDATE`, value.Metadata.Name).Scan(&replayExpectedRevisionID); err != nil {
+		t.Fatal(err)
+	}
+	const concurrentExternalID = "manual-concurrent-replay"
+	const concurrentEventID = "evt_concurrent_replay"
+	const concurrentRunID = "run_concurrent_replay"
+	now := time.Now().UTC()
+	if _, err := original.Exec(ctx, `
+		INSERT INTO events (id, trigger_key, external_id, envelope, occurred_at, received_at)
+		VALUES ($1, $2, $3, '{}'::jsonb, $4, $4)`,
+		concurrentEventID, value.Metadata.Name+":manual", concurrentExternalID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := original.Exec(ctx, `
+		INSERT INTO runs (id, automation_id, revision_id, event_id, status, max_attempts, concurrency_policy)
+		VALUES ($1, $2, $3, $4, $5, 1, 'allow')`,
+		concurrentRunID, value.Metadata.Name, replayExpectedRevisionID, concurrentEventID, domain.RunQueued); err != nil {
+		t.Fatal(err)
+	}
+	activationResult := make(chan error, 1)
+	go func() {
+		_, rollbackErr := store.RollbackAutomation(ctx, value.Metadata.Name, revisionID, "agent:test")
+		activationResult <- rollbackErr
+	}()
+	waitForLockWaiters(1)
+	type replayResult struct {
+		id      string
+		created bool
+		err     error
+	}
+	replay := make(chan replayResult, 1)
+	go func() {
+		id, wasCreated, replayErr := store.EnqueueManualRun(ctx, value.Metadata.Name, concurrentExternalID, replayExpectedRevisionID, json.RawMessage(`{}`), "agent:test")
+		replay <- replayResult{id: id, created: wasCreated, err: replayErr}
+	}()
+	waitForLockWaiters(2)
+	if err := original.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-activationResult; err != nil {
+		t.Fatalf("concurrent rollback: %v", err)
+	}
+	select {
+	case got := <-replay:
+		if got.err != nil || got.created || got.id != concurrentRunID {
+			t.Fatalf("concurrent replay id=%q created=%v err=%v", got.id, got.created, got.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("idempotent replay did not resume after concurrent run and activation committed")
 	}
 }
