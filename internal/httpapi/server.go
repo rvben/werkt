@@ -805,6 +805,11 @@ func (s *Server) updateAutomation(response http.ResponseWriter, request *http.Re
 }
 
 func (s *Server) manualRun(response http.ResponseWriter, request *http.Request) {
+	idempotencyKey := strings.TrimSpace(request.Header.Get("Idempotency-Key"))
+	if err := service.ValidateIdempotencyKey(idempotencyKey); err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(response, request.Body, maxWebhookBody))
 	if err != nil {
 		writeError(response, http.StatusBadRequest, "invalid or oversized request body")
@@ -818,7 +823,7 @@ func (s *Server) manualRun(response http.ResponseWriter, request *http.Request) 
 		return
 	}
 	runID, created, err := s.store.EnqueueManualRun(
-		request.Context(), request.PathValue("automation"), request.Header.Get("Idempotency-Key"),
+		request.Context(), request.PathValue("automation"), idempotencyKey,
 		request.Header.Get("X-Werkt-Expected-Revision"), data, requestActor(request),
 	)
 	if errors.Is(err, database.ErrAutomationNotFound) {

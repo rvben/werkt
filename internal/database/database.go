@@ -936,7 +936,8 @@ func (s *Store) EnqueueManualRun(ctx context.Context, automationID, externalID, 
 		SELECT a.active_revision_id, r.manifest
 		FROM automations a
 		JOIN revisions r ON r.id = a.active_revision_id
-		WHERE a.id = $1`, automationID).Scan(&revisionID, &manifestJSON)
+		WHERE a.id = $1
+		FOR UPDATE OF a`, automationID).Scan(&revisionID, &manifestJSON)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, ErrAutomationNotFound
 	}
