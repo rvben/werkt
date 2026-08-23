@@ -130,19 +130,24 @@
     </form>
   </dialog>
 
-  <dialog class="run-dialog" id="run-dialog" aria-labelledby="run-dialog-title">
+  <dialog class="run-dialog" id="run-dialog" aria-labelledby="run-dialog-title" aria-describedby="run-dialog-description">
     <form method="dialog" id="run-form">
       <button class="icon-button dialog-close" type="button" data-close-dialog="run" aria-label="Close run form">
         <svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg>
       </button>
       <h2 id="run-dialog-title">Queue a manual run</h2>
-      <p>Run the active immutable revision with a synthetic <span class="mono">manual</span> event. Werkt keeps the idempotency key with the audit trail.</p>
+      <p id="run-dialog-description">Queue a synthetic <span class="mono">manual</span> event against the revision shown below. Werkt keeps the idempotency key with the audit trail.</p>
+      <dl class="run-target" id="run-target">
+        <dt>Automation</dt><dd class="mono" id="run-target-automation">—</dd>
+        <dt>Revision</dt><dd class="mono" id="run-target-revision" tabindex="-1">—</dd>
+        <dt>Lifecycle</dt><dd id="run-target-lifecycle">—</dd>
+      </dl>
       <label for="run-payload">Event data</label>
-      <textarea id="run-payload" name="payload" rows="9" spellcheck="false">{
+      <textarea id="run-payload" name="payload" rows="9" spellcheck="false" aria-describedby="run-error">{
   "reason": "operator diagnostic"
 }</textarea>
       <label for="run-idempotency">Idempotency key</label>
-      <input id="run-idempotency" name="idempotency" type="text" required maxlength="255" spellcheck="false">
+      <input id="run-idempotency" name="idempotency" type="text" required maxlength="255" spellcheck="false" aria-describedby="run-error">
       <p class="field-message" id="run-error" role="alert"></p>
       <div class="dialog-actions">
         <button class="button button-quiet" type="button" data-close-dialog="run">Cancel</button>
@@ -153,7 +158,7 @@
     </form>
   </dialog>
 
-  <dialog class="action-dialog" id="action-dialog" aria-labelledby="action-dialog-title">
+  <dialog class="action-dialog" id="action-dialog" aria-labelledby="action-dialog-title" aria-describedby="action-dialog-message action-error">
     <form method="dialog" id="action-form">
       <button class="icon-button dialog-close" type="button" data-close-dialog="action" aria-label="Close confirmation">
         <svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg>
@@ -169,6 +174,7 @@
     </form>
   </dialog>
 
+  <div class="receipt-region" id="receipt-region" aria-live="polite"></div>
   <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
 </body>
 </html>

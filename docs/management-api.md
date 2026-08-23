@@ -124,7 +124,7 @@ Pausing blocks schedule, webhook, email, and ntfy ingestion. Manual runs remain 
 
 ## Manual runs
 
-`POST /api/v1/automations/{id}/runs` queues the request body as the event data for a synthetic `manual` trigger. The body must be JSON and is limited to 2 MiB. Use `Idempotency-Key` to make retries safe; the same key for the same automation returns the original run with `created: false`.
+`POST /api/v1/automations/{id}/runs` queues the request body as the event data for a synthetic `manual` trigger. The body must be JSON and is limited to 2 MiB. Use `Idempotency-Key` to make retries safe; the same key for the same automation returns the original run with `created: false`. An optional `X-Werkt-Expected-Revision` header makes the active revision an atomic precondition; a mismatch returns `409` without queueing work, while a replay of an already-used idempotency key still returns its original run.
 
 ```bash
 curl -H "Authorization: Bearer $WERKT_MANAGEMENT_TOKEN" \

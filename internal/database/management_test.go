@@ -63,7 +63,7 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runID, created, err := store.EnqueueManualRun(ctx, value.Metadata.Name, "summary-latest-run", json.RawMessage(`{"source":"summary"}`), "agent:test")
+	runID, created, err := store.EnqueueManualRun(ctx, value.Metadata.Name, "summary-latest-run", revisionID, json.RawMessage(`{"source":"summary"}`), "agent:test")
 	if err != nil || !created {
 		t.Fatalf("enqueue summary run created=%v err=%v", created, err)
 	}
@@ -119,13 +119,16 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 		t.Fatalf("paused schedules count=%d err=%v", count, err)
 	}
 
-	manualID, created, err := store.EnqueueManualRun(ctx, value.Metadata.Name, "manual-1", json.RawMessage(`{"diagnostic":true}`), "agent:test")
+	manualID, created, err := store.EnqueueManualRun(ctx, value.Metadata.Name, "manual-1", revisionID, json.RawMessage(`{"diagnostic":true}`), "agent:test")
 	if err != nil || !created {
 		t.Fatalf("manual run id=%q created=%v err=%v", manualID, created, err)
 	}
-	duplicateID, created, err := store.EnqueueManualRun(ctx, value.Metadata.Name, "manual-1", json.RawMessage(`{"ignored":true}`), "agent:test")
+	duplicateID, created, err := store.EnqueueManualRun(ctx, value.Metadata.Name, "manual-1", "stale-revision", json.RawMessage(`{"ignored":true}`), "agent:test")
 	if err != nil || created || duplicateID != manualID {
 		t.Fatalf("duplicate id=%q created=%v err=%v", duplicateID, created, err)
+	}
+	if _, _, err := store.EnqueueManualRun(ctx, value.Metadata.Name, "manual-stale-target", "rev-stale", json.RawMessage(`{}`), "agent:test"); err != ErrAutomationRevisionChanged {
+		t.Fatalf("stale manual-run revision error = %v", err)
 	}
 	manual, err := store.GetRun(ctx, manualID)
 	if err != nil || manual.Status != domain.RunQueued {

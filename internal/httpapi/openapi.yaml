@@ -98,6 +98,7 @@ paths:
         - {$ref: "#/components/parameters/AutomationID"}
         - {$ref: "#/components/parameters/Actor"}
         - {$ref: "#/components/parameters/IdempotencyKey"}
+        - {$ref: "#/components/parameters/ExpectedRevision"}
       requestBody:
         description: JSON event data, limited to 2 MiB.
         content:
@@ -109,6 +110,7 @@ paths:
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
   /api/v1/automations/{automation}/rollback:
     post:
       operationId: rollbackAutomation
@@ -541,6 +543,11 @@ components:
       name: Idempotency-Key
       in: header
       required: true
+      schema: {type: string}
+    ExpectedRevision:
+      name: X-Werkt-Expected-Revision
+      in: header
+      description: Optional active revision precondition. A mismatch returns 409 without queueing a run.
       schema: {type: string}
     Project:
       name: project

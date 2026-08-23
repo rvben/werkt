@@ -57,7 +57,7 @@ type Store interface {
 	GetAutomation(context.Context, string) (database.AutomationDetail, error)
 	SetAutomationEnabled(context.Context, string, bool, string) (bool, error)
 	RollbackAutomation(context.Context, string, string, string) (bool, error)
-	EnqueueManualRun(context.Context, string, string, json.RawMessage, string) (string, bool, error)
+	EnqueueManualRun(context.Context, string, string, string, json.RawMessage, string) (string, bool, error)
 	ListRunsFiltered(context.Context, string, string, int) ([]domain.Run, error)
 	GetRun(context.Context, string) (domain.Run, error)
 	ListAuditEvents(context.Context, string, int) ([]database.AuditEvent, error)
@@ -818,10 +818,15 @@ func (s *Server) manualRun(response http.ResponseWriter, request *http.Request) 
 		return
 	}
 	runID, created, err := s.store.EnqueueManualRun(
-		request.Context(), request.PathValue("automation"), request.Header.Get("Idempotency-Key"), data, requestActor(request),
+		request.Context(), request.PathValue("automation"), request.Header.Get("Idempotency-Key"),
+		request.Header.Get("X-Werkt-Expected-Revision"), data, requestActor(request),
 	)
 	if errors.Is(err, database.ErrAutomationNotFound) {
 		writeError(response, http.StatusNotFound, "automation not found")
+		return
+	}
+	if errors.Is(err, database.ErrAutomationRevisionChanged) {
+		writeError(response, http.StatusConflict, "active revision changed; refresh the automation and review the new run target")
 		return
 	}
 	if err != nil {
