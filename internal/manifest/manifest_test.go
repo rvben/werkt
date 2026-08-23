@@ -247,8 +247,9 @@ func TestValidateAcceptsGitHubWebhookProviderAndRejectsCustomHeaders(t *testing.
 		Kind:       "Automation",
 		Metadata:   domain.Metadata{Name: "github-hook", Project: "personal"},
 		Triggers: []domain.Trigger{{ID: "issues", Type: "webhook", Config: map[string]any{
-			"provider": "github",
-			"secret":   "personal/github-webhook",
+			"provider":      "github",
+			"secret":        "personal/github-webhook",
+			"deliveryDelay": "5m",
 		}}},
 		Runtime: domain.Runtime{Language: "go", Command: []string{"./automation"}},
 	}
@@ -260,6 +261,11 @@ func TestValidateAcceptsGitHubWebhookProviderAndRejectsCustomHeaders(t *testing.
 		t.Fatalf("Validate() error = %v", err)
 	}
 	delete(value.Triggers[0].Config, "signatureHeader")
+	value.Triggers[0].Config["deliveryDelay"] = "25h"
+	if err := manifest.Validate(value); err == nil || !strings.Contains(err.Error(), "at most 24h") {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	value.Triggers[0].Config["deliveryDelay"] = "5m"
 	value.Triggers[0].Config["provider"] = "unknown"
 	if err := manifest.Validate(value); err == nil || !strings.Contains(err.Error(), "werkt or github") {
 		t.Fatalf("Validate() error = %v", err)

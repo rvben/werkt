@@ -69,6 +69,7 @@ triggers:
     config:
       provider: github
       secret: infrastructure/github/issues-webhook
+      deliveryDelay: 5m # optional; queues durably, then becomes runnable
 ```
 
 Werkt verifies `X-Hub-Signature-256` as HMAC-SHA256 over the exact request
@@ -77,6 +78,12 @@ metadata. Replay identity is derived from the signed body digest rather than
 the unsigned delivery header, so changing that header cannot bypass
 idempotency. Invalid signatures receive `401`; missing delivery identity or a
 non-JSON body receives `400`.
+
+Any webhook provider may declare a positive `deliveryDelay` of at most 24 hours.
+Werkt persists and deduplicates the event immediately, but sets the run's
+availability in the future. Workers do not sleep or hold an executor while the
+delay elapses. This is appropriate for debounce and grace periods; it is not a
+general long-running workflow timer.
 
 ## Email and ntfy credentials
 

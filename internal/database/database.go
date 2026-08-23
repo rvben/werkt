@@ -389,15 +389,15 @@ func (s *Store) GetTriggerIngressPolicy(ctx context.Context, automationID, trigg
 
 func enqueueEvent(ctx context.Context, tx pgx.Tx, automationID, triggerID, expectedType, externalID string, occurredAt time.Time, data json.RawMessage, metadata map[string]any) (string, bool, error) {
 	var revisionID, triggerType string
-	var manifestJSON []byte
+	var manifestJSON, triggerConfigJSON []byte
 	err := tx.QueryRow(ctx, `
-		SELECT t.revision_id, t.type, r.manifest
+		SELECT t.revision_id, t.type, t.config, r.manifest
 		FROM triggers t
 		JOIN automations a ON a.id = t.automation_id AND a.active_revision_id = t.revision_id
 		JOIN revisions r ON r.id = t.revision_id
 		WHERE t.automation_id = $1 AND t.id = $2 AND t.type = $3
 			AND t.enabled = true AND a.enabled = true`, automationID, triggerID, expectedType).
-		Scan(&revisionID, &triggerType, &manifestJSON)
+		Scan(&revisionID, &triggerType, &triggerConfigJSON, &manifestJSON)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, fmt.Errorf("enabled %s trigger %s/%s not found", expectedType, automationID, triggerID)
 	}
@@ -453,10 +453,26 @@ func enqueueEvent(ctx context.Context, tx pgx.Tx, automationID, triggerID, expec
 	if policy == "" {
 		policy = "allow"
 	}
+	availableAt := time.Now().UTC()
+	if triggerType == "webhook" {
+		var triggerConfig struct {
+			DeliveryDelay string `json:"deliveryDelay"`
+		}
+		if err := json.Unmarshal(triggerConfigJSON, &triggerConfig); err != nil {
+			return "", false, err
+		}
+		if triggerConfig.DeliveryDelay != "" {
+			delay, err := time.ParseDuration(triggerConfig.DeliveryDelay)
+			if err != nil || delay <= 0 || delay > 24*time.Hour {
+				return "", false, errors.New("webhook trigger has invalid delivery delay")
+			}
+			availableAt = availableAt.Add(delay)
+		}
+	}
 	_, err = tx.Exec(ctx, `
-		INSERT INTO runs (id, automation_id, revision_id, event_id, status, max_attempts, concurrency_policy)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		runID, automationID, revisionID, eventID, domain.RunQueued, value.Execution.Retries+1, policy)
+		INSERT INTO runs (id, automation_id, revision_id, event_id, status, max_attempts, concurrency_policy, available_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		runID, automationID, revisionID, eventID, domain.RunQueued, value.Execution.Retries+1, policy, availableAt)
 	if err != nil {
 		return "", false, err
 	}
