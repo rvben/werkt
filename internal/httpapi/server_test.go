@@ -379,6 +379,40 @@ func TestWorkspaceClientKeepsOperationalStateAuthoritative(t *testing.T) {
 	}
 }
 
+func TestWorkspacePreservesKeyboardAndAssistiveTechnologyContracts(t *testing.T) {
+	markup, err := workspaceFiles.ReadFile("workspace/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{
+		`role="status" aria-live="polite" aria-atomic="true"`,
+		`aria-controls="inventory-list"`,
+		`aria-keyshortcuts="Alt+1"`,
+		`id="help-dialog"`,
+		`id="diagnosis-pane" aria-labelledby="diagnosis-title" tabindex="-1"`,
+	} {
+		if !strings.Contains(string(markup), marker) {
+			t.Errorf("workspace markup omitted accessibility contract %q", marker)
+		}
+	}
+
+	script, err := workspaceFiles.ReadFile("workspace/workspace.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{
+		`syncInventoryRoving`,
+		`diagnosisPane.setAttribute("aria-modal", "true")`,
+		`element.inert = modal`,
+		`event.key === "Tab"`,
+		`setMobileSearch(false)`,
+	} {
+		if !strings.Contains(string(script), marker) {
+			t.Errorf("workspace client omitted accessibility contract %q", marker)
+		}
+	}
+}
+
 func TestRetentionPlanAndApplyRoutesAreExplicit(t *testing.T) {
 	manager := &fakeRetentionManager{}
 	server := New(&fakeStore{}, ":0", "", WithRetentionManager(manager))
