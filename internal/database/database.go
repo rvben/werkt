@@ -49,14 +49,21 @@ type Store struct {
 }
 
 type AutomationSummary struct {
-	ID               string    `json:"id"`
-	Project          string    `json:"project"`
-	Folder           string    `json:"folder,omitempty"`
-	Description      string    `json:"description,omitempty"`
-	Labels           []string  `json:"labels"`
-	Enabled          bool      `json:"enabled"`
-	ActiveRevisionID string    `json:"activeRevisionId"`
-	UpdatedAt        time.Time `json:"updatedAt"`
+	ID               string      `json:"id"`
+	Project          string      `json:"project"`
+	Folder           string      `json:"folder,omitempty"`
+	Description      string      `json:"description,omitempty"`
+	Labels           []string    `json:"labels"`
+	Enabled          bool        `json:"enabled"`
+	ActiveRevisionID string      `json:"activeRevisionId"`
+	UpdatedAt        time.Time   `json:"updatedAt"`
+	LatestRun        *RunSummary `json:"latestRun,omitempty"`
+}
+
+type RunSummary struct {
+	ID        string    `json:"id"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 type AutomationFilter struct {
@@ -699,15 +706,23 @@ func (s *Store) ListAutomations(ctx context.Context, filter AutomationFilter) ([
 		enabled = *filter.Enabled
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, project, folder, description, labels, enabled,
-			COALESCE(active_revision_id, ''), updated_at
-		FROM automations
-		WHERE ($1 = '' OR project = $1)
-			AND ($2 = '' OR folder = $2)
-			AND ($3 = '' OR labels ? $3)
-			AND ($4 = '' OR id ILIKE '%' || $4 || '%' OR description ILIKE '%' || $4 || '%')
-			AND ($5::boolean IS NULL OR enabled = $5)
-		ORDER BY project, folder, id`,
+		SELECT a.id, a.project, a.folder, a.description, a.labels, a.enabled,
+			COALESCE(a.active_revision_id, ''), a.updated_at,
+			COALESCE(latest_run.id, ''), COALESCE(latest_run.status, ''), latest_run.created_at
+		FROM automations a
+		LEFT JOIN LATERAL (
+			SELECT id, status, created_at
+			FROM runs
+			WHERE automation_id = a.id
+			ORDER BY created_at DESC, id DESC
+			LIMIT 1
+		) latest_run ON true
+		WHERE ($1 = '' OR a.project = $1)
+			AND ($2 = '' OR a.folder = $2)
+			AND ($3 = '' OR a.labels ? $3)
+			AND ($4 = '' OR a.id ILIKE '%' || $4 || '%' OR a.description ILIKE '%' || $4 || '%')
+			AND ($5::boolean IS NULL OR a.enabled = $5)
+		ORDER BY a.project, a.folder, a.id`,
 		filter.Project, filter.Folder, filter.Label, filter.Query, enabled)
 	if err != nil {
 		return nil, err
@@ -717,12 +732,18 @@ func (s *Store) ListAutomations(ctx context.Context, filter AutomationFilter) ([
 	for rows.Next() {
 		var item AutomationSummary
 		var labelsJSON []byte
+		var latestRunID, latestRunStatus string
+		var latestRunCreatedAt *time.Time
 		if err := rows.Scan(&item.ID, &item.Project, &item.Folder, &item.Description,
-			&labelsJSON, &item.Enabled, &item.ActiveRevisionID, &item.UpdatedAt); err != nil {
+			&labelsJSON, &item.Enabled, &item.ActiveRevisionID, &item.UpdatedAt,
+			&latestRunID, &latestRunStatus, &latestRunCreatedAt); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(labelsJSON, &item.Labels); err != nil {
 			return nil, err
+		}
+		if latestRunCreatedAt != nil {
+			item.LatestRun = &RunSummary{ID: latestRunID, Status: latestRunStatus, CreatedAt: *latestRunCreatedAt}
 		}
 		values = append(values, item)
 	}
@@ -732,14 +753,25 @@ func (s *Store) ListAutomations(ctx context.Context, filter AutomationFilter) ([
 func (s *Store) GetAutomation(ctx context.Context, automationID string) (AutomationDetail, error) {
 	var value AutomationDetail
 	var labelsJSON, manifestJSON []byte
+	var latestRunID, latestRunStatus string
+	var latestRunCreatedAt *time.Time
 	err := s.pool.QueryRow(ctx, `
 		SELECT a.id, a.project, a.folder, a.description, a.labels, a.enabled,
-			a.active_revision_id, a.updated_at, r.manifest
+			a.active_revision_id, a.updated_at, r.manifest,
+			COALESCE(latest_run.id, ''), COALESCE(latest_run.status, ''), latest_run.created_at
 		FROM automations a
 		JOIN revisions r ON r.id = a.active_revision_id
+		LEFT JOIN LATERAL (
+			SELECT id, status, created_at
+			FROM runs
+			WHERE automation_id = a.id
+			ORDER BY created_at DESC, id DESC
+			LIMIT 1
+		) latest_run ON true
 		WHERE a.id = $1`, automationID).Scan(
 		&value.ID, &value.Project, &value.Folder, &value.Description, &labelsJSON,
-		&value.Enabled, &value.ActiveRevisionID, &value.UpdatedAt, &manifestJSON)
+		&value.Enabled, &value.ActiveRevisionID, &value.UpdatedAt, &manifestJSON,
+		&latestRunID, &latestRunStatus, &latestRunCreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AutomationDetail{}, ErrAutomationNotFound
 	}
@@ -751,6 +783,9 @@ func (s *Store) GetAutomation(ctx context.Context, automationID string) (Automat
 	}
 	if err := json.Unmarshal(manifestJSON, &value.Manifest); err != nil {
 		return AutomationDetail{}, err
+	}
+	if latestRunCreatedAt != nil {
+		value.LatestRun = &RunSummary{ID: latestRunID, Status: latestRunStatus, CreatedAt: *latestRunCreatedAt}
 	}
 
 	triggerRows, err := s.pool.Query(ctx, `

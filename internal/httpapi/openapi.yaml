@@ -606,6 +606,13 @@ components:
         enabled: {type: boolean}
         activeRevisionId: {type: string}
         updatedAt: {type: string, format: date-time}
+        latestRun:
+          type: object
+          properties:
+            id: {type: string}
+            status: {type: string, enum: [queued, running, succeeded, failed]}
+            createdAt: {type: string, format: date-time}
+          required: [id, status, createdAt]
       required: [id, project, labels, enabled, activeRevisionId, updatedAt]
     AutomationDetail:
       allOf:

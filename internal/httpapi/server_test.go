@@ -140,7 +140,10 @@ func (m *fakeSecretManager) Delete(_ context.Context, name, _ string) error {
 func (s *fakeStore) ListAutomations(_ context.Context, filter database.AutomationFilter) ([]database.AutomationSummary, error) {
 	s.listCalled = true
 	s.listFilter = filter
-	return []database.AutomationSummary{{ID: "example", Project: "ops", Enabled: true}}, nil
+	return []database.AutomationSummary{{
+		ID: "example", Project: "ops", Enabled: true,
+		LatestRun: &database.RunSummary{ID: "run-latest", Status: domain.RunFailed, CreatedAt: time.Unix(100, 0).UTC()},
+	}}, nil
 }
 
 func (s *fakeStore) GetAutomation(_ context.Context, automationID string) (database.AutomationDetail, error) {
@@ -335,6 +338,37 @@ func TestWorkspaceServesEmbeddedAssetsWithoutExposingManagementToken(t *testing.
 		}
 		if response.Body.Len() < 1000 {
 			t.Errorf("%s unexpectedly small: %d bytes", asset, response.Body.Len())
+		}
+	}
+}
+
+func TestWorkspaceClientKeepsOperationalStateAuthoritative(t *testing.T) {
+	script, err := workspaceFiles.ReadFile("workspace/workspace.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{
+		"automation.latestRun",
+		"workspaceController?.abort()",
+		"detailController?.abort()",
+		"diagnosisController?.abort()",
+		"Promise.allSettled",
+		"Showing the latest",
+		"window.addEventListener(\"popstate\"",
+		"data-relative-time",
+	} {
+		if !strings.Contains(string(script), marker) {
+			t.Errorf("workspace client omitted operational-state contract %q", marker)
+		}
+	}
+
+	markup, err := workspaceFiles.ReadFile("workspace/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{`data-enabled-filter="failed"`, `aria-pressed="true"`, `id="inventory-results"`} {
+		if !strings.Contains(string(markup), marker) {
+			t.Errorf("workspace markup omitted inventory-state contract %q", marker)
 		}
 	}
 }
@@ -548,6 +582,9 @@ func TestAutomationInventoryAcceptsAuthenticatedFilters(t *testing.T) {
 	}
 	if store.listFilter.Enabled == nil || *store.listFilter.Enabled {
 		t.Fatalf("enabled filter = %v, want false", store.listFilter.Enabled)
+	}
+	if !strings.Contains(response.Body.String(), `"latestRun":{"id":"run-latest","status":"failed"`) {
+		t.Fatalf("inventory omitted latest run summary: %s", response.Body.String())
 	}
 }
 
