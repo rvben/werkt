@@ -105,9 +105,18 @@ func (c DeploymentCheck) TimeoutDuration() time.Duration {
 }
 
 type Execution struct {
-	Timeout     string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
-	Retries     int    `yaml:"retries,omitempty" json:"retries,omitempty"`
-	Concurrency string `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
+	Timeout     string      `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	Retries     int         `yaml:"retries,omitempty" json:"retries,omitempty"`
+	Concurrency string      `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
+	State       StatePolicy `yaml:"state,omitempty" json:"state,omitempty"`
+}
+
+// StatePolicy enables a bounded JSON object that is snapshotted before an
+// attempt and committed atomically with a successful run. Stateful automations
+// must forbid overlapping runs so external side effects and state transitions
+// cannot race each other.
+type StatePolicy struct {
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
 func (e Execution) TimeoutDuration() time.Duration {
@@ -166,6 +175,8 @@ type RunnableRun struct {
 	ArtifactPath string
 	Manifest     Manifest
 	Event        EventEnvelope
+	State        json.RawMessage
+	StateVersion int64
 }
 
 // Deployment is the durable, agent-visible lifecycle of one uploaded package.

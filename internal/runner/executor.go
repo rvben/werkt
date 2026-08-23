@@ -23,6 +23,20 @@ type Executor interface {
 type Result struct {
 	Output json.RawMessage
 	Logs   string
+	State  json.RawMessage
+}
+
+const MaxAutomationStateBytes = 64 * 1024
+
+func validateAutomationState(value []byte) (json.RawMessage, error) {
+	if len(value) > MaxAutomationStateBytes {
+		return nil, fmt.Errorf("automation state exceeds %d bytes", MaxAutomationStateBytes)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(value, &object); err != nil || object == nil {
+		return nil, errors.New("automation state must be a JSON object")
+	}
+	return json.RawMessage(value), nil
 }
 
 var ErrSecretResolverUnavailable = errors.New("secret resolver is not configured")

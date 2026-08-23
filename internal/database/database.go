@@ -38,6 +38,7 @@ var (
 	ErrRetentionPlanBusy             = errors.New("retention plan is already being applied")
 	ErrSecretNotFound                = errors.New("secret not found")
 	ErrSecretInUse                   = errors.New("secret is in use")
+	ErrAutomationStateConflict       = errors.New("automation state changed after the run started")
 )
 
 //go:embed migrations/*.sql
@@ -532,7 +533,7 @@ func (s *Store) EnqueueDueSchedules(ctx context.Context, now time.Time, limit in
 
 func (s *Store) AcquireRun(ctx context.Context, workerID string, leaseDuration time.Duration) (*domain.RunnableRun, error) {
 	var run domain.RunnableRun
-	var manifestJSON, eventJSON []byte
+	var manifestJSON, eventJSON, stateJSON []byte
 	err := s.pool.QueryRow(ctx, `
 		WITH candidate AS (
 			SELECT r.id
@@ -565,13 +566,16 @@ func (s *Store) AcquireRun(ctx context.Context, workerID string, leaseDuration t
 		)
 		SELECT c.id, c.automation_id, c.revision_id, c.event_id, c.status,
 			c.attempt, c.max_attempts, c.created_at, c.started_at, c.finished_at,
-			c.error, c.result, rev.artifact_path, rev.manifest, e.envelope
+			c.error, c.result, rev.artifact_path, rev.manifest, e.envelope,
+			COALESCE(state.value, '{}'::jsonb), COALESCE(state.version, 0)
 		FROM claimed c
 		JOIN revisions rev ON rev.id = c.revision_id
-		JOIN events e ON e.id = c.event_id`, workerID, leaseDuration.String()).Scan(
+		JOIN events e ON e.id = c.event_id
+		LEFT JOIN automation_state state ON state.automation_id = c.automation_id`, workerID, leaseDuration.String()).Scan(
 		&run.ID, &run.AutomationID, &run.RevisionID, &run.EventID, &run.Status,
 		&run.Attempt, &run.MaxAttempts, &run.CreatedAt, &run.StartedAt, &run.FinishedAt,
-		&run.Error, &run.Result, &run.ArtifactPath, &manifestJSON, &eventJSON)
+		&run.Error, &run.Result, &run.ArtifactPath, &manifestJSON, &eventJSON,
+		&stateJSON, &run.StateVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -584,6 +588,7 @@ func (s *Store) AcquireRun(ctx context.Context, workerID string, leaseDuration t
 	if err := json.Unmarshal(eventJSON, &run.Event); err != nil {
 		return nil, err
 	}
+	run.State = stateJSON
 	return &run, nil
 }
 
@@ -602,19 +607,51 @@ func (s *Store) RenewRunLease(ctx context.Context, runID, workerID string, lease
 	return command.RowsAffected() == 1, nil
 }
 
-func (s *Store) CompleteRun(ctx context.Context, runID, workerID, logs string, result json.RawMessage) error {
-	command, err := s.pool.Exec(ctx, `
+func (s *Store) CompleteRun(ctx context.Context, run domain.RunnableRun, workerID, logs string, result, state json.RawMessage) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	command, err := tx.Exec(ctx, `
 		UPDATE runs SET status = 'succeeded', logs = $2, result = $3, error = '',
 			finished_at = now(), lease_owner = NULL, lease_expires_at = NULL
 		WHERE id = $1 AND status = 'running' AND lease_owner = $4`,
-		runID, logs, nullableJSON(result), workerID)
+		run.ID, logs, nullableJSON(result), workerID)
 	if err != nil {
 		return err
 	}
 	if command.RowsAffected() != 1 {
 		return ErrRunLeaseLost
 	}
-	return nil
+	if run.Manifest.Execution.State.Enabled {
+		if !validStateObject(state) {
+			return errors.New("automation state is not a JSON object")
+		}
+		if run.StateVersion == 0 {
+			command, err = tx.Exec(ctx, `
+				INSERT INTO automation_state (automation_id, version, value, updated_by_run_id)
+				VALUES ($1, 1, $2, $3)
+				ON CONFLICT (automation_id) DO NOTHING`, run.AutomationID, state, run.ID)
+		} else {
+			command, err = tx.Exec(ctx, `
+				UPDATE automation_state
+				SET version = version + 1, value = $3, updated_by_run_id = $4, updated_at = now()
+				WHERE automation_id = $1 AND version = $2`, run.AutomationID, run.StateVersion, state, run.ID)
+		}
+		if err != nil {
+			return err
+		}
+		if command.RowsAffected() != 1 {
+			return ErrAutomationStateConflict
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func validStateObject(value json.RawMessage) bool {
+	var object map[string]any
+	return len(value) > 0 && json.Unmarshal(value, &object) == nil && object != nil
 }
 
 func (s *Store) FailRun(ctx context.Context, run domain.Run, workerID, logs string, runErr error) error {

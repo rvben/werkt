@@ -106,12 +106,23 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 				if body.Environment["SERVICE_TOKEN"] != "guest-secret-value" {
 					t.Errorf("SERVICE_TOKEN was not resolved")
 				}
+				if body.Environment["WERKT_STATE_VERSION"] != "7" || body.Environment["WERKT_STATE_PATH"] == "" {
+					t.Errorf("transactional state environment = %#v", body.Environment)
+				}
 			}
 			writeJSON(t, response, execResponse{ExitCode: 0, Stdout: "running guest-secret-value\n"})
 		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/files/read"):
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Errorf("decode read: %v", err)
+			}
+			contents := []byte(`{"ok":true}`)
+			if strings.HasSuffix(fmt.Sprint(body["path"]), "/state.json") {
+				contents = []byte(`{"count":2}`)
+			}
 			writeJSON(t, response, map[string]any{
-				"data": base64.StdEncoding.EncodeToString([]byte(`{"ok":true}`)),
-				"size": 11,
+				"data": base64.StdEncoding.EncodeToString(contents),
+				"size": len(contents),
 			})
 		case request.Method == http.MethodDelete && strings.HasPrefix(request.URL.Path, "/v1/vms/werkt-"):
 			deleted = true
@@ -149,9 +160,11 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 					{Host: "metrics.example.com", Port: 9090, Protocol: "udp"},
 				},
 			},
-			Execution: domain.Execution{Timeout: "5s"},
+			Execution: domain.Execution{Timeout: "5s", Concurrency: "forbid", State: domain.StatePolicy{Enabled: true}},
 		},
-		Event: domain.EventEnvelope{ID: "evt_test", Data: json.RawMessage(`{"message":"hello"}`)},
+		Event:        domain.EventEnvelope{ID: "evt_test", Data: json.RawMessage(`{"message":"hello"}`)},
+		State:        json.RawMessage(`{"count":1}`),
+		StateVersion: 7,
 	}
 
 	result, err := executor.Execute(context.Background(), run)
@@ -163,6 +176,9 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 	}
 	if result.Logs != "[stdout]\nrunning [REDACTED]\n" {
 		t.Fatalf("logs = %q", result.Logs)
+	}
+	if string(result.State) != `{"count":2}` {
+		t.Fatalf("state = %s", result.State)
 	}
 	if createNetwork != "filtered" {
 		t.Fatalf("network = %q", createNetwork)
@@ -187,8 +203,8 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(files) < 3 {
-		t.Fatalf("uploaded files = %d, want at least 3", len(files))
+	if len(files) < 4 {
+		t.Fatalf("uploaded files = %d, want at least 4", len(files))
 	}
 }
 
