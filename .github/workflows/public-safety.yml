@@ -1,0 +1,25 @@
+name: Public safety
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Configure private denylist
+        env:
+          PUBLIC_SAFETY_PATTERNS: ${{ secrets.PUBLIC_SAFETY_PATTERNS }}
+        run: |
+          if [[ -n "$PUBLIC_SAFETY_PATTERNS" ]]; then
+            printf '%s\n' "$PUBLIC_SAFETY_PATTERNS" > .public-safety-denylist
+          fi
+      - name: Scan every reachable commit
+        run: ./scripts/check-public-safety.sh --history

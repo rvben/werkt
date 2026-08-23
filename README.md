@@ -61,7 +61,7 @@ Open [http://localhost:8080/app/](http://localhost:8080/app/) to use the managem
 Invoke its webhook from another terminal:
 
 ```bash
-payload='{"name":"Ruben"}'
+payload='{"name":"Ada"}'
 timestamp="$(date +%s)"
 idempotency_key='getting-started-1'
 signature="$(printf '%s' "$timestamp.$idempotency_key.$payload" | openssl dgst -sha256 -hmac "$PYTHON_HELLO_WEBHOOK_SECRET" -hex | awk '{print $2}')"
@@ -111,6 +111,26 @@ curl -H "Authorization: Bearer $WERKT_MANAGEMENT_TOKEN" \
 ```
 
 See [docs/management-api.md](docs/management-api.md) for the full agent-facing contract and the workspace/API relationship.
+
+## Public repository boundary
+
+This repository contains the Werkt platform and generic examples only.
+Environment-specific automation packages, infrastructure addresses, operational
+inventories, and deployment evidence belong in the private repository that owns
+that environment.
+
+Run the public-safety gate before publishing:
+
+```bash
+./scripts/check-public-safety.sh --history
+```
+
+The gate checks every reachable commit for private-network addresses, local
+machine paths, credential-bearing URLs, common secret formats, and
+environment-specific files in public documentation or automation directories.
+An ignored `.public-safety-denylist` file can add one extended regular expression
+per line for organization-specific domains and identifiers without disclosing
+those values in this repository.
 
 Review retained deployment sources and inactive artifacts without deleting anything, then explicitly apply the short-lived plan:
 

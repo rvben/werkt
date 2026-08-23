@@ -21,7 +21,7 @@ class SDKTest(unittest.TestCase):
                         "occurredAt": "2026-08-17T10:00:00Z",
                         "receivedAt": "2026-08-17T10:00:01Z",
                         "trigger": {"type": "webhook"},
-                        "data": {"name": "Ruben"},
+                        "data": {"name": "Ada"},
                     }
                 )
             )
@@ -47,7 +47,7 @@ class SDKTest(unittest.TestCase):
 
             self.assertEqual(
                 json.loads(result_path.read_text()),
-                {"name": "Ruben", "runId": "run_test"},
+                {"name": "Ada", "runId": "run_test"},
             )
 
 
