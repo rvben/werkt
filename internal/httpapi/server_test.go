@@ -358,6 +358,9 @@ func TestWorkspaceClientKeepsOperationalStateAuthoritative(t *testing.T) {
 		"workspaceController?.abort()",
 		"detailController?.abort()",
 		"diagnosisController?.abort()",
+		"feedControllers[kind]?.abort()",
+		"detailRunsController?.abort()",
+		"deploymentPollController?.abort()",
 		"Promise.allSettled",
 		"Showing the latest",
 		"window.addEventListener(\"popstate\"",
@@ -389,6 +392,7 @@ func TestWorkspacePreservesKeyboardAndAssistiveTechnologyContracts(t *testing.T)
 		`aria-controls="inventory-list"`,
 		`aria-keyshortcuts="Alt+1"`,
 		`id="help-dialog"`,
+		`id="help-recovery"`,
 		`id="diagnosis-pane" aria-labelledby="diagnosis-title" tabindex="-1"`,
 	} {
 		if !strings.Contains(string(markup), marker) {
@@ -406,6 +410,8 @@ func TestWorkspacePreservesKeyboardAndAssistiveTechnologyContracts(t *testing.T)
 		`element.inert = modal`,
 		`event.key === "Tab"`,
 		`setMobileSearch(false)`,
+		`has-fatal-error`,
+		`resumeAutomationFromReceipt`,
 	} {
 		if !strings.Contains(string(script), marker) {
 			t.Errorf("workspace client omitted accessibility contract %q", marker)

@@ -51,6 +51,12 @@
   let detailController = null;
   let diagnosisRequest = 0;
   let diagnosisController = null;
+  let detailRunsRequest = 0;
+  let detailRunsController = null;
+  let deploymentPollRequest = 0;
+  let deploymentPollController = null;
+  const feedRequests = {runs: 0, deployments: 0, audit: 0};
+  const feedControllers = {runs: null, deployments: null, audit: null};
   const diagnosisModalQuery = window.matchMedia("(max-width: 74rem)");
 
   class APIError extends Error {
@@ -172,7 +178,23 @@
   function feedMessage(kind, error) {
     const labels = {runs: "run history", deployments: "deployment history", audit: "audit history"};
     const retained = state[kind]?.length ? " Previous data remains visible." : "";
-    return `${labels[kind]} could not be refreshed.${retained} ${error?.message || "Request failed."}`;
+    return `${labels[kind]} could not be refreshed.${retained} ${recoveryGuidance(error)}`;
+  }
+
+  function detailRunsMessage(error) {
+    const retained = state.detailRuns.length ? " Previous automation runs remain visible." : "";
+    return `Run history for this automation could not be refreshed.${retained} ${recoveryGuidance(error)}`;
+  }
+
+  function recoveryGuidance(error) {
+    if (error instanceof APIError) {
+      if (error.status === 404) return "The management endpoint or requested resource was not found. Verify this server exposes the current management API, then retry.";
+      if (error.status === 409) return "The resource changed while the request was in progress. Refresh and review the current state before retrying.";
+      if (error.status >= 500) return "The management API reported a server error. Verify the server is healthy, then retry.";
+      return "The management API rejected the request. Review Connection settings and retry.";
+    }
+    if (error instanceof TypeError) return "Werkt could not reach the management API. Verify the server and network connection, then retry.";
+    return "Retry the request. If it still fails, verify the server and Connection settings.";
   }
 
   function readToken() {
@@ -220,10 +242,19 @@
     const request = ++workspaceRequest;
     workspaceController?.abort();
     workspaceController = new AbortController();
+    for (const kind of Object.keys(feedControllers)) {
+      feedRequests[kind] += 1;
+      feedControllers[kind]?.abort();
+      feedControllers[kind] = null;
+    }
+    const workspaceFeedRequests = {...feedRequests};
     const {signal} = workspaceController;
     const firstLoad = state.automations.length === 0;
+    shell.classList.remove("has-fatal-error");
     state.loading = true;
     if (firstLoad) {
+      inventoryCount.textContent = "Loading inventory…";
+      setConnection("", "Connecting");
       workspaceLoading.hidden = false;
       workspaceContent.hidden = true;
     } else {
@@ -233,13 +264,18 @@
       const automations = await api("/api/v1/automations", {signal});
       if (request !== workspaceRequest) return;
       state.automations = automations;
-      state.feedErrors = {runs: "", deployments: "", audit: ""};
-      state.feedLoading = {runs: true, deployments: true, audit: true};
+      for (const kind of Object.keys(feedRequests)) {
+        if (feedRequests[kind] !== workspaceFeedRequests[kind]) continue;
+        state.feedErrors[kind] = "";
+        state.feedLoading[kind] = true;
+      }
       setConnection("connected", "Connected");
 
       const hashSelection = readRoute().selectedAutomation;
       const candidate = preserveSelection ? (state.selectedAutomation || hashSelection) : hashSelection;
-      state.selectedAutomation = automations.some((item) => item.id === candidate) ? candidate : (automations[0]?.id || "");
+      state.selectedAutomation = automations.some((item) => item.id === candidate)
+        ? candidate
+        : (preserveSelection && !candidate ? "" : (automations[0]?.id || ""));
       writeRoute();
       if (!state.selectedAutomation) {
         state.detail = null;
@@ -261,6 +297,7 @@
       ]);
       if (request !== workspaceRequest) return;
       for (const [index, kind] of ["runs", "deployments", "audit"].entries()) {
+        if (feedRequests[kind] !== workspaceFeedRequests[kind]) continue;
         const result = feeds[index];
         state.feedLoading[kind] = false;
         if (result.status === "fulfilled") {
@@ -284,6 +321,8 @@
 
   async function loadAutomation(automationID, rerender = true) {
     const request = ++detailRequest;
+    const runsRequest = ++detailRunsRequest;
+    detailRunsController?.abort();
     detailController?.abort();
     detailController = new AbortController();
     const {signal} = detailController;
@@ -295,12 +334,13 @@
     if (request !== detailRequest || automationID !== state.selectedAutomation) return;
     if (detailResult.status === "rejected") throw detailResult.reason;
     state.detail = detailResult.value;
-    if (runsResult.status === "fulfilled") {
+    if (runsRequest !== detailRunsRequest) {
+      // A newer explicit run-history refresh owns this surface.
+    } else if (runsResult.status === "fulfilled") {
       state.detailRuns = runsResult.value;
       state.detailRunsError = "";
     } else if (!isAbort(runsResult.reason)) {
-      state.detailRuns = [];
-      state.detailRunsError = feedMessage("runs", runsResult.reason);
+      state.detailRunsError = detailRunsMessage(runsResult.reason);
     }
     if (rerender || state.detail) render();
   }
@@ -426,8 +466,13 @@
     else if (state.view === "deployments") renderGlobalDeployments();
     else if (state.view === "audit") renderGlobalAudit();
     else if (!state.automations.length) renderEmptyWorkspace();
+    else if (!state.selectedAutomation) renderSelectAutomation();
     else if (state.detail) renderAutomationDetail();
     else showDetailLoading();
+  }
+
+  function renderSelectAutomation() {
+    workspaceContent.innerHTML = `<section class="empty-state"><div class="empty-state-inner"><span class="empty-symbol">${icon("bolt")}</span><h2>Select an automation</h2><p>Choose an automation from the inventory to inspect its active revision, triggers, recent runs, and safe operator actions.</p></div></section>`;
   }
 
   function showDetailLoading() {
@@ -454,7 +499,7 @@
           <div class="detail-title"><div class="detail-title-line"><h2>${escapeHTML(detail.id)}</h2><span class="status-badge status-${status}">${detail.enabled ? "Active" : "Paused"}</span></div><p>${escapeHTML(detail.description || "No description is set in this automation's manifest.")}</p></div>
           <div class="detail-actions">
             <button class="button button-quiet" type="button" data-toggle-enabled="${detail.enabled ? "false" : "true"}" ${state.mutating ? "disabled" : ""}>${icon(detail.enabled ? "pause" : "play")}${detail.enabled ? "Pause" : "Resume"}</button>
-            <button class="button button-primary" type="button" data-open-run ${state.mutating ? "disabled" : ""}>${icon("play")}Run now</button>
+            <button class="button button-primary" type="button" data-open-run aria-keyshortcuts="R" ${state.mutating ? "disabled" : ""}>${icon("play")}Run now</button>
           </div>
         </div>
       </header>
@@ -473,7 +518,8 @@
 
         <section class="workspace-section" aria-labelledby="runs-heading">
           <div class="section-heading"><div><h3 id="runs-heading">Recent runs</h3><p>Newest attempts for this automation · ${escapeHTML(historyScope(state.detailRuns.length))}</p></div><button class="section-link" type="button" data-view-link="runs">Browse recent runs</button></div>
-          ${state.detailRunsError ? `<div class="inline-notice is-error" role="status"><span>${escapeHTML(state.detailRunsError)}</span><button class="button button-quiet button-compact" type="button" data-retry-detail-runs>Try again</button></div>` : renderRunsTable(recentRuns, true)}
+          ${state.detailRunsError ? `<div class="inline-notice is-error" role="status"><span>${escapeHTML(state.detailRunsError)}</span><button class="button button-quiet button-compact" type="button" data-retry-detail-runs>Try again</button></div>` : ""}
+          ${renderRunsTable(recentRuns, true)}
         </section>
 
         <section class="workspace-section" aria-labelledby="revisions-heading">
@@ -546,6 +592,8 @@
     const request = ++diagnosisRequest;
     diagnosisController?.abort();
     diagnosisController = new AbortController();
+    deploymentPollRequest += 1;
+    deploymentPollController?.abort();
     state.diagnosisReturnFocus = document.activeElement;
     diagnosisPane.hidden = false;
     shell.classList.add("has-diagnosis");
@@ -569,6 +617,8 @@
     const request = ++diagnosisRequest;
     diagnosisController?.abort();
     diagnosisController = new AbortController();
+    deploymentPollRequest += 1;
+    deploymentPollController?.abort();
     state.diagnosisReturnFocus = document.activeElement;
     diagnosisPane.hidden = false;
     shell.classList.add("has-diagnosis");
@@ -590,6 +640,8 @@
   function closeDiagnosis({restoreFocus = true} = {}) {
     diagnosisRequest += 1;
     diagnosisController?.abort();
+    deploymentPollRequest += 1;
+    deploymentPollController?.abort();
     diagnosisPane.hidden = true;
     shell.classList.remove("has-diagnosis");
     syncDiagnosisModality();
@@ -639,8 +691,8 @@
 
   function deploymentActions(deployment) {
     const terminal = ["succeeded", "failed", "cancelled"].includes(deployment.status);
-    if (!terminal && !deployment.cancelRequestedAt) return `<div class="deployment-actions"><button class="button button-danger" type="button" data-cancel-deployment="${escapeHTML(deployment.id)}" ${state.mutating ? "disabled" : ""}>Cancel deployment</button></div>`;
-    if (["failed", "cancelled"].includes(deployment.status)) return `<div class="deployment-actions"><button class="button button-primary" type="button" data-retry-deployment="${escapeHTML(deployment.id)}" ${state.mutating ? "disabled" : ""}>${icon("refresh")}Retry package</button></div>`;
+    if (!terminal && !deployment.cancelRequestedAt) return `<div class="deployment-actions"><button class="button button-danger" type="button" data-cancel-deployment="${escapeHTML(deployment.id)}" ${state.mutating ? "disabled" : ""}>Cancel deployment</button><button class="section-link" type="button" data-open-help="help-lifecycle">Safety guide</button></div>`;
+    if (["failed", "cancelled"].includes(deployment.status)) return `<div class="deployment-actions"><button class="button button-primary" type="button" data-retry-deployment="${escapeHTML(deployment.id)}" ${state.mutating ? "disabled" : ""}>${icon("refresh")}Retry package</button><button class="section-link" type="button" data-open-help="help-recovery">Recovery guide</button></div>`;
     return "";
   }
 
@@ -694,7 +746,7 @@
   function renderRunFailure(run) {
     if (run.status !== "failed") return "";
     const error = run.error || "Werkt recorded a failed terminal state without an error message.";
-    return `<section class="run-failure" aria-labelledby="run-failure-title"><h3 id="run-failure-title">Run failed on attempt ${escapeHTML(run.attempt)} of ${escapeHTML(run.maxAttempts)}</h3><p>${escapeHTML(error)}</p><div class="run-failure-actions"><button class="button button-primary" type="button" data-diagnosis-tab-action="logs">Open logs</button><button class="button button-quiet" type="button" data-copy-diagnostic>${icon("copy")}Copy diagnostic bundle</button><button class="button button-quiet" type="button" data-queue-diagnostic="${escapeHTML(run.automationId)}">${icon("play")}Queue diagnostic run</button></div></section>`;
+    return `<section class="run-failure" aria-labelledby="run-failure-title"><h3 id="run-failure-title">Run failed on attempt ${escapeHTML(run.attempt)} of ${escapeHTML(run.maxAttempts)}</h3><p>${escapeHTML(error)}</p><div class="run-failure-actions"><button class="button button-primary" type="button" data-diagnosis-tab-action="logs" aria-keyshortcuts="L">Open logs</button><button class="button button-quiet" type="button" data-copy-diagnostic>${icon("copy")}Copy diagnostic bundle</button><button class="button button-quiet" type="button" data-queue-diagnostic="${escapeHTML(run.automationId)}">${icon("play")}Queue diagnostic run</button><button class="section-link" type="button" data-open-help="help-recovery">Recovery guide</button></div></section>`;
   }
 
   function diagnosticBundle(run) {
@@ -729,9 +781,32 @@
             ? `${automationID} is active. Future schedules were recalculated; missed intervals were not replayed.`
             : `${automationID} ingress stopped. Queued and running jobs continue.`)
           : `No change — ${automationID} was already ${enabled ? "active" : "paused"}.`,
+        {audit: response.changed, resumeAutomationId: !enabled && response.changed ? automationID : ""},
+      );
+    } catch (error) {
+      if (!(error instanceof AuthenticationRequired)) showToast(error.message, true);
+    } finally {
+      state.mutating = false;
+      render();
+    }
+  }
+
+  async function resumeAutomationFromReceipt(automationID, receipt) {
+    if (!automationID || state.mutating) return;
+    state.mutating = true;
+    receipt.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+    try {
+      const response = await updateAutomationEnabled(automationID, true);
+      receipt.remove();
+      showReceipt(
+        response.changed ? "Pause reversed" : "Automation already active",
+        response.changed
+          ? `${automationID} is active. Future schedules were recalculated; missed intervals were not replayed.`
+          : `No change — ${automationID} was already active.`,
         {audit: response.changed},
       );
     } catch (error) {
+      receipt.querySelectorAll("button").forEach((button) => { button.disabled = false; });
       if (!(error instanceof AuthenticationRequired)) showToast(error.message, true);
     } finally {
       state.mutating = false;
@@ -888,7 +963,7 @@
           response.changed
             ? `${action.automationId} ingress stopped. Queued and running jobs continue.`
             : `No change — ${action.automationId} was already paused.`,
-          {audit: response.changed},
+          {audit: response.changed, resumeAutomationId: response.changed ? action.automationId : ""},
         );
       } else {
         const deployment = await api(`/api/v1/deployments/${encodeURIComponent(action.deploymentId)}/cancel`, {method: "POST"});
@@ -948,27 +1023,42 @@
       deployments: `/api/v1/deployments?limit=${HISTORY_LIMIT}`,
       audit: `/api/v1/audit?limit=${HISTORY_LIMIT}`,
     };
+    const request = ++feedRequests[kind];
+    feedControllers[kind]?.abort();
+    feedControllers[kind] = new AbortController();
     state.feedLoading[kind] = true;
     render();
     try {
-      state[kind] = await api(paths[kind]);
+      const values = await api(paths[kind], {signal: feedControllers[kind].signal});
+      if (request !== feedRequests[kind]) return;
+      state[kind] = values;
       state.feedErrors[kind] = "";
       showToast(`${capitalize(kind)} refreshed.`);
     } catch (error) {
+      if (request !== feedRequests[kind] || isAbort(error)) return;
       if (!(error instanceof AuthenticationRequired)) state.feedErrors[kind] = feedMessage(kind, error);
     }
+    if (request !== feedRequests[kind]) return;
     state.feedLoading[kind] = false;
     render();
   }
 
   async function refreshDetailRuns() {
-    if (!state.selectedAutomation) return;
+    const automationID = state.selectedAutomation;
+    if (!automationID) return;
+    const request = ++detailRunsRequest;
+    detailRunsController?.abort();
+    detailRunsController = new AbortController();
     try {
-      state.detailRuns = await api(`/api/v1/runs?automation=${encodeURIComponent(state.selectedAutomation)}&limit=${HISTORY_LIMIT}`);
+      const runs = await api(`/api/v1/runs?automation=${encodeURIComponent(automationID)}&limit=${HISTORY_LIMIT}`, {signal: detailRunsController.signal});
+      if (request !== detailRunsRequest || automationID !== state.selectedAutomation) return;
+      state.detailRuns = runs;
       state.detailRunsError = "";
     } catch (error) {
-      if (!(error instanceof AuthenticationRequired)) state.detailRunsError = feedMessage("runs", error);
+      if (request !== detailRunsRequest || automationID !== state.selectedAutomation || isAbort(error)) return;
+      if (!(error instanceof AuthenticationRequired)) state.detailRunsError = detailRunsMessage(error);
     }
+    if (request !== detailRunsRequest || automationID !== state.selectedAutomation) return;
     render();
   }
 
@@ -995,10 +1085,10 @@
     window.setTimeout(() => toast.remove(), 4200);
   }
 
-  function showReceipt(title, message, {audit = false} = {}) {
+  function showReceipt(title, message, {audit = false, resumeAutomationId = ""} = {}) {
     const receipt = document.createElement("article");
     receipt.className = "receipt";
-    receipt.innerHTML = `<div><strong>${escapeHTML(title)}</strong><p>${escapeHTML(message)}</p></div><div class="receipt-actions">${audit ? '<button class="button button-quiet button-compact" type="button" data-receipt-view="audit">View audit</button>' : ""}<button class="icon-button" type="button" data-dismiss-receipt aria-label="Dismiss receipt">${icon("close")}</button></div>`;
+    receipt.innerHTML = `<div><strong>${escapeHTML(title)}</strong><p>${escapeHTML(message)}</p></div><div class="receipt-actions">${resumeAutomationId ? `<button class="button button-quiet button-compact" type="button" data-receipt-resume="${escapeHTML(resumeAutomationId)}">Resume</button>` : ""}${audit ? '<button class="button button-quiet button-compact" type="button" data-receipt-view="audit">View audit</button>' : ""}<button class="icon-button" type="button" data-dismiss-receipt aria-label="Dismiss receipt">${icon("close")}</button></div>`;
     receiptRegion.prepend(receipt);
     [...receiptRegion.children].slice(3).forEach((item) => item.remove());
   }
@@ -1006,12 +1096,14 @@
   function renderFatalError(error) {
     workspaceLoading.hidden = true;
     workspaceContent.hidden = false;
-    workspaceContent.innerHTML = `<section class="error-state"><div class="error-state-inner"><h2>Workspace unavailable</h2><p>${escapeHTML(error?.message || "Werkt could not load the management API.")}</p><button class="button button-primary" type="button" data-retry>Try again</button></div></section>`;
+    workspaceContent.innerHTML = `<section class="error-state"><div class="error-state-inner"><h2>Workspace unavailable</h2><p>${escapeHTML(recoveryGuidance(error))}</p><button class="button button-primary" type="button" data-retry>Try again</button></div></section>`;
+    shell.classList.add("has-fatal-error");
+    inventoryCount.textContent = "Workspace unavailable";
     setConnection("error", "Unavailable");
   }
 
   function renderDetailError(error) {
-    workspaceContent.innerHTML = `<section class="error-state"><div class="error-state-inner"><h2>Automation could not be loaded</h2><p>${escapeHTML(error?.message || "Werkt could not load this automation.")}</p><button class="button button-primary" type="button" data-retry-detail>Try this automation again</button></div></section>`;
+    workspaceContent.innerHTML = `<section class="error-state"><div class="error-state-inner"><h2>Automation could not be loaded</h2><p>${escapeHTML(recoveryGuidance(error))}</p><button class="button button-primary" type="button" data-retry-detail>Try this automation again</button></div></section>`;
   }
 
   function historyScope(count) {
@@ -1134,18 +1226,28 @@
   }
 
   function closeMobileDetail() {
+    const previousSelection = state.selectedAutomation;
+    state.selectedAutomation = "";
+    state.detail = null;
+    state.detailRuns = [];
+    state.detailRunsError = "";
     shell.classList.remove("has-selection");
-    inventoryList.querySelector(`[data-automation="${CSS.escape(state.selectedAutomation)}"]`)?.focus();
+    writeRoute("push");
+    render();
+    inventoryList.querySelector(`[data-automation="${CSS.escape(previousSelection)}"]`)?.focus();
   }
 
-  function openHelp() {
-    if (helpDialog.open || connectionDialog.open || runDialog.open || actionDialog.open || (!diagnosisPane.hidden && diagnosisModalQuery.matches)) return;
+  function openHelp(topic = "") {
+    if (helpDialog.open || connectionDialog.open || runDialog.open || actionDialog.open) return;
     helpDialog.showModal();
-    helpDialog.querySelector("button")?.focus();
+    const heading = typeof topic === "string" && topic ? helpDialog.querySelector(`#${CSS.escape(topic)}`) : null;
+    (heading || helpDialog.querySelector("button"))?.focus();
   }
 
   document.addEventListener("click", (event) => {
     if (globalSearch.classList.contains("is-open") && !globalSearch.contains(event.target) && !mobileSearchButton.contains(event.target)) setMobileSearch(false);
+    const helpTopic = event.target.closest("[data-open-help]");
+    if (helpTopic) { openHelp(helpTopic.dataset.openHelp); return; }
     const viewButton = event.target.closest("[data-view], [data-view-link]");
     if (viewButton) {
       state.view = viewButton.dataset.view || viewButton.dataset.viewLink;
@@ -1220,6 +1322,11 @@
     if (event.target.closest("[data-retry-detail]")) { loadAutomation(state.selectedAutomation); return; }
     if (event.target.closest("[data-retry-detail-runs]")) { refreshDetailRuns(); }
     if (event.target.closest("[data-dismiss-receipt]")) { event.target.closest(".receipt")?.remove(); return; }
+    const receiptResume = event.target.closest("[data-receipt-resume]");
+    if (receiptResume) {
+      resumeAutomationFromReceipt(receiptResume.dataset.receiptResume, receiptResume.closest(".receipt"));
+      return;
+    }
     const receiptView = event.target.closest("[data-receipt-view]");
     if (receiptView) {
       state.view = receiptView.dataset.receiptView;
@@ -1235,7 +1342,7 @@
   document.querySelector("#refresh-button").addEventListener("click", () => loadWorkspace());
   document.querySelector("#mobile-refresh-button").addEventListener("click", () => loadWorkspace());
   mobileSearchButton.addEventListener("click", () => setMobileSearch(!globalSearch.classList.contains("is-open")));
-  helpButton.addEventListener("click", openHelp);
+  helpButton.addEventListener("click", () => openHelp());
   document.querySelector("#connection-button").addEventListener("click", () => openConnection());
   document.querySelector("#clear-token-button").addEventListener("click", () => {
     state.token = "";
@@ -1309,6 +1416,21 @@
       openHelp();
       return;
     }
+    if (event.key.toLocaleLowerCase() === "l" && !event.metaKey && !event.ctrlKey && !event.altKey && !typing && !nativeDialogOpen && state.selectedRun) {
+      event.preventDefault();
+      selectDiagnosisTab("logs");
+      return;
+    }
+    if (event.key.toLocaleLowerCase() === "r" && event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey && !typing && !nativeDialogOpen && diagnosisPane.hidden) {
+      event.preventDefault();
+      loadWorkspace({preserveSelection: true});
+      return;
+    }
+    if (event.key.toLocaleLowerCase() === "r" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey && !typing && !nativeDialogOpen && diagnosisPane.hidden && state.detail) {
+      event.preventDefault();
+      openManualRun();
+      return;
+    }
     if (event.altKey && !event.metaKey && !event.ctrlKey && ["1", "2", "3", "4"].includes(event.key) && !nativeDialogOpen && diagnosisPane.hidden) {
       event.preventDefault();
       document.querySelectorAll("[data-view]")[Number(event.key) - 1]?.click();
@@ -1355,21 +1477,30 @@
 
   window.addEventListener("popstate", applyRouteState);
 
-  window.setInterval(async () => {
+  async function pollSelectedDeployment() {
     const deployment = state.selectedDeployment;
-    if (!deployment || state.mutating || ["succeeded", "failed", "cancelled"].includes(deployment.status)) return;
-    try {
-      const refreshed = await api(`/api/v1/deployments/${encodeURIComponent(deployment.id)}`);
-      if (diagnosisPane.hidden || state.selectedRun || state.selectedDeployment?.id !== deployment.id) return;
-      state.selectedDeployment = refreshed;
-      const summary = state.deployments.find((item) => item.id === deployment.id);
-      if (summary) Object.assign(summary, refreshed);
-      updateDeploymentDiagnosis(refreshed);
-      if (state.view === "deployments") renderGlobalDeployments();
-    } catch (error) {
-      if (!(error instanceof AuthenticationRequired)) showToast(`Deployment refresh failed: ${error.message}`, true);
+    if (deployment && !state.mutating && !["succeeded", "failed", "cancelled"].includes(deployment.status)) {
+      const request = ++deploymentPollRequest;
+      deploymentPollController = new AbortController();
+      try {
+        const refreshed = await api(`/api/v1/deployments/${encodeURIComponent(deployment.id)}`, {signal: deploymentPollController.signal});
+        if (request === deploymentPollRequest && !diagnosisPane.hidden && !state.selectedRun && state.selectedDeployment?.id === deployment.id) {
+          state.selectedDeployment = refreshed;
+          const summary = state.deployments.find((item) => item.id === deployment.id);
+          if (summary) Object.assign(summary, refreshed);
+          updateDeploymentDiagnosis(refreshed);
+          if (state.view === "deployments") renderGlobalDeployments();
+        }
+      } catch (error) {
+        if (request === deploymentPollRequest && !isAbort(error) && !(error instanceof AuthenticationRequired)) {
+          showToast(`Deployment refresh failed. ${recoveryGuidance(error)}`, true);
+        }
+      }
     }
-  }, 2000);
+    window.setTimeout(pollSelectedDeployment, 2000);
+  }
+
+  window.setTimeout(pollSelectedDeployment, 2000);
 
   window.setInterval(refreshTemporalValues, 30000);
   document.addEventListener("visibilitychange", refreshTemporalValues);
