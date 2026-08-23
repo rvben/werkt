@@ -39,6 +39,9 @@ deployment:
 execution:
   timeout: 30s
   retries: 2
+  concurrency: forbid
+  state:
+    enabled: true
 `)
 	if err := os.WriteFile(filepath.Join(directory, manifest.Filename), contents, 0o600); err != nil {
 		t.Fatal(err)
@@ -65,6 +68,27 @@ execution:
 	}
 	if len(value.Deployment.Checks) != 1 || value.Deployment.Checks[0].TimeoutDuration() != 2*time.Minute {
 		t.Fatalf("deployment checks = %#v", value.Deployment.Checks)
+	}
+	if !value.Execution.State.Enabled {
+		t.Fatal("execution state was not enabled")
+	}
+}
+
+func TestValidateRequiresSerializedRunsForTransactionalState(t *testing.T) {
+	value := domain.Manifest{
+		APIVersion: "werkt.dev/v1",
+		Kind:       "Automation",
+		Metadata:   domain.Metadata{Name: "stateful", Project: "personal"},
+		Triggers:   []domain.Trigger{{ID: "hourly", Type: "schedule", Config: map[string]any{"cron": "0 * * * *"}}},
+		Runtime:    domain.Runtime{Language: "python", Command: []string{"python3", "main.py"}},
+		Execution:  domain.Execution{State: domain.StatePolicy{Enabled: true}},
+	}
+	if err := manifest.Validate(value); err == nil || !strings.Contains(err.Error(), "concurrency: forbid") {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	value.Execution.Concurrency = "forbid"
+	if err := manifest.Validate(value); err != nil {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }
 

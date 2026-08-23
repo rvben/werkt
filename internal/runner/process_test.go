@@ -66,6 +66,58 @@ func TestProcessRunnerUsesLanguageNeutralContract(t *testing.T) {
 	}
 }
 
+func TestProcessRunnerProvidesAndReturnsTransactionalState(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is POSIX-specific")
+	}
+	directory := t.TempDir()
+	script := []byte("#!/bin/sh\nset -eu\ntest \"$WERKT_STATE_VERSION\" = 4\ntest -n \"$WERKT_STATE_PATH\"\ntest \"$(cat \"$WERKT_STATE_PATH\")\" = '{\"count\":1}'\nprintf '{\"count\":2}' > \"$WERKT_STATE_PATH\"\nprintf '{\"ok\":true}' > \"$WERKT_RESULT_PATH\"\n")
+	if err := os.WriteFile(filepath.Join(directory, "run.sh"), script, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	value := domain.RunnableRun{
+		Run:          domain.Run{ID: "run_state", AutomationID: "stateful", RevisionID: "rev_state"},
+		ArtifactPath: directory,
+		Manifest: domain.Manifest{
+			Runtime:   domain.Runtime{Language: "shell", Command: []string{"./run.sh"}},
+			Execution: domain.Execution{Timeout: "5s", Concurrency: "forbid", State: domain.StatePolicy{Enabled: true}},
+		},
+		State:        json.RawMessage(`{"count":1}`),
+		StateVersion: 4,
+	}
+	result, err := runner.NewProcessRunner().Execute(context.Background(), value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(result.State) != `{"count":2}` {
+		t.Fatalf("state = %s", result.State)
+	}
+}
+
+func TestProcessRunnerRejectsInvalidTransactionalState(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is POSIX-specific")
+	}
+	directory := t.TempDir()
+	script := []byte("#!/bin/sh\nset -eu\nprintf '[]' > \"$WERKT_STATE_PATH\"\n")
+	if err := os.WriteFile(filepath.Join(directory, "run.sh"), script, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	value := domain.RunnableRun{
+		Run:          domain.Run{ID: "run_bad_state", AutomationID: "stateful", RevisionID: "rev_state"},
+		ArtifactPath: directory,
+		Manifest: domain.Manifest{
+			Runtime:   domain.Runtime{Language: "shell", Command: []string{"./run.sh"}},
+			Execution: domain.Execution{Timeout: "5s", Concurrency: "forbid", State: domain.StatePolicy{Enabled: true}},
+		},
+		State: json.RawMessage(`{}`),
+	}
+	_, err := runner.NewProcessRunner().Execute(context.Background(), value)
+	if err == nil || !strings.Contains(err.Error(), "JSON object") {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
 func TestProcessRunnerRejectsManifestEgressInsteadOfIgnoringIt(t *testing.T) {
 	runtime := domain.Runtime{
 		Command: []string{"true"},

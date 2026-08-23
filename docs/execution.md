@@ -41,6 +41,21 @@ Every executor starts `runtime.command` in the deployed artifact directory and p
 - `WERKT_EVENT_PATH`, containing the normalized event envelope
 - `WERKT_RESULT_PATH`, initialized to `{}` and expected to contain valid JSON at exit
 
+When `execution.state.enabled` is true, Werkt also provides:
+
+- `WERKT_STATE_PATH`, initialized with the automation's latest committed JSON object
+- `WERKT_STATE_VERSION`, the decimal version of that snapshot
+
+The automation may replace the state file with another JSON object of at most
+64 KiB. Werkt reads it only after a zero exit and commits it in the same
+database transaction that marks the run successful. Failed attempts never
+advance state. A compare-and-swap on the supplied version prevents a stale
+attempt from overwriting a newer transition. Stateful manifests must use
+`execution.concurrency: forbid`; this keeps external side effects and state
+transitions serialized instead of pretending they can be rolled back together.
+State is durable operational data, not a secret store: credentials still belong
+in the vault.
+
 Standard output and error are redacted against the exact secrets resolved for that attempt, then bounded to 1 MiB and persisted as run logs. A non-zero exit fails the attempt. Exit code 124 is treated as a timeout. The runtime language is not part of this protocol.
 
 ## Husker attempt lifecycle
@@ -74,6 +89,9 @@ the runtime artifact boundary.
 - Build artifacts and runtime results are downloaded in bounded ranges and checked for size or modification changes between chunks.
 - Husker bearer credentials stay in the worker configuration and are never exposed to automation code.
 - Only manifest environment values, explicitly named vault values, and reserved Werkt protocol values are sent to the guest.
+- Transactional automation state is bounded to a 64 KiB JSON object, is never
+  committed from a failed attempt, and cannot be updated by a worker that lost
+  its run lease.
 - Runtime VMs are offline unless their immutable manifest contains explicit
   egress destinations; policies cannot be silently downgraded to plain NAT.
 - The VM deadline is activity-independent. It remains effective during stuck commands and after orchestrator failure.

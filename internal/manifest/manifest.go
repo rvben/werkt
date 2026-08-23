@@ -207,6 +207,9 @@ func Validate(value domain.Manifest) error {
 	if value.Execution.Concurrency != "" && value.Execution.Concurrency != "allow" && value.Execution.Concurrency != "forbid" {
 		problems = append(problems, "execution.concurrency must be allow or forbid")
 	}
+	if value.Execution.State.Enabled && value.Execution.Concurrency != "forbid" {
+		problems = append(problems, "execution.state.enabled requires execution.concurrency: forbid")
+	}
 
 	if len(problems) > 0 {
 		return errors.New(strings.Join(problems, "; "))

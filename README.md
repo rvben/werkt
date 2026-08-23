@@ -11,6 +11,7 @@ This is an executable MVP, not yet a production sandbox.
 - Strict `automation.yaml` manifests with deterministic content hashes
 - Durable, idempotent deployment jobs with ordered promotion checks, retained diagnostics, cancellation, retry, and rollback
 - PostgreSQL-backed events, run queue, retries, worker leases, and concurrency policies
+- Optional transactional per-automation JSON state for idempotency and small state machines
 - Cron schedules with IANA time zones
 - HMAC-authenticated webhook triggers with idempotency keys
 - Bearer-authenticated RFC 5322 email ingestion

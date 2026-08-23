@@ -133,6 +133,7 @@ func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) 
 	defer os.RemoveAll(runDirectory) //nolint:errcheck
 	eventPath := filepath.Join(runDirectory, "event.json")
 	resultPath := filepath.Join(runDirectory, "result.json")
+	statePath := ""
 	eventJSON, err := json.Marshal(run.Event)
 	if err != nil {
 		return Result{}, err
@@ -140,10 +141,23 @@ func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) 
 	if err := os.WriteFile(eventPath, eventJSON, 0o600); err != nil {
 		return Result{}, fmt.Errorf("write event: %w", err)
 	}
+	if run.Manifest.Execution.State.Enabled {
+		statePath = filepath.Join(runDirectory, "state.json")
+		state := run.State
+		if len(state) == 0 {
+			state = json.RawMessage(`{}`)
+		}
+		if _, err := validateAutomationState(state); err != nil {
+			return Result{}, fmt.Errorf("initialize automation state: %w", err)
+		}
+		if err := os.WriteFile(statePath, state, 0o600); err != nil {
+			return Result{}, fmt.Errorf("write automation state: %w", err)
+		}
+	}
 
 	command := exec.CommandContext(ctx, run.Manifest.Runtime.Command[0], run.Manifest.Runtime.Command[1:]...)
 	command.Dir = run.ArtifactPath
-	command.Env = append(inheritedRuntimeEnvironment(), runtimeEnvironment(run, eventPath, resultPath, resolved.values)...)
+	command.Env = append(inheritedRuntimeEnvironment(), runtimeEnvironment(run, eventPath, resultPath, statePath, resolved.values)...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
@@ -165,16 +179,49 @@ func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) 
 	if !json.Valid(resultJSON) {
 		return Result{Logs: logs}, errors.New("automation result is not valid JSON")
 	}
-	return Result{Output: resultJSON, Logs: logs}, nil
+	result := Result{Output: resultJSON, Logs: logs}
+	if statePath != "" {
+		stateJSON, err := readBoundedFile(statePath, MaxAutomationStateBytes)
+		if err != nil {
+			return Result{Logs: logs}, fmt.Errorf("read automation state: %w", err)
+		}
+		result.State, err = validateAutomationState(stateJSON)
+		if err != nil {
+			return Result{Logs: logs}, err
+		}
+	}
+	return result, nil
 }
 
-func runtimeEnvironment(run domain.RunnableRun, eventPath, resultPath string, values map[string]string) []string {
+func readBoundedFile(path string, maxBytes int) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > int64(maxBytes) {
+		return nil, fmt.Errorf("file exceeds %d bytes", maxBytes)
+	}
+	value, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(value) > maxBytes {
+		return nil, fmt.Errorf("file exceeds %d bytes", maxBytes)
+	}
+	return value, nil
+}
+
+func runtimeEnvironment(run domain.RunnableRun, eventPath, resultPath, statePath string, values map[string]string) []string {
 	reserved := map[string]string{
 		"WERKT_AUTOMATION_ID": run.AutomationID,
 		"WERKT_REVISION_ID":   run.RevisionID,
 		"WERKT_RUN_ID":        run.ID,
 		"WERKT_EVENT_PATH":    eventPath,
 		"WERKT_RESULT_PATH":   resultPath,
+	}
+	if statePath != "" {
+		reserved["WERKT_STATE_PATH"] = statePath
+		reserved["WERKT_STATE_VERSION"] = fmt.Sprintf("%d", run.StateVersion)
 	}
 	for key, value := range reserved {
 		values[key] = value

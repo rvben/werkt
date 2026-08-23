@@ -153,6 +153,7 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 	workspacePath := guestRoot + "/work"
 	eventPath := guestRoot + "/event.json"
 	resultPath := guestRoot + "/result.json"
+	statePath := ""
 	runtimeTimeout := run.Manifest.Execution.TimeoutDuration()
 	lifetime := r.provisionTimeout + runtimeTimeout + r.cleanupTimeout + guestCommandGrace
 
@@ -190,6 +191,19 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 	if err := r.uploadFile(provisionContext, vmName, resultPath, []byte("{}"), 0o600); err != nil {
 		return Result{}, fmt.Errorf("initialize result: %w", err)
 	}
+	if run.Manifest.Execution.State.Enabled {
+		statePath = guestRoot + "/state.json"
+		state := run.State
+		if len(state) == 0 {
+			state = json.RawMessage(`{}`)
+		}
+		if _, err := validateAutomationState(state); err != nil {
+			return Result{}, fmt.Errorf("initialize automation state: %w", err)
+		}
+		if err := r.uploadFile(provisionContext, vmName, statePath, state, 0o600); err != nil {
+			return Result{}, fmt.Errorf("upload automation state: %w", err)
+		}
+	}
 	cancelProvision()
 
 	executionContext, cancelExecution := context.WithTimeout(parent, runtimeTimeout+guestCommandGrace)
@@ -203,6 +217,7 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 			run,
 			eventPath,
 			resultPath,
+			statePath,
 			resolved.values,
 		),
 		Timeout: durationSeconds(runtimeTimeout),
@@ -229,7 +244,18 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 	if !json.Valid(resultJSON) {
 		return Result{Logs: logs}, errors.New("automation result is not valid JSON")
 	}
-	return Result{Output: resultJSON, Logs: logs}, nil
+	result := Result{Output: resultJSON, Logs: logs}
+	if statePath != "" {
+		stateJSON, err := r.readFileLimited(executionContext, vmName, statePath, MaxAutomationStateBytes)
+		if err != nil {
+			return Result{Logs: logs}, fmt.Errorf("read automation state: %w", err)
+		}
+		result.State, err = validateAutomationState(stateJSON)
+		if err != nil {
+			return Result{Logs: logs}, err
+		}
+	}
+	return result, nil
 }
 
 func runtimeNetwork(runtime domain.Runtime) string {
@@ -511,12 +537,16 @@ func durationSeconds(value time.Duration) uint64 {
 	return uint64((value + time.Second - 1) / time.Second)
 }
 
-func runtimeEnvironmentMap(run domain.RunnableRun, eventPath, resultPath string, values map[string]string) map[string]string {
+func runtimeEnvironmentMap(run domain.RunnableRun, eventPath, resultPath, statePath string, values map[string]string) map[string]string {
 	values["WERKT_AUTOMATION_ID"] = run.AutomationID
 	values["WERKT_REVISION_ID"] = run.RevisionID
 	values["WERKT_RUN_ID"] = run.ID
 	values["WERKT_EVENT_PATH"] = eventPath
 	values["WERKT_RESULT_PATH"] = resultPath
+	if statePath != "" {
+		values["WERKT_STATE_PATH"] = statePath
+		values["WERKT_STATE_VERSION"] = fmt.Sprintf("%d", run.StateVersion)
+	}
 	return values
 }
 
