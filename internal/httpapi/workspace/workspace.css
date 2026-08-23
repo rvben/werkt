@@ -10,6 +10,7 @@
   --surface: oklch(1 0 0);
   --surface-raised: oklch(0.965 0.006 43);
   --surface-selected: oklch(0.955 0.032 47);
+  --selected-line: oklch(0.85 0.06 43);
   --primary: oklch(0.52 0.19 42);
   --primary-hover: oklch(0.47 0.18 42);
   --primary-active: oklch(0.46 0.18 42);
@@ -242,7 +243,7 @@ a { color: inherit; }
 
 .icon-button:hover { border-color: var(--line); background: var(--surface-raised); }
 .icon-button:active { background: var(--line); }
-.button:focus-visible, .icon-button:focus-visible, .nav-item:focus-visible, .filter-chip:focus-visible, .inventory-item:focus-visible, .table-button:focus-visible, .tab-button:focus-visible, a:focus-visible, summary:focus-visible {
+.button:focus-visible, .icon-button:focus-visible, .nav-item:focus-visible, .filter-chip:focus-visible, .inventory-item:focus-visible, .table-button:focus-visible, .tab-button:focus-visible, .section-link:focus-visible, a:focus-visible, summary:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
@@ -316,10 +317,10 @@ a { color: inherit; }
 
 .inventory-group { padding-top: var(--space-3); }
 .inventory-group-title { display: flex; align-items: baseline; justify-content: space-between; padding: var(--space-2) var(--space-4); color: var(--muted); font-size: 0.75rem; font-weight: 750; }
-.inventory-group-title span:last-child { color: var(--faint); font-weight: 600; }
+.inventory-group-title span:last-child { color: var(--muted); font-weight: 600; }
 .inventory-group-title .has-failures { color: var(--error); }
 .inventory-folder { padding: var(--space-1) var(--space-2) var(--space-2); }
-.inventory-folder-label { padding: var(--space-2); color: var(--faint); font-size: 0.6875rem; font-weight: 700; }
+.inventory-folder-label { padding: var(--space-2); color: var(--muted); font-size: 0.6875rem; font-weight: 700; }
 .inventory-item {
   width: 100%;
   display: grid;
@@ -336,7 +337,7 @@ a { color: inherit; }
 }
 
 .inventory-item:hover { background: var(--surface-raised); }
-.inventory-item.is-selected { border-color: oklch(0.85 0.06 43); background: var(--surface-selected); }
+.inventory-item.is-selected { border-color: var(--selected-line); background: var(--surface-selected); }
 .inventory-item.is-selected .inventory-name { color: var(--primary-ink); }
 .inventory-item .status-dot.is-healthy { background: var(--success); }
 .inventory-item .status-dot.is-failed { background: var(--error); }
@@ -347,7 +348,7 @@ a { color: inherit; }
 .inventory-meta { display: block; overflow: hidden; color: var(--muted); font-size: 0.6875rem; text-overflow: ellipsis; white-space: nowrap; }
 .inventory-meta.is-failed { color: var(--error); font-weight: 700; }
 .inventory-meta.is-running { color: var(--info); }
-.revision-pill { padding: 0.13rem 0.35rem; border-radius: var(--radius-sm); background: var(--canvas); color: var(--faint); font-size: 0.625rem; }
+.revision-pill { padding: 0.13rem 0.35rem; border-radius: var(--radius-sm); background: var(--canvas); color: var(--muted); font-size: 0.625rem; }
 
 .workspace-main {
   grid-area: main;
@@ -487,6 +488,8 @@ a { color: inherit; }
 
 dialog {
   max-width: min(32rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
   padding: 0;
   border: 0;
   border-radius: var(--radius-lg);
@@ -511,7 +514,13 @@ dialog input[aria-invalid="true"], dialog textarea[aria-invalid="true"] { border
 .run-target { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: var(--space-2) var(--space-3); margin: var(--space-4) 0 var(--space-5); padding: var(--space-3) 0; border-block: 1px solid var(--line); font-size: 0.75rem; }
 .run-target dt { color: var(--muted); }
 .run-target dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--ink); }
-.shortcut-list { display: grid; gap: 0; margin: var(--space-5) 0 0; }
+.help-dialog { width: min(42rem, calc(100vw - 2rem)); max-width: min(42rem, calc(100vw - 2rem)); }
+.help-guides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); margin-top: var(--space-5); }
+.help-guides section { padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--canvas); }
+.help-guides h3, .shortcut-heading { margin: 0 0 var(--space-1); font-size: 0.8125rem; }
+.help-guides p { margin: 0; color: var(--ink-soft); font-size: 0.75rem; }
+.shortcut-heading { margin-top: var(--space-5); }
+.shortcut-list { display: grid; gap: 0; margin: var(--space-2) 0 0; }
 .shortcut-list > div { display: grid; grid-template-columns: minmax(8rem, 0.8fr) minmax(0, 1.2fr); gap: var(--space-4); align-items: center; padding: var(--space-3) 0; border-bottom: 1px solid var(--line); }
 .shortcut-list dt, .shortcut-list dd { margin: 0; }
 .shortcut-list dt { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); }
@@ -576,8 +585,16 @@ dialog input[aria-invalid="true"], dialog textarea[aria-invalid="true"] { border
       "nav" 4rem
       / minmax(0, 1fr);
   }
+  .app-shell.has-fatal-error {
+    grid-template:
+      "top" 3.75rem
+      "main" minmax(0, 1fr)
+      "nav" 4rem
+      / minmax(0, 1fr);
+  }
   .app-shell.has-selection .inventory-pane, .app-shell.is-global-view .inventory-pane { display: none; }
-  .app-shell:not(.has-selection):not(.is-global-view) .workspace-main { display: none; }
+  .app-shell.has-fatal-error .inventory-pane { display: none; }
+  .app-shell:not(.has-selection):not(.is-global-view):not(.has-fatal-error) .workspace-main { display: none; }
   .primary-nav { gap: var(--space-1); }
   .nav-item { min-width: 0; flex: 1 1 0; flex-direction: column; gap: 0.15rem; }
   .connection { min-width: 0; margin-left: auto; }
@@ -618,11 +635,15 @@ dialog input[aria-invalid="true"], dialog textarea[aria-invalid="true"] { border
   .receipt-actions { justify-content: flex-end; }
   .toast-region { bottom: 5rem; }
   .run-failure-actions .button { width: 100%; }
+  .help-guides { grid-template-columns: 1fr; }
+  .shortcut-list > div { grid-template-columns: minmax(7rem, 0.8fr) minmax(0, 1.2fr); }
   dialog form { padding: var(--space-5); }
 }
 
 @media (pointer: coarse) {
-  .button, .icon-button, .inventory-item, .filter-chip, .select-control, .table-button, .tab-button { min-height: 2.75rem; }
+  .button, .icon-button, .inventory-item, .filter-chip, .select-control, .table-button, .tab-button, .section-link { min-height: 2.75rem; }
+  .icon-button { min-width: 2.75rem; width: 2.75rem; }
+  .section-link { display: inline-flex; align-items: center; padding-inline: var(--space-2); }
 }
 
 @media (prefers-reduced-motion: reduce) {

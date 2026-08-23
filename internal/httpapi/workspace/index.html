@@ -51,7 +51,7 @@
           <input id="automation-search" type="search" placeholder="Find an automation" autocomplete="off" aria-controls="inventory-list" aria-describedby="inventory-results" aria-keyshortcuts="Control+K Meta+K">
           <kbd aria-hidden="true">⌘ K</kbd>
         </div>
-        <button class="icon-button" id="refresh-button" type="button" aria-label="Refresh workspace" title="Refresh workspace">
+        <button class="icon-button" id="refresh-button" type="button" aria-label="Refresh workspace" aria-keyshortcuts="Shift+R" title="Refresh workspace">
           <svg class="icon" aria-hidden="true"><use href="#icon-refresh"></use></svg>
         </button>
         <button class="icon-button compact-only" id="mobile-search-button" type="button" aria-label="Search automations" aria-controls="global-search-control" aria-expanded="false">
@@ -124,7 +124,7 @@
       </button>
       <span class="dialog-symbol" aria-hidden="true"><svg class="icon"><use href="#icon-key"></use></svg></span>
       <h2 id="connection-dialog-title">Connect to Werkt</h2>
-      <p>The workspace uses the same bearer-protected management API as external agents. The token stays in this browser tab and is cleared when the tab closes.</p>
+      <p>The workspace uses the same bearer-protected management API as external agents. The token stays in this browser tab and is cleared when the tab closes. If the workspace reports Unavailable, verify the token and retry without reloading the page.</p>
       <label for="management-token">Management token</label>
       <input id="management-token" name="token" type="password" autocomplete="current-password" spellcheck="false" aria-describedby="connection-error">
       <p class="field-message" id="connection-error" role="alert"></p>
@@ -142,12 +142,22 @@
       </button>
       <span class="dialog-symbol" aria-hidden="true"><svg class="icon"><use href="#icon-help"></use></svg></span>
       <h2 id="help-dialog-title">Operate from the keyboard</h2>
-      <p id="help-dialog-description">Shortcuts stay inside this workspace. Destructive and state-changing actions still require their visible confirmation or submit step.</p>
+      <p id="help-dialog-description">A compact operator guide for reading health, diagnosing failures, and intervening without losing revision truth.</p>
+      <div class="help-guides">
+        <section aria-labelledby="help-connect"><h3 id="help-connect" tabindex="-1">Connect and read health</h3><p>The connection status is live. “Needs attention” means the authoritative latest run failed; paused automations remain visible and manual diagnostic runs stay available.</p></section>
+        <section aria-labelledby="help-lifecycle"><h3 id="help-lifecycle" tabindex="-1">Intervene safely</h3><p>Pause stops new ingress while queued and running work continues. Resume starts from the next future schedule. Rollback changes the active revision, while running jobs keep their pinned revision.</p></section>
+        <section aria-labelledby="help-recovery"><h3 id="help-recovery" tabindex="-1">Diagnose and recover</h3><p>Start with the exact failure, then inspect logs or copy the diagnostic bundle. A diagnostic rerun shows and atomically pins its target revision before work is queued.</p></section>
+        <section aria-labelledby="help-history"><h3 id="help-history" tabindex="-1">Verify the outcome</h3><p>Receipts persist until dismissed. Use View audit to verify attributed lifecycle changes; history views clearly state when only the latest 100 records are shown.</p></section>
+      </div>
+      <h3 class="shortcut-heading">Shortcuts</h3>
       <dl class="shortcut-list">
         <div><dt><kbd>⌘/Ctrl</kbd> <kbd>K</kbd></dt><dd>Search automations</dd></div>
         <div><dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move through the inventory</dd></div>
         <div><dt><kbd>Enter</kbd></dt><dd>Open the focused automation</dd></div>
         <div><dt><kbd>Alt</kbd> <kbd>1–4</kbd></dt><dd>Open Automations, Runs, Deployments, or Audit</dd></div>
+        <div><dt><kbd>R</kbd></dt><dd>Review a manual run for the selected automation</dd></div>
+        <div><dt><kbd>L</kbd></dt><dd>Open logs for the diagnosed run</dd></div>
+        <div><dt><kbd>⇧</kbd> <kbd>R</kbd></dt><dd>Refresh the workspace</dd></div>
         <div><dt><kbd>?</kbd></dt><dd>Open this help</dd></div>
         <div><dt><kbd>Esc</kbd></dt><dd>Close search, details, or a dialog</dd></div>
       </dl>
