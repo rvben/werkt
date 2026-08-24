@@ -223,6 +223,13 @@ func extractBuildArchive(destination string, compressed []byte) error {
 	if err != nil {
 		return fmt.Errorf("open gzip stream: %w", err)
 	}
+	root, err := os.OpenRoot(destination)
+	if err != nil {
+		_ = gzipReader.Close()
+		return err
+	}
+	defer root.Close() //nolint:errcheck // extraction errors take precedence
+
 	tarReader := tar.NewReader(gzipReader)
 	var expanded int64
 	entries := 0
@@ -252,10 +259,10 @@ func extractBuildArchive(destination string, compressed []byte) error {
 			_ = gzipReader.Close()
 			return errors.New("build archive contains a file at its root path")
 		}
-		target := filepath.Join(destination, filepath.FromSlash(clean))
+		target := filepath.FromSlash(clean)
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0o750); err != nil {
+			if err := root.MkdirAll(target, 0o750); err != nil {
 				_ = gzipReader.Close()
 				return err
 			}
@@ -265,7 +272,7 @@ func extractBuildArchive(destination string, compressed []byte) error {
 				return fmt.Errorf("expanded build artifact exceeds %d bytes", maxExpandedBuildArtifactBytes)
 			}
 			expanded += header.Size
-			if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
+			if err := root.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 				_ = gzipReader.Close()
 				return err
 			}
@@ -273,7 +280,7 @@ func extractBuildArchive(destination string, compressed []byte) error {
 			if mode == 0 {
 				mode = 0o640
 			}
-			file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+			file, err := root.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 			if err != nil {
 				_ = gzipReader.Close()
 				return err
@@ -300,7 +307,7 @@ func safeArchivePath(name string) (string, error) {
 		return "", fmt.Errorf("build archive contains unsafe path %q", name)
 	}
 	clean := pathpkg.Clean(name)
-	if pathpkg.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") {
+	if pathpkg.IsAbs(clean) || !filepath.IsLocal(filepath.FromSlash(clean)) {
 		return "", fmt.Errorf("build archive contains unsafe path %q", name)
 	}
 	return clean, nil
