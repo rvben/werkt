@@ -4,6 +4,11 @@ The management API is the stable control-plane surface for operators, external a
 
 The machine-readable OpenAPI 3.1 contract is served at `GET /api/openapi.yaml` and does not require authentication.
 
+`GET /healthz` and `GET /readyz` both return build identity only after the
+control plane can reach PostgreSQL. Staging and deployment automation should use
+`/readyz`; the explicit name prevents an orchestrator from treating mere process
+existence as readiness to accept work.
+
 ## Management workspace
 
 `GET /app/` serves the responsive operator workspace embedded in the Werkt binary. It is deliberately a client of this management API rather than a separate administrative backend: deployment progress and diagnosis, inventory, detail, pause/resume, manual runs, run diagnosis, and audit history all use the endpoints documented below.

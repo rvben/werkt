@@ -1,0 +1,30 @@
+name: werkt-staging
+
+services:
+  postgres:
+    image: postgres:17.11-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: werkt
+      POSTGRES_USER: werkt
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - /var/lib/werkt-postgres:/var/lib/postgresql/data
+    secrets:
+      - postgres_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U werkt -d werkt"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+secrets:
+  postgres_password:
+    file: /etc/werkt/postgres-password

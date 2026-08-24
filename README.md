@@ -112,6 +112,16 @@ curl -H "Authorization: Bearer $WERKT_MANAGEMENT_TOKEN" \
 
 See [docs/management-api.md](docs/management-api.md) for the full agent-facing contract and the workspace/API relationship.
 
+## Private staging
+
+The tracked [staging deployment contract](deploy/staging/README.md) defines a
+private two-host Linux environment: Werkt and PostgreSQL 17.11 on the control
+host, and pinned Husker/Firecracker execution on a separate KVM host. It includes
+database-backed readiness, hardened systemd services, a loopback-only Husker
+tunnel, atomic release rollback, and a protected manual deployment workflow.
+Keep this pre-1.0 environment inside one administrative trust domain; do not
+expose the Husker daemon or management API to an untrusted network.
+
 ## Public repository boundary
 
 This repository contains the Werkt platform and generic examples only.
