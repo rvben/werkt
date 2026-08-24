@@ -27,8 +27,15 @@ release_binary=$release_dir/werkt
 active_link=/usr/local/bin/werkt
 temporary_link=/usr/local/bin/.werkt-next
 previous_target=
+previous_commit=
 if [[ -L $active_link ]]; then
   previous_target=$(readlink "$active_link")
+  if [[ $previous_target =~ ^$release_root/([0-9a-f]{40})/werkt$ ]]; then
+    previous_commit=${BASH_REMATCH[1]}
+  else
+    echo "$active_link points outside the managed release layout" >&2
+    exit 1
+  fi
 elif [[ -e $active_link ]]; then
   echo "$active_link exists but is not a managed symlink" >&2
   exit 1
@@ -37,12 +44,30 @@ fi
 install -d -m 0755 -o root -g root "$release_dir"
 install -m 0755 -o root -g root "$source_binary" "$release_binary"
 
+wait_for_commit() {
+  local expected_commit=$1
+  local response
+  for _ in {1..60}; do
+    response=$(curl --silent --max-time 2 http://127.0.0.1:8080/readyz || true)
+    if [[ $response == *"\"commit\":\"$expected_commit\""* ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 rollback() {
   echo "staging readiness failed; restoring the previous release" >&2
   if [[ -n $previous_target ]]; then
     ln -sfn "$previous_target" "$temporary_link"
     mv -Tf "$temporary_link" "$active_link"
     systemctl restart werkt.service
+    if ! wait_for_commit "$previous_commit"; then
+      echo "previous Werkt release did not recover readiness" >&2
+      return 1
+    fi
+    echo "restored Werkt staging release $previous_commit" >&2
   else
     systemctl stop werkt.service || true
     rm -f "$active_link" "$temporary_link"
@@ -53,17 +78,8 @@ ln -sfn "$release_binary" "$temporary_link"
 mv -Tf "$temporary_link" "$active_link"
 systemctl restart werkt.service
 
-ready=false
-for _ in {1..60}; do
-  response=$(curl --silent --show-error --max-time 2 http://127.0.0.1:8080/readyz || true)
-  if [[ $response == *"\"commit\":\"$commit\""* ]]; then
-    ready=true
-    break
-  fi
-  sleep 1
-done
-if [[ $ready != true ]]; then
-  rollback
+if ! wait_for_commit "$commit"; then
+  rollback || true
   exit 1
 fi
 
