@@ -931,15 +931,21 @@ func (s *Store) EnqueueManualRun(ctx context.Context, automationID, externalID, 
 		}
 	}
 	var revisionID string
-	var manifestJSON []byte
 	err = tx.QueryRow(ctx, `
-		SELECT a.active_revision_id, r.manifest
-		FROM automations a
-		JOIN revisions r ON r.id = a.active_revision_id
-		WHERE a.id = $1
-		FOR UPDATE OF a`, automationID).Scan(&revisionID, &manifestJSON)
+		SELECT active_revision_id
+		FROM automations
+		WHERE id = $1
+		FOR UPDATE`, automationID).Scan(&revisionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, ErrAutomationNotFound
+	}
+	if err != nil {
+		return "", false, err
+	}
+	var manifestJSON []byte
+	err = tx.QueryRow(ctx, `SELECT manifest FROM revisions WHERE id = $1`, revisionID).Scan(&manifestJSON)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, ErrRevisionNotFound
 	}
 	if err != nil {
 		return "", false, err
