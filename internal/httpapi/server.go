@@ -110,6 +110,7 @@ func New(store Store, address, managementToken string, options ...Option) *Serve
 	mux.HandleFunc("GET /app/", value.workspace)
 	mux.HandleFunc("GET /app/{asset}", value.workspace)
 	mux.HandleFunc("GET /healthz", value.health)
+	mux.HandleFunc("GET /readyz", value.health)
 	mux.HandleFunc("GET /api/openapi.yaml", value.openAPI)
 	mux.HandleFunc("POST /api/v1/hooks/{automation}/{trigger}", value.webhook)
 	mux.HandleFunc("POST /api/v1/email/{automation}/{trigger}", value.email)

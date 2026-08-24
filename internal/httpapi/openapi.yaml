@@ -24,6 +24,24 @@ paths:
                   dirty: {type: boolean}
                 required: [status, version, commit, builtAt, dirty]
         "503": {$ref: "#/components/responses/Error"}
+  /readyz:
+    get:
+      operationId: readiness
+      responses:
+        "200":
+          description: Control plane and database are ready to serve requests.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: {type: string, const: ok}
+                  version: {type: string}
+                  commit: {type: string}
+                  builtAt: {type: string}
+                  dirty: {type: boolean}
+                required: [status, version, commit, builtAt, dirty]
+        "503": {$ref: "#/components/responses/Error"}
   /api/v1/automations:
     get:
       operationId: listAutomations
