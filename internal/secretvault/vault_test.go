@@ -97,3 +97,26 @@ func TestVaultRejectsWrongKeyAndInvalidInputs(t *testing.T) {
 		t.Fatalf("New() error=%v", err)
 	}
 }
+
+func TestVaultVerifyAllProvesKeyCustodyWithoutReturningValues(t *testing.T) {
+	repository := &memoryRepository{}
+	key := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+	vault, _ := New(repository, key)
+	_, _, _ = vault.Put(context.Background(), "ops/token", "valid-secret-value", "", "test")
+
+	verified, err := vault.VerifyAll(context.Background())
+	if err != nil || verified != 1 {
+		t.Fatalf("VerifyAll() verified=%d err=%v", verified, err)
+	}
+
+	otherKey := base64.StdEncoding.EncodeToString([]byte("abcdef0123456789abcdef0123456789"))
+	other, _ := New(repository, otherKey)
+	if _, err := other.VerifyAll(context.Background()); !errors.Is(err, ErrKeyMismatch) {
+		t.Fatalf("VerifyAll() with wrong key error=%v, want key mismatch", err)
+	}
+
+	empty, _ := New(&memoryRepository{}, key)
+	if _, err := empty.VerifyAll(context.Background()); !errors.Is(err, ErrNoSecrets) {
+		t.Fatalf("VerifyAll() on empty vault error=%v, want no secrets", err)
+	}
+}
