@@ -291,3 +291,7 @@ See [docs/execution.md](docs/execution.md) for the complete boundary and failure
 ## Current trust boundary
 
 The `process` executor runs builds and deployed commands as child processes on the control-plane host and is for trusted local development only. Build and runtime children receive an allowlisted base environment; runtime attempts additionally receive only their explicit vault mappings. This protects Werkt credentials from accidental inheritance but does not sandbox host filesystem or network access, so the executor fails deployment and execution when a manifest requires egress enforcement. The `husker` executor isolates both builds and runtime code in separate microVMs, but Husker is currently a single-host, single-trust-domain system rather than a hostile multi-tenant service. Signed artifacts, dependency caches, build-plane egress allowlists, and multi-key master-key rotation remain production-hardening work.
+
+## License
+
+Werkt is licensed under the [Apache License 2.0](LICENSE).
