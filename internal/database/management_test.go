@@ -163,7 +163,7 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 	}
 
 	runs, err := store.ListRunsFiltered(ctx, value.Metadata.Name, domain.RunQueued, 10)
-	if err != nil || len(runs) != 2 {
+	if err != nil || len(runs) != 3 {
 		t.Fatalf("queued runs=%d err=%v", len(runs), err)
 	}
 	audit, err := store.ListAuditEvents(ctx, value.Metadata.Name, 10)
