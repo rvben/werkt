@@ -71,9 +71,12 @@ jobs:
         with:
           name: werkt-staging-${{ github.run_id }}
           path: release
-      - name: Verify release checksum
+      - name: Verify and prepare release
         working-directory: release
-        run: sha256sum --check werkt.sha256
+        run: |
+          sha256sum --check werkt.sha256
+          # GitHub artifacts intentionally normalize file modes on download.
+          chmod 0755 werkt staging-smoke.sh
       - name: Install with automatic readiness rollback
         run: |
           commit=$(tr -d '\n' < release/commit)
