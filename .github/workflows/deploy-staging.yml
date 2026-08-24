@@ -81,8 +81,8 @@ jobs:
       - name: Smoke test protected staging
         env:
           WERKT_STAGING_URL: ${{ vars.WERKT_STAGING_URL }}
-          WERKT_MANAGEMENT_TOKEN: ${{ secrets.WERKT_MANAGEMENT_TOKEN }}
         run: |
           export WERKT_EXPECTED_COMMIT
           WERKT_EXPECTED_COMMIT=$(tr -d '\n' < release/commit)
           release/staging-smoke.sh
+          sudo /usr/local/sbin/verify-werkt-staging "$WERKT_EXPECTED_COMMIT"

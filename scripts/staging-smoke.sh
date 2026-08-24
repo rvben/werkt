@@ -2,7 +2,6 @@
 set -euo pipefail
 
 : "${WERKT_STAGING_URL:?set WERKT_STAGING_URL}"
-: "${WERKT_MANAGEMENT_TOKEN:?set WERKT_MANAGEMENT_TOKEN}"
 
 base_url=${WERKT_STAGING_URL%/}
 temporary_directory=$(mktemp -d)
@@ -34,14 +33,4 @@ if [[ $unauthorized_status != 401 ]]; then
   exit 1
 fi
 
-authorized_status=$(request \
-  -H "Authorization: Bearer $WERKT_MANAGEMENT_TOKEN" \
-  -o "$temporary_directory/automations.json" \
-  -w '%{http_code}' \
-  "$base_url/api/v1/automations")
-if [[ $authorized_status != 200 ]]; then
-  echo "authenticated inventory returned HTTP $authorized_status" >&2
-  exit 1
-fi
-
-echo "staging smoke checks passed"
+echo "remote staging boundary checks passed"
