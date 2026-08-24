@@ -155,7 +155,7 @@ func (r *NtfyReconciler) consume(ctx context.Context, definition domain.TriggerD
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	defer response.Body.Close() //nolint:errcheck // closing a read-only response body cannot change the result
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return fmt.Errorf("ntfy returned %s", response.Status)
 	}

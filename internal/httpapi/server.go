@@ -968,6 +968,6 @@ func requestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		started := time.Now()
 		next.ServeHTTP(response, request)
-		slog.Info("HTTP request", "method", request.Method, "path", request.URL.Path, "duration", fmt.Sprintf("%s", time.Since(started).Round(time.Millisecond)))
+		slog.Info("HTTP request", "method", request.Method, "path", request.URL.Path, "duration", time.Since(started).Round(time.Millisecond).String())
 	})
 }

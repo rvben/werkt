@@ -36,7 +36,7 @@ func New(baseURL, token string, httpClient *http.Client) (*Client, error) {
 		return nil, fmt.Errorf("invalid Werkt API URL %q", baseURL)
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return nil, errors.New("Werkt API URL scheme must be http or https")
+		return nil, errors.New("werkt API URL scheme must be http or https")
 	}
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -218,7 +218,7 @@ func (c *Client) DeleteSecret(ctx context.Context, name, actor string) error {
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	defer response.Body.Close() //nolint:errcheck // closing a read-only response body cannot change the result
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
 		return nil
 	}
@@ -286,7 +286,7 @@ func (c *Client) do(request *http.Request, destination any) error {
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	defer response.Body.Close() //nolint:errcheck // closing a read-only response body cannot change the result
 	limited := io.LimitReader(response.Body, 2<<20)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		var problem struct {
