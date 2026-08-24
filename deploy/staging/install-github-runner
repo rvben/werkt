@@ -53,9 +53,15 @@ if [[ ! -f $runner_root/.runner ]]; then
 fi
 
 if ! compgen -G '/etc/systemd/system/actions.runner.rvben-werkt.*.service' >/dev/null; then
-  "$runner_root/svc.sh" install "$runner_user"
+  (
+    cd "$runner_root"
+    ./svc.sh install "$runner_user"
+  )
 fi
-"$runner_root/svc.sh" start
+(
+  cd "$runner_root"
+  ./svc.sh start
+)
 
 unset WERKT_RUNNER_TOKEN
 echo "GitHub staging runner is installed and started"
