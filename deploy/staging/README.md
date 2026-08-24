@@ -31,6 +31,7 @@ sudo install -m 0644 deploy/staging/werkt-postgres.service /etc/systemd/system/w
 sudo install -m 0644 deploy/staging/werkt-husker-tunnel.service /etc/systemd/system/werkt-husker-tunnel.service
 sudo install -m 0644 deploy/staging/postgres.compose.yml /etc/werkt/postgres.compose.yml
 sudo install -m 0755 deploy/staging/install-werkt-release /usr/local/sbin/install-werkt-release
+sudo install -m 0755 deploy/staging/verify-werkt-staging /usr/local/sbin/verify-werkt-staging
 ```
 
 Create these root-owned files outside Git:
@@ -43,6 +44,7 @@ Create these root-owned files outside Git:
 | `/etc/werkt/husker-tunnel.env` | `0640`, group `werkt` | Copy of `husker-tunnel.env.example` with the execution host |
 | `/etc/werkt/husker_tunnel_key` | `0600`, owner `werkt` | Dedicated SSH private key used only for forwarding |
 | `/etc/werkt/husker_known_hosts` | `0644` | Pinned execution-host SSH key |
+| `/usr/local/sbin/verify-werkt-staging` | `0755`, owner `root` | Host-local authenticated deployment check |
 
 Generate independent staging credentials. Keep the vault key outside database
 backups and never reuse production values:
@@ -99,10 +101,11 @@ private network.
 Install a GitHub Actions runner on the control host with labels
 `self-hosted`, `linux`, `x64`, and `staging-control`. Do not use this runner for
 pull-request workflows. Give its service account passwordless sudo permission
-for this exact command only:
+for these two root-owned helpers only:
 
 ```text
 /usr/local/sbin/install-werkt-release
+/usr/local/sbin/verify-werkt-staging
 ```
 
 The tracked installer pins and verifies the runner release before registering
@@ -116,15 +119,19 @@ sudo --preserve-env=WERKT_RUNNER_TOKEN deploy/staging/install-github-runner
 
 Pass `WERKT_RUNNER_TOKEN` only through the process environment and unset it
 immediately afterward. The runner is repository-scoped, runs as the isolated
-`werkt-runner` account, and can elevate only through the release installer.
+`werkt-runner` account, and can elevate only through the two constrained helpers.
 All remote actions in this repository are pinned to immutable commit SHAs, and
 CI rejects `pull_request_target` or use of the self-hosted label outside the
 protected staging workflow.
 
 Create a GitHub environment named `staging` with a required reviewer, then add:
 
-- environment variable `WERKT_STAGING_URL` containing the private TLS URL;
-- environment secret `WERKT_MANAGEMENT_TOKEN` matching `/etc/werkt/werkt.env`.
+- environment variable `WERKT_STAGING_URL` containing the private TLS URL.
+
+Keep `WERKT_MANAGEMENT_TOKEN` only in `/etc/werkt/werkt.env`. The protected
+workflow performs its authenticated check through the root-owned
+`verify-werkt-staging` helper, so the credential never enters GitHub or the
+runner workspace.
 
 Run the **Deploy staging** workflow manually. It verifies the current `main`,
 builds one immutable binary, checks its checksum on the control host, switches

@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 0077
+
+if [[ $EUID -ne 0 ]]; then
+  echo "verify-werkt-staging must run as root" >&2
+  exit 1
+fi
+if [[ $# -ne 1 || ! $1 =~ ^[0-9a-f]{40}$ ]]; then
+  echo "usage: verify-werkt-staging COMMIT" >&2
+  exit 2
+fi
+
+expected_commit=$1
+environment_file=/etc/werkt/werkt.env
+if [[ ! -f $environment_file ]]; then
+  echo "missing $environment_file" >&2
+  exit 1
+fi
+
+set -a
+# shellcheck disable=SC1090
+source "$environment_file"
+set +a
+: "${WERKT_MANAGEMENT_TOKEN:?missing WERKT_MANAGEMENT_TOKEN in $environment_file}"
+if [[ ! $WERKT_MANAGEMENT_TOKEN =~ ^[A-Za-z0-9_-]{32,}$ ]]; then
+  echo "WERKT_MANAGEMENT_TOKEN has an unsafe format" >&2
+  exit 1
+fi
+
+temporary_directory=$(mktemp -d)
+trap 'rm -rf -- "$temporary_directory"' EXIT
+authorization_config=$temporary_directory/authorization.curl
+printf 'header = "Authorization: Bearer %s"\n' "$WERKT_MANAGEMENT_TOKEN" > "$authorization_config"
+unset WERKT_MANAGEMENT_TOKEN
+
+request() {
+  curl --silent --show-error --connect-timeout 2 --max-time 10 "$@"
+}
+
+ready_status=$(request -o "$temporary_directory/ready.json" -w '%{http_code}' http://127.0.0.1:8080/readyz)
+if [[ $ready_status != 200 ]] || ! grep -Fq "\"commit\":\"$expected_commit\"" "$temporary_directory/ready.json"; then
+  echo "local readiness did not report expected commit $expected_commit" >&2
+  exit 1
+fi
+
+unauthorized_status=$(request -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/v1/automations)
+if [[ $unauthorized_status != 401 ]]; then
+  echo "management API accepted an unauthenticated request: HTTP $unauthorized_status" >&2
+  exit 1
+fi
+
+authorized_status=$(request --config "$authorization_config" -o /dev/null -w '%{http_code}' \
+  http://127.0.0.1:8080/api/v1/automations)
+if [[ $authorized_status != 200 ]]; then
+  echo "host-local authenticated inventory returned HTTP $authorized_status" >&2
+  exit 1
+fi
+
+echo "host-local authenticated staging checks passed"
