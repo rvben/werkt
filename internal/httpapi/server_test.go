@@ -21,31 +21,48 @@ import (
 )
 
 func TestHealthReportsBuildIdentity(t *testing.T) {
-	server := New(&fakeStore{}, "127.0.0.1:0", "")
-	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	for _, path := range []string{"/healthz", "/readyz"} {
+		t.Run(path, func(t *testing.T) {
+			server := New(&fakeStore{}, "127.0.0.1:0", "")
+			request := httptest.NewRequest(http.MethodGet, path, nil)
+			response := httptest.NewRecorder()
+
+			server.server.Handler.ServeHTTP(response, request)
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+			}
+			var body struct {
+				Status  string `json:"status"`
+				Version string `json:"version"`
+				Commit  string `json:"commit"`
+				BuiltAt string `json:"builtAt"`
+				Dirty   bool   `json:"dirty"`
+			}
+			if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+				t.Fatalf("decode health response: %v", err)
+			}
+			if body.Status != "ok" || body.Version == "" || body.Commit == "" {
+				t.Fatalf("health response = %#v", body)
+			}
+		})
+	}
+}
+
+func TestReadinessFailsWhenDatabaseIsUnavailable(t *testing.T) {
+	server := New(&fakeStore{pingErr: context.DeadlineExceeded}, "127.0.0.1:0", "")
+	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	response := httptest.NewRecorder()
 
 	server.server.Handler.ServeHTTP(response, request)
 
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
-	}
-	var body struct {
-		Status  string `json:"status"`
-		Version string `json:"version"`
-		Commit  string `json:"commit"`
-		BuiltAt string `json:"builtAt"`
-		Dirty   bool   `json:"dirty"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
-		t.Fatalf("decode health response: %v", err)
-	}
-	if body.Status != "ok" || body.Version == "" || body.Commit == "" {
-		t.Fatalf("health response = %#v", body)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
 	}
 }
 
 type fakeStore struct {
+	pingErr            error
 	listFilter         database.AutomationFilter
 	listCalled         bool
 	setEnabled         *bool
@@ -62,7 +79,7 @@ type fakeStore struct {
 	ingestedMetadata   map[string]any
 }
 
-func (s *fakeStore) Ping(context.Context) error { return nil }
+func (s *fakeStore) Ping(context.Context) error { return s.pingErr }
 
 func (s *fakeStore) IngestEvent(_ context.Context, _, _, _, externalID string, _ time.Time, data json.RawMessage, metadata map[string]any) (string, bool, error) {
 	s.ingested = true
