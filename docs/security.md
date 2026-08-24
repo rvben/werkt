@@ -29,6 +29,13 @@ Every deployment records the exact named-secret dependencies of its immutable re
 
 The current vault uses one master key. Rotate credential values freely through `secret set`; master-key rotation with multiple simultaneous decrypt keys is intentionally not implemented yet.
 
+After restoring PostgreSQL and the separately protected environment file, run
+`werkt recovery verify` against the isolated restore. The command applies any
+pending database migrations and decrypts every stored value in memory, returning
+only the number verified. It fails if the database is empty, the key is missing,
+or any ciphertext cannot be authenticated, so a successful result proves both
+database recovery and master-key custody without starting workers or triggers.
+
 ### Migrating environment references
 
 This vault replaces the earlier `secretEnv`/`tokenEnv` contract. After upgrading, configure `WERKT_SECRET_KEY`, create the named values, change webhook `secretEnv` to `secret`, change email/ntfy `tokenEnv` to `tokenSecret`, replace each `runtime.secrets` source with a vault name, and redeploy. Old active revisions keep their history but cannot resolve host-environment references under the new contract.

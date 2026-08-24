@@ -34,6 +34,7 @@ var (
 	ErrInvalidValue       = errors.New("secret value must be valid UTF-8 without NUL bytes and contain 8 to 65536 bytes")
 	ErrInvalidDescription = errors.New("secret description must be valid UTF-8 and at most 500 bytes")
 	ErrKeyMismatch        = errors.New("secret was encrypted with a different master key")
+	ErrNoSecrets          = errors.New("restored database contains no secrets; key custody cannot be verified")
 	secretName            = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._/-][a-z0-9]+)*$`)
 )
 
@@ -170,6 +171,31 @@ func (v *Vault) Resolve(ctx context.Context, names []string) (map[string]string,
 		}
 	}
 	return resolved, nil
+}
+
+// VerifyAll proves that every stored value can be decrypted with the configured
+// key without returning any plaintext to the caller.
+func (v *Vault) VerifyAll(ctx context.Context) (int, error) {
+	metadata, err := v.List(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if len(metadata) == 0 {
+		return 0, ErrNoSecrets
+	}
+	names := make([]string, 0, len(metadata))
+	for _, value := range metadata {
+		names = append(names, value.Name)
+	}
+	resolved, err := v.Resolve(ctx, names)
+	if err != nil {
+		return 0, err
+	}
+	for name := range resolved {
+		resolved[name] = ""
+		delete(resolved, name)
+	}
+	return len(names), nil
 }
 
 func additionalData(name string) []byte {

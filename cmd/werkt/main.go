@@ -52,6 +52,8 @@ func run(arguments []string) error {
 		return retentionCommand(arguments[1:])
 	case "secret":
 		return secretCommand(arguments[1:])
+	case "recovery":
+		return recoveryCommand(arguments[1:])
 	case "serve":
 		return serve(arguments[1:])
 	case "automations":
@@ -360,6 +362,29 @@ func secretCommand(arguments []string) error {
 	}
 }
 
+func recoveryCommand(arguments []string) error {
+	if len(arguments) != 1 || arguments[0] != "verify" {
+		return errors.New("usage: werkt recovery verify")
+	}
+	configuration := config.Load()
+	ctx, cancel := context.WithTimeout(context.Background(), configuration.DeployTimeout)
+	defer cancel()
+	store, err := openStore(ctx, configuration)
+	if err != nil {
+		return fmt.Errorf("verify restored database: %w", err)
+	}
+	defer store.Close()
+	vault, err := secretvault.New(store, configuration.SecretKey)
+	if err != nil {
+		return fmt.Errorf("verify restored secret key: %w", err)
+	}
+	verified, err := vault.VerifyAll(ctx)
+	if err != nil {
+		return fmt.Errorf("verify restored secrets: %w", err)
+	}
+	return printJSON(map[string]any{"database": "ok", "secretsVerified": verified})
+}
+
 func serve(arguments []string) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	workers := flags.Int("workers", 2, "number of local automation workers")
@@ -554,9 +579,10 @@ func usage() {
   %s rollback AUTOMATION_ID REVISION_ID
   %s retention plan|get|apply [PLAN_ID]
   %s secret list|get|set|delete [NAME]
+  %s recovery verify
   %s serve [-workers N]
   %s automations
   %s runs [-limit N]
   %s version
-	`, executable, executable, executable, executable, executable, executable, executable, executable, executable, executable)
+	`, executable, executable, executable, executable, executable, executable, executable, executable, executable, executable, executable)
 }
