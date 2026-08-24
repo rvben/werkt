@@ -47,7 +47,8 @@ func TestTransactionalAutomationStateIntegration(t *testing.T) {
 			State:       domain.StatePolicy{Enabled: true},
 		},
 	}
-	if _, err := store.Deploy(ctx, manifest, strings.Repeat("a", 64), t.TempDir()); err != nil {
+	contentHash := strings.Repeat("a", 64)
+	if _, err := store.Deploy(ctx, manifest, contentHash, t.TempDir(), testArtifactProvenance(manifest, contentHash)); err != nil {
 		t.Fatal(err)
 	}
 

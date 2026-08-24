@@ -21,6 +21,8 @@ This is an executable MVP, not yet a production sandbox.
 - Responsive management workspace at `/app/`, backed only by that public API
 - Filtered inventory, deployment progress, automation detail, pause/resume, manual runs, and audit history
 - AES-256-GCM secret vault with safe rotation, revision bindings, and runtime log redaction
+- Ed25519-signed artifact provenance verified before execution, reuse, and rollback
+- Digest-pinned OCI runtime and build images for Husker deployments
 - Python, Rust, and Go examples
 - HTTP endpoints for health, automations, hooks, and run history
 - CLI commands for validation, deployment, serving, and inspection
@@ -171,7 +173,7 @@ go run ./cmd/werkt retention apply ret_...
 
 The defaults keep retryable sources for 30 days, inactive artifacts for 90 days, the newest three retryable sources per automation, and the newest five inactive revisions. Active work and active revisions are never candidates.
 
-Deploying the Rust example runs its `cargo build --release` build command once. With the Husker backend, that build runs in the manifest's disposable `rust:1.88-bookworm` build VM; the resulting workspace becomes the immutable artifact:
+Deploying the Rust example runs its `cargo build --release` build command once. With the Husker backend, that build runs in the manifest's digest-pinned disposable Rust build VM; the resulting workspace is hashed, signed, and verified before every attempt:
 
 ```bash
 export RUST_HELLO_WEBHOOK_SECRET='development-rust-secret-change-me-now'
@@ -208,7 +210,7 @@ triggers:
       secret: infrastructure/process-alert/webhook
 runtime:
   language: python
-  image: python:3.13-alpine
+  image: python@sha256:540c7d91f98ff6880174c40e99067bf5941eb54d818a7a5e094d188b196a934d
   command: [python3, main.py]
   egress:
     - host: incidents.example.com
@@ -226,7 +228,9 @@ execution:
   concurrency: forbid
 ```
 
-`runtime.language` is descriptive. The actual runtime contract is `runtime.command`, so any executable language works. `deployment.checks` uses the same language-neutral command-array contract: checks run in order after the optional build, each with a stable ID and timeout. `runtime.image` names the Husker rootfs catalog entry or OCI reference that provides those commands. When `runtime.build` is present, `runtime.buildImage` can select a separate toolchain image; otherwise the runtime image is reused. Both image fields are ignored by the local process executor. A daemon-wide `WERKT_HUSKER_ROOTFS` can be used as a fallback.
+`runtime.language` is descriptive. The actual runtime contract is `runtime.command`, so any executable language works. `deployment.checks` uses the same language-neutral command-array contract: checks run in order after the optional build, each with a stable ID and timeout. Husker deployments require `runtime.image` and any explicit `runtime.buildImage` to use `name@sha256:<digest>` OCI references. When `runtime.build` is present, `runtime.buildImage` can select a separate pinned toolchain image; otherwise the pinned runtime image is reused. The local process executor ignores both image fields but still signs and verifies the produced artifact.
+
+Werkt derives a domain-separated Ed25519 artifact-signing key from the persistent 32-byte `WERKT_SECRET_KEY`; the encryption and signing keys are never reused directly. The attestation binds the artifact tree (including executable modes), source content hash, automation identity, and effective images. Its digest, signature, public key, and signing-key fingerprint are stored with the revision, returned by the management API, and shown in the workspace. Artifact metadata lives under the reserved `.werkt` directory and is excluded from automation execution.
 
 Runtime networking is also manifest-owned. With no `runtime.egress`, the Husker
 VM has no network device. Each egress entry opens exactly one hostname, TCP or
@@ -274,7 +278,7 @@ The event envelope is stable across every trigger and runtime:
 | `WERKT_DATA_DIR` | `./data` |
 | `WERKT_LISTEN_ADDR` | `127.0.0.1:8080` |
 | `WERKT_MANAGEMENT_TOKEN` | empty; disables management authentication for local development |
-| `WERKT_SECRET_KEY` | empty; base64-encoded 32-byte AES master key; secret operations fail closed when absent |
+| `WERKT_SECRET_KEY` | required persistent base64-encoded 32-byte master key; domain-separated AES vault and Ed25519 provenance keys are derived from it |
 | `WERKT_WORKER_POLL` | `500ms` |
 | `WERKT_SCHEDULER_POLL` | `1s` |
 | `WERKT_SHUTDOWN_PERIOD` | `10s` |
@@ -286,7 +290,7 @@ The event envelope is stable across every trigger and runtime:
 | `WERKT_EXECUTOR` | `process` |
 | `WERKT_HUSKER_URL` | `http://127.0.0.1:8081` |
 | `WERKT_HUSKER_TOKEN` | empty |
-| `WERKT_HUSKER_ROOTFS` | empty; fallback when `runtime.image` is omitted |
+| `WERKT_HUSKER_ROOTFS` | legacy runner fallback; attested deployments require a digest-pinned manifest image |
 | `WERKT_HUSKER_KERNEL` | empty; use the Husker daemon default |
 | `WERKT_HUSKER_VCPUS` | `1` |
 | `WERKT_HUSKER_MEMORY_MIB` | `256` |

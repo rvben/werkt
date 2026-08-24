@@ -6,13 +6,13 @@ Werkt owns automation definitions, triggers, durable events, revision history, q
 
 Agents upload a deterministic package to the management API. Werkt verifies the digest while streaming the bounded body to disk, safely extracts it into private staging, and records an idempotent `queued` deployment. A lease-backed worker then advances it through `validating`, `building`, and `activating`. Expired leases can be reacquired after a worker crash.
 
-The source package stays private to the control plane and is retained after a terminal result so an operator or agent can retry the exact same bytes without uploading a subtly different package. Policy-driven retention later expires old material through a persisted dry-run/apply workflow. Activation publishes the immutable revision, replaces effective triggers, and marks the deployment successful in one transaction, so clients cannot observe an active revision paired with a failed or unfinished job.
+The source package stays private to the control plane and is retained after a terminal result so an operator or agent can retry the exact same bytes without uploading a subtly different package. Policy-driven retention later expires old material through a persisted dry-run/apply workflow. Before publication, Werkt hashes the artifact tree and signs a statement binding it to the source and effective images. Activation stores that provenance with the immutable revision, replaces effective triggers, and marks the deployment successful in one transaction, so clients cannot observe an active revision paired with a failed or unfinished job.
 
 ## Build lifecycle
 
 When a manifest defines `runtime.build` or `deployment.checks`, deployment copies the source into a private staging directory before invoking the selected builder. Checks are ordered command arrays with stable IDs and independent timeouts. They run after the optional build and must all pass before activation. The process backend invokes these commands on the Werkt host for trusted local development only. The Husker backend instead:
 
-1. Creates a fresh VM from `runtime.buildImage`, falling back to `runtime.image` and then the daemon-wide rootfs setting.
+1. Creates a fresh VM from the digest-pinned `runtime.buildImage`, falling back only to the digest-pinned `runtime.image`.
 2. Gives the VM an independent hard expiration and `owner: werkt/build/<automation-id>`.
 3. Uploads and extracts the source, then invokes the build and check arrays directly without a shell in the same disposable VM.
 4. Archives the completed guest workspace and downloads it using bounded ranged reads.
@@ -61,11 +61,12 @@ Standard output and error are redacted against the exact secrets resolved for th
 ## Husker attempt lifecycle
 
 1. Werkt derives a collision-resistant VM name from the run ID and attempt.
-2. It creates a VM from `runtime.image` (or the configured fallback) with the requested resources, a manifest-derived network policy, `owner: werkt/<run-id>`, and a hard lifetime covering provisioning, execution, and cleanup grace.
-3. It waits for the guest agent, uploads the compressed immutable artifact in bounded chunks, and extracts it into a fresh guest directory.
-4. It uploads the event, initializes the result, and invokes `runtime.command` without a shell.
-5. It collects bounded logs and the JSON result, then destroys the VM using a cleanup context independent of the run context.
-6. If the worker or control plane disappears, Husker's durable expiration reaper destroys the VM.
+2. It verifies the Ed25519 attestation and current artifact-tree digest before crossing the execution boundary.
+3. It creates a VM from the digest-pinned `runtime.image` with the requested resources, a manifest-derived network policy, `owner: werkt/<run-id>`, and a hard lifetime covering provisioning, execution, and cleanup grace.
+4. It waits for the guest agent, uploads the compressed immutable artifact in bounded chunks, and extracts it into a fresh guest directory.
+5. It uploads the event, initializes the result, and invokes `runtime.command` without a shell.
+6. It collects bounded logs and the JSON result, then destroys the VM using a cleanup context independent of the run context.
+7. If the worker or control plane disappears, Husker's durable expiration reaper destroys the VM.
 
 The runtime network policy is part of the immutable manifest. An empty
 `runtime.egress` produces `network: none`. A non-empty policy produces
@@ -96,7 +97,7 @@ the runtime artifact boundary.
   egress destinations; policies cannot be silently downgraded to plain NAT.
 - The VM deadline is activity-independent. It remains effective during stuck commands and after orchestrator failure.
 - Husker's `owner` field is correlation metadata, not an authorization boundary.
-- Build-image tags are not yet required to be immutable digests, and artifacts are not yet signed.
+- Artifact attestations use an installation-scoped key derived from `WERKT_SECRET_KEY`; independent transparency-log publication is not yet implemented.
 - Current Husker authentication represents one trust domain. Per-tenant authorization and quotas are future work.
 
 ## Pooling

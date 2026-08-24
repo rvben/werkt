@@ -151,7 +151,7 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 		Manifest: domain.Manifest{
 			Runtime: domain.Runtime{
 				Language:    "python",
-				Image:       "python:3.13-alpine",
+				Image:       "python@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				Command:     []string{"python3", "main.py"},
 				Environment: map[string]string{"CUSTOM": "value"},
 				Secrets:     map[string]string{"SERVICE_TOKEN": "ops/guest-token"},
@@ -186,7 +186,7 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 	if len(createEgress) != 2 || createEgress[0].Protocol != "tcp" || createEgress[1].Protocol != "udp" {
 		t.Fatalf("egress = %#v", createEgress)
 	}
-	if createRootFS != "python:3.13-alpine" {
+	if createRootFS != "python@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 		t.Fatalf("rootfs = %q", createRootFS)
 	}
 	if createOwner != "werkt/run_test" {
@@ -232,7 +232,7 @@ func TestHuskerRunnerRejectsMissingRuntimeSecretBeforeCreatingVM(t *testing.T) {
 		Run:          domain.Run{ID: "missing-secret", Attempt: 1},
 		ArtifactPath: t.TempDir(),
 		Manifest: domain.Manifest{Runtime: domain.Runtime{
-			Image:   "alpine:3.22",
+			Image:   "alpine@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 			Command: []string{"true"},
 			Secrets: map[string]string{"SERVICE_TOKEN": "ops/missing"},
 		}},
@@ -276,7 +276,7 @@ func TestHuskerRunnerCleansUpAfterAutomationFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	executor, err := NewHuskerRunner(HuskerConfig{URL: server.URL, RootFS: "alpine:3.22", HTTPClient: server.Client()})
+	executor, err := NewHuskerRunner(HuskerConfig{URL: server.URL, HTTPClient: server.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestHuskerRunnerCleansUpAfterAutomationFailure(t *testing.T) {
 		Run:          domain.Run{ID: "failed", Attempt: 1},
 		ArtifactPath: directory,
 		Manifest: domain.Manifest{
-			Runtime:   domain.Runtime{Language: "shell", Command: []string{"./run"}},
+			Runtime:   domain.Runtime{Language: "shell", Image: "alpine@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", Command: []string{"./run"}},
 			Execution: domain.Execution{Timeout: "5s"},
 		},
 	})
@@ -388,8 +388,8 @@ func TestHuskerRunnerBuildsInVMAndPromotesOutput(t *testing.T) {
 	err = builder.Build(context.Background(), directory, domain.Manifest{
 		Metadata: domain.Metadata{Name: "go-example"},
 		Runtime: domain.Runtime{
-			Image:       "debian:bookworm-slim",
-			BuildImage:  "golang:1.26-bookworm",
+			Image:       "debian@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+			BuildImage:  "golang@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
 			Build:       []string{"go", "build", "-o", "bin/automation", "."},
 			Environment: map[string]string{"CGO_ENABLED": "0"},
 		},
@@ -401,7 +401,7 @@ func TestHuskerRunnerBuildsInVMAndPromotesOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	if created.RootFSPath != "golang:1.26-bookworm" {
+	if created.RootFSPath != "golang@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" {
 		t.Fatalf("rootfs = %q", created.RootFSPath)
 	}
 	if created.Network != "nat" {
@@ -474,7 +474,7 @@ func TestHuskerRunnerCleansUpAfterBuildFailure(t *testing.T) {
 	}
 	err = builder.Build(context.Background(), directory, domain.Manifest{
 		Metadata: domain.Metadata{Name: "rust-example"},
-		Runtime:  domain.Runtime{Image: "rust:1.88-bookworm", Build: []string{"cargo", "build"}},
+		Runtime:  domain.Runtime{Image: "rust@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", Build: []string{"cargo", "build"}},
 	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "compiler failed") {
 		t.Fatalf("Build() error = %v", err)

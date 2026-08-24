@@ -23,8 +23,14 @@ set -a
 source "$environment_file"
 set +a
 : "${WERKT_MANAGEMENT_TOKEN:?missing WERKT_MANAGEMENT_TOKEN in $environment_file}"
+: "${WERKT_SECRET_KEY:?missing WERKT_SECRET_KEY in $environment_file}"
+: "${WERKT_STAGING_CANARY_AUTOMATION:?missing WERKT_STAGING_CANARY_AUTOMATION in $environment_file}"
 if [[ ! $WERKT_MANAGEMENT_TOKEN =~ ^[A-Za-z0-9_-]{32,}$ ]]; then
   echo "WERKT_MANAGEMENT_TOKEN has an unsafe format" >&2
+  exit 1
+fi
+if [[ ! $WERKT_STAGING_CANARY_AUTOMATION =~ ^[a-z][a-z0-9-]{0,62}$ ]]; then
+  echo "WERKT_STAGING_CANARY_AUTOMATION has an unsafe format" >&2
   exit 1
 fi
 
@@ -57,4 +63,60 @@ if [[ $authorized_status != 200 ]]; then
   exit 1
 fi
 
-echo "host-local authenticated staging checks passed"
+recovery_json=$(runuser --user werkt --preserve-environment -- /usr/local/bin/werkt recovery verify)
+if [[ $recovery_json != *'"database": "ok"'* || $recovery_json != *'"artifactsVerified"'* ]]; then
+  echo "database, vault, and artifact recovery verification failed" >&2
+  exit 1
+fi
+
+canary_status=$(request --config "$authorization_config" -o "$temporary_directory/canary.json" -w '%{http_code}' \
+  "http://127.0.0.1:8080/api/v1/automations/$WERKT_STAGING_CANARY_AUTOMATION")
+if [[ $canary_status != 200 ]] || ! grep -Eq '"artifactDigest":"sha256:[a-f0-9]{64}"' "$temporary_directory/canary.json"; then
+  echo "staging canary has no active attested artifact" >&2
+  exit 1
+fi
+if ! grep -Eq '"image":"[^"]+@sha256:[a-f0-9]{64}"' "$temporary_directory/canary.json"; then
+  echo "staging canary runtime image is not digest-pinned" >&2
+  exit 1
+fi
+active_revision=$(sed -n 's/.*"activeRevisionId":"\([^"]*\)".*/\1/p' "$temporary_directory/canary.json" | head -1)
+if [[ ! $active_revision =~ ^rev_[a-f0-9]{24}$ ]]; then
+  echo "staging canary returned an invalid active revision" >&2
+  exit 1
+fi
+
+canary_key="staging-${expected_commit}"
+run_status=$(request --config "$authorization_config" -o "$temporary_directory/run-created.json" -w '%{http_code}' \
+  -X POST -H 'Content-Type: application/json' -H 'X-Werkt-Actor: staging:provenance-gate' \
+  -H "Idempotency-Key: $canary_key" -H "X-Werkt-Expected-Revision: $active_revision" \
+  --data '{}' "http://127.0.0.1:8080/api/v1/automations/$WERKT_STAGING_CANARY_AUTOMATION/runs")
+if [[ $run_status != 200 && $run_status != 202 ]]; then
+  echo "staging canary run was not accepted: HTTP $run_status" >&2
+  exit 1
+fi
+run_id=$(sed -n 's/.*"runId":"\([^"]*\)".*/\1/p' "$temporary_directory/run-created.json" | head -1)
+if [[ ! $run_id =~ ^run_[a-f0-9]+$ ]]; then
+  echo "staging canary returned an invalid run ID" >&2
+  exit 1
+fi
+
+canary_succeeded=false
+for _ in {1..30}; do
+  request --config "$authorization_config" -o "$temporary_directory/run.json" \
+    "http://127.0.0.1:8080/api/v1/runs/$run_id"
+  if grep -Fq '"status":"succeeded"' "$temporary_directory/run.json"; then
+    canary_succeeded=true
+    break
+  fi
+  if grep -Fq '"status":"failed"' "$temporary_directory/run.json"; then
+    echo "staging canary execution failed" >&2
+    exit 1
+  fi
+  sleep 1
+done
+if [[ $canary_succeeded != true ]]; then
+  echo "staging canary did not succeed within 30 seconds" >&2
+  exit 1
+fi
+
+echo "host-local authenticated staging and provenance checks passed"

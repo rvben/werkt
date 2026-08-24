@@ -58,14 +58,14 @@ func TestRetentionManagerRevalidatesPlanBeforeDeleting(t *testing.T) {
 	inactiveHash := strings.Repeat("d", 64)
 	inactiveArtifact := filepath.Join(dataDir, "artifacts", inactiveHash)
 	writeRetentionFixture(t, inactiveArtifact)
-	inactiveRevision, err := store.Deploy(ctx, manifest, inactiveHash, inactiveArtifact)
+	inactiveRevision, err := store.Deploy(ctx, manifest, inactiveHash, inactiveArtifact, retentionArtifactProvenance(manifest, inactiveHash))
 	if err != nil {
 		t.Fatal(err)
 	}
 	activeHash := strings.Repeat("e", 64)
 	activeArtifact := filepath.Join(dataDir, "artifacts", activeHash)
 	writeRetentionFixture(t, activeArtifact)
-	if _, err := store.Deploy(ctx, manifest, activeHash, activeArtifact); err != nil {
+	if _, err := store.Deploy(ctx, manifest, activeHash, activeArtifact, retentionArtifactProvenance(manifest, activeHash)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -108,6 +108,14 @@ func TestRetentionManagerRevalidatesPlanBeforeDeleting(t *testing.T) {
 	repeated, err := manager.Apply(ctx, plan.ID, "agent:operator")
 	if err != nil || repeated.Summary.Deleted != 1 || repeated.Summary.Skipped != 2 {
 		t.Fatalf("repeated apply = %#v, err = %v", repeated, err)
+	}
+}
+
+func retentionArtifactProvenance(value domain.Manifest, contentHash string) domain.ArtifactProvenance {
+	return domain.ArtifactProvenance{
+		Version: 1, ArtifactDigest: "sha256:" + strings.Repeat("f", 64), ContentHash: contentHash,
+		AutomationID: value.Metadata.Name, Algorithm: "ed25519", SigningKeyID: "sha256:" + strings.Repeat("1", 64),
+		PublicKey: "public", Signature: "signature",
 	}
 }
 

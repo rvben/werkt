@@ -51,7 +51,8 @@ func TestSecretStorageAndRevisionGuardsIntegration(t *testing.T) {
 		Triggers: []domain.Trigger{{ID: "minute", Type: "schedule", Config: map[string]any{"cron": "* * * * *"}}},
 		Runtime:  domain.Runtime{Language: "shell", Command: []string{"true"}, Secrets: map[string]string{"TOKEN": "ops/runtime-token"}},
 	}
-	if _, err := store.Deploy(ctx, manifest, strings.Repeat("a", 64), t.TempDir()); err != nil {
+	firstHash := strings.Repeat("a", 64)
+	if _, err := store.Deploy(ctx, manifest, firstHash, t.TempDir(), testArtifactProvenance(manifest, firstHash)); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.DeleteSecret(ctx, "ops/runtime-token", "agent:test"); !errors.Is(err, ErrSecretInUse) {
@@ -60,7 +61,8 @@ func TestSecretStorageAndRevisionGuardsIntegration(t *testing.T) {
 
 	manifest.Metadata.Name = "missing-consumer"
 	manifest.Runtime.Secrets["TOKEN"] = "ops/missing"
-	if _, err := store.Deploy(ctx, manifest, strings.Repeat("b", 64), t.TempDir()); !errors.Is(err, ErrSecretNotFound) {
+	secondHash := strings.Repeat("b", 64)
+	if _, err := store.Deploy(ctx, manifest, secondHash, t.TempDir(), testArtifactProvenance(manifest, secondHash)); !errors.Is(err, ErrSecretNotFound) {
 		t.Fatalf("Deploy() error=%v, want missing secret", err)
 	}
 	if _, err := store.pool.Exec(ctx, `DELETE FROM automations WHERE id = 'secret-consumer'`); err != nil {

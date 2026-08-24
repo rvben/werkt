@@ -20,6 +20,29 @@ type Executor interface {
 	Execute(context.Context, domain.RunnableRun) (Result, error)
 }
 
+type ArtifactVerifier interface {
+	Verify(string, domain.ArtifactProvenance) error
+}
+
+type verifyingExecutor struct {
+	next     Executor
+	verifier ArtifactVerifier
+}
+
+func NewVerifyingExecutor(next Executor, verifier ArtifactVerifier) Executor {
+	return &verifyingExecutor{next: next, verifier: verifier}
+}
+
+func (e *verifyingExecutor) Execute(ctx context.Context, run domain.RunnableRun) (Result, error) {
+	if e.next == nil || e.verifier == nil {
+		return Result{}, errors.New("artifact verification is not configured")
+	}
+	if err := e.verifier.Verify(run.ArtifactPath, run.Provenance); err != nil {
+		return Result{}, fmt.Errorf("verify automation artifact: %w", err)
+	}
+	return e.next.Execute(ctx, run)
+}
+
 type Result struct {
 	Output json.RawMessage
 	Logs   string

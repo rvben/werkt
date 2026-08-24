@@ -40,12 +40,14 @@ func TestRetentionLifecycleIntegration(t *testing.T) {
 		Runtime:  domain.Runtime{Language: "go", Command: []string{"./automation"}},
 	}
 	inactivePath := t.TempDir()
-	inactiveRevision, err := store.Deploy(ctx, manifest, strings.Repeat("a", 64), inactivePath)
+	inactiveHash := strings.Repeat("a", 64)
+	inactiveRevision, err := store.Deploy(ctx, manifest, inactiveHash, inactivePath, testArtifactProvenance(manifest, inactiveHash))
 	if err != nil {
 		t.Fatal(err)
 	}
 	activePath := t.TempDir()
-	activeRevision, err := store.Deploy(ctx, manifest, strings.Repeat("b", 64), activePath)
+	activeHash := strings.Repeat("b", 64)
+	activeRevision, err := store.Deploy(ctx, manifest, activeHash, activePath, testArtifactProvenance(manifest, activeHash))
 	if err != nil {
 		t.Fatal(err)
 	}

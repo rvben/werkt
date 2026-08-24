@@ -134,13 +134,20 @@ Create a GitHub environment named `staging` with a required reviewer, then add:
 Keep `WERKT_MANAGEMENT_TOKEN` only in `/etc/werkt/werkt.env`. The protected
 workflow performs its authenticated check through the root-owned
 `verify-werkt-staging` helper, so the credential never enters GitHub or the
-runner workspace.
+runner workspace. Set `WERKT_STAGING_CANARY_AUTOMATION` to a dedicated private
+automation whose manual invocation has no external side effects. The host-local
+check requires its active revision to carry signed artifact provenance, queues
+one revision-pinned run, and waits for it to succeed. Before the first
+provenance-aware Werkt upgrade, deploy this canary with digest-pinned images on
+the existing release and add the environment setting; older Werkt releases
+accept the pinned syntax, so the protected upgrade can adopt and execute it.
 
 Run the **Deploy staging** workflow manually. It verifies the current `main`,
 builds one immutable binary, checks its checksum on the control host, switches
 the managed symlink, and rolls back automatically unless `/readyz` reports the
 expected commit. The final smoke test confirms the workspace, authentication
-boundary, database readiness, and build identity.
+boundary, database readiness, build identity, retained artifact verification,
+and one attested canary execution.
 
 ## Backup and restore gate
 

@@ -105,7 +105,7 @@ An ntfy trigger may use `config.tokenSecret`. Werkt resolves it only when openin
 ```yaml
 runtime:
   language: python
-  image: python:3.13-alpine
+  image: python@sha256:540c7d91f98ff6880174c40e99067bf5941eb54d818a7a5e094d188b196a934d
   command: [python3, main.py]
   secrets:
     GITHUB_TOKEN: infrastructure/process-alert/github
@@ -152,3 +152,11 @@ addresses, though normal Werkt attempts are intentionally short-lived.
 The deployment endpoint is a code-execution boundary, not a file-storage endpoint. It requires management authentication, verifies the SHA-256 of the exact compressed request, streams to bounded temporary storage, and extracts only regular files beneath one package root. Absolute paths, traversal, backslashes, NUL bytes, links, special files, duplicate case-insensitive paths, excessive entries, and compressed or expanded size overages are rejected before validation or build execution.
 
 Do not expose a server using `WERKT_EXECUTOR=process` to deployers you do not fully trust: a manifest build command executes on the control-plane host, and runtime code later does too. Use `WERKT_EXECUTOR=husker` to isolate remote builds and attempts in disposable microVMs. Husker currently assumes one administrative trust domain; it is not yet a hostile multi-tenant boundary.
+
+## Artifact provenance
+
+Every published artifact tree receives a deterministic SHA-256 digest that includes relative paths, file sizes, permission modes, and contents. Werkt signs a versioned statement containing that digest, the source content hash, automation identity, and effective runtime/build images with Ed25519. The signing seed is domain-separated from the decoded 32-byte `WERKT_SECRET_KEY`; the public-key fingerprint identifies the installation without exposing custody material.
+
+The artifact and its reserved `.werkt/provenance.json` metadata are published together by one directory rename. Werkt excludes `.werkt` from the digest and from Husker uploads, rejects packages or build output that try to create it, and verifies both signature and live tree before every attempt. Retained artifacts are verified before reuse, rollback is refused before activation when verification fails, and `werkt recovery verify` checks every retained artifact after a restore. Keep `WERKT_SECRET_KEY` outside PostgreSQL backups: restoring the database and artifact storage without the original key cannot produce or validate trusted revisions.
+
+On the first trusted upgrade from a pre-provenance release, startup establishes a signed baseline for each retained legacy artifact and records `artifact.adopted` with actor `system:upgrade`. Existing `.werkt` metadata is never overwritten: malformed or unverifiable metadata stops startup. This one-time adoption can prove post-upgrade changes, not the pre-upgrade history that had no artifact trust anchor. Redeploy important automations from reviewed source after upgrading when that earlier history matters.

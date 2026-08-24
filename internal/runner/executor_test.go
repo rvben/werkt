@@ -1,12 +1,60 @@
 package runner
 
 import (
+	"bytes"
+	"context"
 	"encoding/base64"
 	"errors"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rvben/werkt/internal/domain"
+	"github.com/rvben/werkt/internal/provenance"
 )
+
+type countingExecutor struct {
+	calls int
+}
+
+func (e *countingExecutor) Execute(context.Context, domain.RunnableRun) (Result, error) {
+	e.calls++
+	return Result{Output: []byte(`{}`)}, nil
+}
+
+func TestVerifyingExecutorStopsTamperedArtifactBeforeIsolationBoundary(t *testing.T) {
+	attestor, err := provenance.NewAttestor(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{8}, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	path := filepath.Join(directory, "main")
+	if err := os.WriteFile(path, []byte("original"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	manifest := domain.Manifest{Metadata: domain.Metadata{Name: "verified"}}
+	attestation, err := attestor.Attest(directory, manifest, strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := &countingExecutor{}
+	executor := NewVerifyingExecutor(next, attestor)
+	run := domain.RunnableRun{ArtifactPath: directory, Provenance: attestation, Manifest: manifest}
+	if _, err := executor.Execute(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("tampered"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.Execute(context.Background(), run); !errors.Is(err, provenance.ErrArtifactDigestMismatch) {
+		t.Fatalf("tampered execution error=%v", err)
+	}
+	if next.calls != 1 {
+		t.Fatalf("inner executor calls=%d", next.calls)
+	}
+}
 
 func TestLogRedactorMasksPlainAndCommonEncodedSecretForms(t *testing.T) {
 	secret := "token with+/symbols"

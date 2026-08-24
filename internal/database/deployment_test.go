@@ -73,12 +73,17 @@ func TestDeploymentLifecycleIntegration(t *testing.T) {
 	if err := store.RecordDeploymentStep(ctx, deployment.ID, "worker-1", domain.DeploymentStepUpdate{ID: "activate", Kind: "activate", Status: domain.DeploymentStepRunning}); err != nil {
 		t.Fatal(err)
 	}
-	revisionID, err := store.ActivateDeployment(ctx, deployment.ID, "worker-1", value, contentHash, t.TempDir(), "agent:builder")
+	attestation := domain.ArtifactProvenance{
+		Version: 1, ArtifactDigest: "sha256:" + strings.Repeat("f", 64), ContentHash: contentHash,
+		AutomationID: value.Metadata.Name, Algorithm: "ed25519", SigningKeyID: "sha256:" + strings.Repeat("1", 64),
+		PublicKey: "public", Signature: "signature",
+	}
+	revisionID, err := store.ActivateDeployment(ctx, deployment.ID, "worker-1", value, contentHash, t.TempDir(), attestation, "agent:builder")
 	if err != nil {
 		t.Fatal(err)
 	}
 	completed, err := store.GetDeployment(ctx, deployment.ID)
-	if err != nil || completed.Status != domain.DeploymentSucceeded || completed.RevisionID != revisionID || completed.AutomationID != value.Metadata.Name {
+	if err != nil || completed.Status != domain.DeploymentSucceeded || completed.RevisionID != revisionID || completed.AutomationID != value.Metadata.Name || completed.Provenance == nil || completed.Provenance.ArtifactDigest != attestation.ArtifactDigest {
 		t.Fatalf("completed=%#v err=%v", completed, err)
 	}
 	if len(completed.Steps) != 2 || completed.Steps[0].Logs != "manifest accepted" || completed.Steps[1].Status != domain.DeploymentStepSucceeded {
@@ -151,7 +156,7 @@ func TestDeploymentLifecycleIntegration(t *testing.T) {
 	}
 
 	secondHash := strings.Repeat("f", 64)
-	secondRevision, err := store.DeployAs(ctx, value, secondHash, t.TempDir(), "agent:builder")
+	secondRevision, err := store.DeployAs(ctx, value, secondHash, t.TempDir(), testArtifactProvenance(value, secondHash), "agent:builder")
 	if err != nil || secondRevision == revisionID {
 		t.Fatalf("second revision=%q err=%v", secondRevision, err)
 	}

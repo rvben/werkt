@@ -48,7 +48,7 @@ werkt secret get infrastructure/process-alert/github
 werkt secret delete infrastructure/process-alert/github
 ```
 
-Create and rotation return `201` and `200` respectively. Invalid names or values return `400`; missing names return `404`; a retained revision binding returns `409`; and a server without `WERKT_SECRET_KEY` returns `503`. Mutations emit `secret.created`, `secret.rotated`, and `secret.deleted` audit events.
+Create and rotation return `201` and `200` respectively. Invalid names or values return `400`; missing names return `404`; and a retained revision binding returns `409`. The control plane refuses to start without a valid persistent `WERKT_SECRET_KEY`. Mutations emit `secret.created`, `secret.rotated`, and `secret.deleted` audit events.
 
 ## Deployments
 
@@ -64,7 +64,7 @@ X-Werkt-Actor: agent:deployer
 
 A new upload returns `202 Accepted`; an idempotent retry returns `200 OK` and the original deployment. The response includes `Location` for `GET /api/v1/deployments/{id}` and `Retry-After: 1` while the deployment is not terminal. Reusing an idempotency key for different package bytes returns `409 Conflict`.
 
-The lifecycle is `queued` → `validating` → optional `building` → optional `checking` → `activating` → `succeeded`. Any active stage can become `failed` or `cancelled`. The deployment detail includes ordered validation, build, check, and activation steps with bounded logs, errors, and timings. A successful response includes the automation, content hash, and immutable revision. Revision activation and the transition to `succeeded` commit in the same database transaction.
+The lifecycle is `queued` → `validating` → optional `building` → optional `checking` → `activating` → `succeeded`. Any active stage can become `failed` or `cancelled`. The deployment detail includes ordered validation, build, check, and activation steps with bounded logs, errors, and timings. A successful response includes the automation, source content hash, immutable revision, and `provenance`: the signed artifact digest, effective digest-pinned images, signature algorithm, public key, and installation signing-key fingerprint. Revision activation, provenance persistence, and the transition to `succeeded` commit in the same database transaction.
 
 `GET /api/v1/deployments` returns newest first and accepts `automation`, `status`, and `limit` filters. Agents should poll the resource named by `Location` until `succeeded`, `failed`, or `cancelled`; the CLI implements this contract:
 
@@ -84,7 +84,7 @@ werkt deployment get dep_...
 
 `POST /api/v1/deployments/{id}/cancel` is safe only for nonterminal work. `POST /api/v1/deployments/{id}/retry` requires `Idempotency-Key`, returns a new deployment linked by `retryOf`, and rejects successful or active jobs. A pruned source returns `409 Conflict` rather than silently accepting a retry that cannot run.
 
-Package intake is streamed and bounded. Werkt rejects traversal paths, links, special files, duplicate case-insensitive names, excessive entries, and compressed or expanded bodies over the configured limits before any build runs.
+Package intake is streamed and bounded. Werkt rejects traversal paths, links, special files, duplicate case-insensitive names, the reserved `.werkt` metadata directory, excessive entries, and compressed or expanded bodies over the configured limits before any build runs. Husker deployments additionally reject `runtime.image` or `runtime.buildImage` values that are not immutable `name@sha256:<digest>` OCI references.
 
 ## Retention plans
 
@@ -115,7 +115,7 @@ Artifact retention intentionally makes sufficiently old inactive revisions unava
 
 `GET /api/v1/automations` returns the organized inventory. Each summary includes the authoritative latest run identity, status, and creation time when the automation has run, so clients do not need to infer health from a bounded global history window. Optional filters are `project`, `folder`, `label`, `q`, and `enabled`.
 
-`GET /api/v1/automations/{id}` returns metadata, the active manifest, effective trigger state, and revision history.
+`GET /api/v1/automations/{id}` returns metadata, the active manifest, effective trigger state, and revision history. Each attested revision includes its complete `provenance` object; legacy metadata without retained storage remains explicitly unattested.
 
 `PATCH /api/v1/automations/{id}` accepts one strict JSON shape:
 
@@ -125,7 +125,7 @@ Artifact retention intentionally makes sufficiently old inactive revisions unava
 
 Pausing blocks schedule, webhook, email, and ntfy ingestion. Manual runs remain available for diagnosis. Resuming recalculates each schedule from the next future occurrence, so missed intervals are not replayed as a backlog. Redeployment preserves the paused state.
 
-`POST /api/v1/automations/{id}/rollback` with `{"revisionId":"rev_..."}` atomically reactivates a retained revision belonging to that automation and reconstructs its effective triggers. Repeating a rollback to the active revision is a no-op. The equivalent CLI is `werkt rollback AUTOMATION_ID REVISION_ID`.
+`POST /api/v1/automations/{id}/rollback` with `{"revisionId":"rev_..."}` first verifies the retained artifact digest and Ed25519 signature, then atomically reactivates that revision and reconstructs its effective triggers. Verification failure returns `409` without changing active state. Repeating a rollback to the active revision is a no-op. The equivalent CLI is `werkt rollback AUTOMATION_ID REVISION_ID`.
 
 ## Manual runs
 

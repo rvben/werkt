@@ -415,7 +415,7 @@ a { color: inherit; }
 .trigger-type .icon { width: 1rem; height: 1rem; color: var(--muted); }
 
 .revision-list { border-top: 1px solid var(--line); }
-.revision-row { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(8rem, 1fr) minmax(9rem, 1fr) auto; gap: var(--space-4); align-items: center; padding: var(--space-3) var(--space-2); border-bottom: 1px solid var(--line); font-size: 0.75rem; }
+.revision-row { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(8rem, 1fr) minmax(9rem, 1.15fr) minmax(8rem, .8fr) auto; gap: var(--space-4); align-items: center; padding: var(--space-3) var(--space-2); border-bottom: 1px solid var(--line); font-size: 0.75rem; }
 .revision-row strong { color: var(--ink); font-weight: 680; }
 .revision-row span { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .revision-action { display: flex; min-width: 6.5rem; justify-content: flex-end; }

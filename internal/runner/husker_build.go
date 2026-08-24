@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/rvben/werkt/internal/domain"
+	"github.com/rvben/werkt/internal/provenance"
 )
 
 const (
@@ -32,6 +33,9 @@ const (
 func (r *HuskerRunner) Build(parent context.Context, directory string, value domain.Manifest, reporter domain.DeploymentStepReporter) error {
 	if len(value.Runtime.Build) == 0 && len(value.Deployment.Checks) == 0 {
 		return nil
+	}
+	if _, err := provenance.PinHuskerImages(value); err != nil {
+		return err
 	}
 	rootFS := value.Runtime.BuildImage
 	if rootFS == "" {
