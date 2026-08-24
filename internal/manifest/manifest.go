@@ -34,7 +34,7 @@ func Load(directory string) (domain.Manifest, error) {
 	if err != nil {
 		return domain.Manifest{}, fmt.Errorf("open manifest: %w", err)
 	}
-	defer file.Close()
+	defer file.Close() //nolint:errcheck // the manifest is opened read-only
 
 	decoder := yaml.NewDecoder(file)
 	decoder.KnownFields(true)
@@ -266,9 +266,9 @@ func validateEgressHost(value string) string {
 			return "is not a valid DNS hostname"
 		}
 		for _, character := range label {
-			if !((character >= 'a' && character <= 'z') ||
-				(character >= 'A' && character <= 'Z') ||
-				(character >= '0' && character <= '9') || character == '-') {
+			letter := (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z')
+			digit := character >= '0' && character <= '9'
+			if !letter && !digit && character != '-' {
 				return "is not a valid DNS hostname"
 			}
 		}

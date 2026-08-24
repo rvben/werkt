@@ -406,7 +406,8 @@ func (r *HuskerRunner) cleanupVM(name string) {
 	defer cancel()
 	err := r.doJSON(ctx, http.MethodDelete, vmPath(name), nil, http.StatusNoContent, nil)
 	var apiErr *huskerAPIError
-	if err != nil && !(errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound) {
+	notFound := errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
+	if err != nil && !notFound {
 		slog.Warn("husker VM cleanup failed; durable expiration will retry cleanup", "vm", name, "error", err)
 	}
 }
@@ -434,7 +435,7 @@ func (r *HuskerRunner) doJSON(ctx context.Context, method, path string, requestB
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	defer response.Body.Close() //nolint:errcheck // closing a read-only response body cannot change the result
 	if response.StatusCode != expectedStatus {
 		payload, _ := io.ReadAll(io.LimitReader(response.Body, 1024*1024))
 		apiErr := &huskerAPIError{StatusCode: response.StatusCode, Message: strings.TrimSpace(string(payload))}

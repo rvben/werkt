@@ -75,12 +75,12 @@ func Extract(archivePath, destination string, limits Limits) error {
 	if err != nil {
 		return err
 	}
-	defer archive.Close()
+	defer archive.Close() //nolint:errcheck // the archive is opened read-only
 	gzipReader, err := gzip.NewReader(archive)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidArchive, err)
 	}
-	defer gzipReader.Close()
+	defer gzipReader.Close() //nolint:errcheck // the gzip stream is opened read-only
 
 	if err := os.MkdirAll(destination, 0o750); err != nil {
 		return err
@@ -122,7 +122,7 @@ func Extract(archivePath, destination string, limits Limits) error {
 			if err := os.MkdirAll(target, 0o750); err != nil {
 				return err
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg, tar.TypeRegA: //nolint:staticcheck // TypeRegA is valid in legacy tar archives
 			if header.Size < 0 || expanded > limits.ExpandedBytes-header.Size {
 				return fmt.Errorf("%w: maximum is %d bytes", ErrExpandedLimit, limits.ExpandedBytes)
 			}
@@ -197,8 +197,8 @@ func WriteArchive(sourceDirectory string, destination io.Writer) (string, error)
 	if err != nil {
 		return "", err
 	}
-	gzipWriter.Header.ModTime = time.Unix(0, 0)
-	gzipWriter.Header.OS = 255
+	gzipWriter.ModTime = time.Unix(0, 0)
+	gzipWriter.OS = 255
 	tarWriter := tar.NewWriter(gzipWriter)
 	for _, relative := range paths {
 		path := filepath.Join(absolute, relative)

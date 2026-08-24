@@ -259,7 +259,7 @@ func extractBuildArchive(destination string, compressed []byte) error {
 				_ = gzipReader.Close()
 				return err
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg, tar.TypeRegA: //nolint:staticcheck // TypeRegA is valid in legacy tar archives
 			if header.Size < 0 || expanded > maxExpandedBuildArtifactBytes-header.Size {
 				_ = gzipReader.Close()
 				return fmt.Errorf("expanded build artifact exceeds %d bytes", maxExpandedBuildArtifactBytes)
