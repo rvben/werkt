@@ -110,7 +110,7 @@ Create a GitHub environment named `staging` with a required reviewer, then add:
 - environment variable `WERKT_STAGING_URL` containing the private TLS URL;
 - environment secret `WERKT_MANAGEMENT_TOKEN` matching `/etc/werkt/werkt.env`.
 
-Run the **Deploy staging** workflow manually. It verifies the selected ref,
+Run the **Deploy staging** workflow manually. It verifies the current `main`,
 builds one immutable binary, checks its checksum on the control host, switches
 the managed symlink, and rolls back automatically unless `/readyz` reports the
 expected commit. The final smoke test confirms the workspace, authentication
