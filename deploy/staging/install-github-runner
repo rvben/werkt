@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $EUID -ne 0 ]]; then
+  echo "install-github-runner must run as root" >&2
+  exit 1
+fi
+
+: "${WERKT_RUNNER_TOKEN:?set WERKT_RUNNER_TOKEN to a short-lived registration token}"
+
+repository_url=${WERKT_RUNNER_REPOSITORY_URL:-https://github.com/rvben/werkt}
+runner_version=${WERKT_RUNNER_VERSION:-2.336.0}
+runner_sha256=${WERKT_RUNNER_SHA256:-04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d}
+runner_user=werkt-runner
+runner_root=/opt/werkt-actions-runner
+runner_work=/var/lib/werkt-runner/work
+runner_name=${WERKT_RUNNER_NAME:-$(hostname)-staging-control}
+
+for command in curl sha256sum tar useradd; do
+  command -v "$command" >/dev/null || {
+    echo "missing required command: $command" >&2
+    exit 1
+  }
+done
+
+if ! id "$runner_user" >/dev/null 2>&1; then
+  useradd --system --create-home --home-dir /var/lib/werkt-runner \
+    --shell /usr/sbin/nologin "$runner_user"
+fi
+
+install -d -m 0750 -o "$runner_user" -g "$runner_user" "$runner_root"
+install -d -m 0700 -o "$runner_user" -g "$runner_user" "$runner_work"
+
+if [[ ! -f $runner_root/.runner ]]; then
+  temporary_directory=$(mktemp -d)
+  trap 'rm -rf -- "$temporary_directory"' EXIT
+  archive=$temporary_directory/actions-runner.tar.gz
+  curl --fail --location --silent --show-error \
+    "https://github.com/actions/runner/releases/download/v${runner_version}/actions-runner-linux-x64-${runner_version}.tar.gz" \
+    --output "$archive"
+  printf '%s  %s\n' "$runner_sha256" "$archive" | sha256sum --check --status
+  tar -xzf "$archive" -C "$runner_root"
+  chown -R "$runner_user:$runner_user" "$runner_root"
+
+  sudo -u "$runner_user" -H "$runner_root/config.sh" \
+    --unattended \
+    --url "$repository_url" \
+    --token "$WERKT_RUNNER_TOKEN" \
+    --name "$runner_name" \
+    --labels staging-control \
+    --work "$runner_work" \
+    --replace
+fi
+
+if ! compgen -G '/etc/systemd/system/actions.runner.rvben-werkt.*.service' >/dev/null; then
+  "$runner_root/svc.sh" install "$runner_user"
+fi
+"$runner_root/svc.sh" start
+
+unset WERKT_RUNNER_TOKEN
+echo "GitHub staging runner is installed and started"

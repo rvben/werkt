@@ -105,6 +105,22 @@ for this exact command only:
 /usr/local/sbin/install-werkt-release
 ```
 
+The tracked installer pins and verifies the runner release before registering
+it. Generate a short-lived repository registration token in GitHub, then run:
+
+```bash
+sudo install -m 0440 deploy/staging/werkt-runner.sudoers /etc/sudoers.d/werkt-staging-runner
+sudo visudo --check --file=/etc/sudoers.d/werkt-staging-runner
+sudo --preserve-env=WERKT_RUNNER_TOKEN deploy/staging/install-github-runner
+```
+
+Pass `WERKT_RUNNER_TOKEN` only through the process environment and unset it
+immediately afterward. The runner is repository-scoped, runs as the isolated
+`werkt-runner` account, and can elevate only through the release installer.
+All remote actions in this repository are pinned to immutable commit SHAs, and
+CI rejects `pull_request_target` or use of the self-hosted label outside the
+protected staging workflow.
+
 Create a GitHub environment named `staging` with a required reviewer, then add:
 
 - environment variable `WERKT_STAGING_URL` containing the private TLS URL;
