@@ -37,7 +37,7 @@ jobs:
       WERKT_TEST_DATABASE_URL: postgres://werkt_test:werkt_test@127.0.0.1:5432/werkt_test?sslmode=disable
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0

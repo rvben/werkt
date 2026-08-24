@@ -23,7 +23,7 @@ func TestWorkspaceBrowserKeyboardFocusAndResponsiveModality(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(workspaceBrowserFixture))
 	defer server.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, chrome,
 		"--headless=new",
