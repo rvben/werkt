@@ -85,6 +85,24 @@ func TestExtractRejectsTraversalLinksDuplicatesAndExpansion(t *testing.T) {
 	}
 }
 
+func TestExtractCannotFollowPreexistingSymlinkOutsideDestination(t *testing.T) {
+	destination := t.TempDir()
+	external := t.TempDir()
+	if err := os.Symlink(external, filepath.Join(destination, "escape")); err != nil {
+		t.Skipf("create symlink: %v", err)
+	}
+	archivePath := writeTestArchive(t, []*tar.Header{{
+		Name: "escape/file", Typeflag: tar.TypeReg, Size: 1,
+	}}, []byte("x"))
+
+	if err := Extract(archivePath, destination, DefaultLimits()); err == nil {
+		t.Fatal("Extract() followed a symlink outside the destination")
+	}
+	if _, err := os.Stat(filepath.Join(external, "file")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("outside file exists: %v", err)
+	}
+}
+
 func TestReceiveEnforcesCompressedLimitAndRemovesPartialFile(t *testing.T) {
 	destination := filepath.Join(t.TempDir(), "upload")
 	_, err := Receive(bytes.NewReader([]byte("too large")), destination, 3)

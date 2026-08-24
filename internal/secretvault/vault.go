@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -62,8 +63,9 @@ func New(repository Repository, encodedKey string) (*Vault, error) {
 	if err != nil {
 		return nil, err
 	}
-	digest := sha256.Sum256(key)
-	return &Vault{repository: repository, aead: aead, keyID: hex.EncodeToString(digest[:8])}, nil
+	fingerprint := hmac.New(sha256.New, key)
+	_, _ = fingerprint.Write([]byte("werkt-secret-vault-key-id-v1"))
+	return &Vault{repository: repository, aead: aead, keyID: hex.EncodeToString(fingerprint.Sum(nil)[:8])}, nil
 }
 
 func decodeKey(value string) ([]byte, error) {
@@ -154,16 +156,13 @@ func (v *Vault) Resolve(ctx context.Context, names []string) (map[string]string,
 		if err != nil {
 			return nil, fmt.Errorf("resolve secret %q: %w", name, err)
 		}
-		if value.KeyID != v.keyID {
-			return nil, fmt.Errorf("resolve secret %q: %w", name, ErrKeyMismatch)
-		}
 		if len(value.Ciphertext) < v.aead.NonceSize() {
 			return nil, fmt.Errorf("resolve secret %q: invalid ciphertext", name)
 		}
 		nonce := value.Ciphertext[:v.aead.NonceSize()]
 		plaintext, err := v.aead.Open(nil, nonce, value.Ciphertext[v.aead.NonceSize():], additionalData(name))
 		if err != nil {
-			return nil, fmt.Errorf("resolve secret %q: decrypt value", name)
+			return nil, fmt.Errorf("resolve secret %q: %w", name, ErrKeyMismatch)
 		}
 		resolved[name] = string(plaintext)
 		for index := range plaintext {

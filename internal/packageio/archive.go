@@ -85,6 +85,12 @@ func Extract(archivePath, destination string, limits Limits) error {
 	if err := os.MkdirAll(destination, 0o750); err != nil {
 		return err
 	}
+	root, err := os.OpenRoot(destination)
+	if err != nil {
+		return err
+	}
+	defer root.Close() //nolint:errcheck // extraction errors take precedence
+
 	tarReader := tar.NewReader(gzipReader)
 	seen := make(map[string]struct{})
 	var expanded int64
@@ -116,10 +122,10 @@ func Extract(archivePath, destination string, limits Limits) error {
 			return fmt.Errorf("%w: duplicate path %q", ErrUnsafeArchive, header.Name)
 		}
 		seen[identity] = struct{}{}
-		target := filepath.Join(destination, filepath.FromSlash(clean))
+		target := filepath.FromSlash(clean)
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0o750); err != nil {
+			if err := root.MkdirAll(target, 0o750); err != nil {
 				return err
 			}
 		case tar.TypeReg, tar.TypeRegA: //nolint:staticcheck // TypeRegA is valid in legacy tar archives
@@ -127,11 +133,11 @@ func Extract(archivePath, destination string, limits Limits) error {
 				return fmt.Errorf("%w: maximum is %d bytes", ErrExpandedLimit, limits.ExpandedBytes)
 			}
 			expanded += header.Size
-			if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
+			if err := root.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 				return err
 			}
 			mode := os.FileMode(0o640 | (header.Mode & 0o110))
-			file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+			file, err := root.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 			if err != nil {
 				return err
 			}
@@ -253,7 +259,7 @@ func safeArchivePath(name string) (string, error) {
 		return "", fmt.Errorf("%w: path %q", ErrUnsafeArchive, name)
 	}
 	clean := pathpkg.Clean(name)
-	if pathpkg.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") {
+	if pathpkg.IsAbs(clean) || !filepath.IsLocal(filepath.FromSlash(clean)) {
 		return "", fmt.Errorf("%w: path %q", ErrUnsafeArchive, name)
 	}
 	return clean, nil

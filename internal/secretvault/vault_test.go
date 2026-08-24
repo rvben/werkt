@@ -70,6 +70,11 @@ func TestVaultEncryptsResolvesAndRotatesWithoutReturningValues(t *testing.T) {
 	if err != nil || values["ops/github/token"] != "second-secret-value" {
 		t.Fatalf("Resolve() after rotate values=%v err=%v", values, err)
 	}
+	repository.value.KeyID = "legacy-key-fingerprint"
+	values, err = vault.Resolve(context.Background(), []string{"ops/github/token"})
+	if err != nil || values["ops/github/token"] != "second-secret-value" {
+		t.Fatalf("Resolve() legacy key ID values=%v err=%v", values, err)
+	}
 }
 
 func TestVaultRejectsWrongKeyAndInvalidInputs(t *testing.T) {
