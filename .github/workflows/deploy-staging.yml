@@ -2,11 +2,6 @@ name: Deploy staging
 
 on:
   workflow_dispatch:
-    inputs:
-      ref:
-        description: Git ref to build and deploy
-        required: true
-        default: main
 
 permissions:
   contents: read
@@ -39,12 +34,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.ref }}
           fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
       - name: Verify
         run: |
           go vet ./...
