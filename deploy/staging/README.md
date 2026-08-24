@@ -120,6 +120,9 @@ sudo --preserve-env=WERKT_RUNNER_TOKEN deploy/staging/install-github-runner
 Pass `WERKT_RUNNER_TOKEN` only through the process environment and unset it
 immediately afterward. The runner is repository-scoped, runs as the isolated
 `werkt-runner` account, and can elevate only through the two constrained helpers.
+The release installer does not finish a failed promotion until the previously
+active commit has recovered readiness; a rollback that cannot become ready is
+reported separately in its logs.
 All remote actions in this repository are pinned to immutable commit SHAs, and
 CI rejects `pull_request_target` or use of the self-hosted label outside the
 protected staging workflow.
