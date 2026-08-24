@@ -23,8 +23,8 @@ triggers:
 
 runtime:
   language: rust
-  image: debian:bookworm-slim
-  buildImage: rust:1.88-bookworm
+  image: debian@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
+  buildImage: rust@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0
   build: [cargo, build, --release]
   command: [./target/release/rust-hello]
   environment:

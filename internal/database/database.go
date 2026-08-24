@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -40,6 +41,7 @@ var (
 	ErrSecretNotFound                = errors.New("secret not found")
 	ErrSecretInUse                   = errors.New("secret is in use")
 	ErrAutomationStateConflict       = errors.New("automation state changed after the run started")
+	ErrArtifactProvenanceRequired    = errors.New("valid artifact provenance is required")
 )
 
 //go:embed migrations/*.sql
@@ -84,10 +86,20 @@ type TriggerSummary struct {
 }
 
 type RevisionSummary struct {
-	ID          string    `json:"id"`
-	ContentHash string    `json:"contentHash"`
-	Active      bool      `json:"active"`
-	CreatedAt   time.Time `json:"createdAt"`
+	ID          string                     `json:"id"`
+	ContentHash string                     `json:"contentHash"`
+	Active      bool                       `json:"active"`
+	Provenance  *domain.ArtifactProvenance `json:"provenance,omitempty"`
+	CreatedAt   time.Time                  `json:"createdAt"`
+}
+
+type RevisionArtifact struct {
+	AutomationID string
+	RevisionID   string
+	ContentHash  string
+	Path         string
+	Manifest     domain.Manifest
+	Provenance   domain.ArtifactProvenance
 }
 
 type AutomationDetail struct {
@@ -177,22 +189,28 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) Deploy(ctx context.Context, value domain.Manifest, contentHash, artifactPath string) (string, error) {
-	return s.deploy(ctx, value, contentHash, artifactPath, "cli", "", "")
+func (s *Store) Deploy(ctx context.Context, value domain.Manifest, contentHash, artifactPath string, provenance domain.ArtifactProvenance) (string, error) {
+	return s.deploy(ctx, value, contentHash, artifactPath, provenance, "cli", "", "")
 }
 
-func (s *Store) DeployAs(ctx context.Context, value domain.Manifest, contentHash, artifactPath, actor string) (string, error) {
-	return s.deploy(ctx, value, contentHash, artifactPath, actor, "", "")
+func (s *Store) DeployAs(ctx context.Context, value domain.Manifest, contentHash, artifactPath string, provenance domain.ArtifactProvenance, actor string) (string, error) {
+	return s.deploy(ctx, value, contentHash, artifactPath, provenance, actor, "", "")
 }
 
 // ActivateDeployment publishes an immutable revision and completes its durable
 // deployment job in one transaction. A worker that lost its lease cannot
 // activate an artifact.
-func (s *Store) ActivateDeployment(ctx context.Context, deploymentID, workerID string, value domain.Manifest, contentHash, artifactPath, actor string) (string, error) {
-	return s.deploy(ctx, value, contentHash, artifactPath, actor, deploymentID, workerID)
+func (s *Store) ActivateDeployment(ctx context.Context, deploymentID, workerID string, value domain.Manifest, contentHash, artifactPath string, provenance domain.ArtifactProvenance, actor string) (string, error) {
+	return s.deploy(ctx, value, contentHash, artifactPath, provenance, actor, deploymentID, workerID)
 }
 
-func (s *Store) deploy(ctx context.Context, value domain.Manifest, contentHash, artifactPath, actor, deploymentID, workerID string) (string, error) {
+func (s *Store) deploy(ctx context.Context, value domain.Manifest, contentHash, artifactPath string, provenance domain.ArtifactProvenance, actor, deploymentID, workerID string) (string, error) {
+	if !validSHA256Hex(contentHash) || provenance.Version != 1 || provenance.Algorithm != "ed25519" ||
+		!validSHA256Digest(provenance.ArtifactDigest) || !validSHA256Digest(provenance.SigningKeyID) ||
+		provenance.PublicKey == "" || provenance.Signature == "" ||
+		provenance.ContentHash != contentHash || provenance.AutomationID != value.Metadata.Name {
+		return "", ErrArtifactProvenanceRequired
+	}
 	manifestJSON, err := json.Marshal(value)
 	if err != nil {
 		return "", fmt.Errorf("encode manifest: %w", err)
@@ -200,6 +218,10 @@ func (s *Store) deploy(ctx context.Context, value domain.Manifest, contentHash, 
 	labelsJSON, err := json.Marshal(value.Metadata.Labels)
 	if err != nil {
 		return "", fmt.Errorf("encode labels: %w", err)
+	}
+	provenanceJSON, err := json.Marshal(provenance)
+	if err != nil {
+		return "", fmt.Errorf("encode artifact provenance: %w", err)
 	}
 	revisionID := "rev_" + contentHash[:24]
 
@@ -224,10 +246,11 @@ func (s *Store) deploy(ctx context.Context, value domain.Manifest, contentHash, 
 	}
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO revisions (id, automation_id, content_hash, manifest, artifact_path)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (automation_id, content_hash) DO UPDATE SET artifact_path = EXCLUDED.artifact_path`,
-		revisionID, value.Metadata.Name, contentHash, manifestJSON, artifactPath)
+		INSERT INTO revisions (id, automation_id, content_hash, manifest, artifact_path, provenance)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (automation_id, content_hash) DO UPDATE SET
+			artifact_path = EXCLUDED.artifact_path, provenance = EXCLUDED.provenance`,
+		revisionID, value.Metadata.Name, contentHash, manifestJSON, artifactPath, provenanceJSON)
 	if err != nil {
 		return "", fmt.Errorf("insert revision: %w", err)
 	}
@@ -246,6 +269,7 @@ func (s *Store) deploy(ctx context.Context, value domain.Manifest, contentHash, 
 		"revisionId":   revisionID,
 		"contentHash":  contentHash,
 		"deploymentId": deploymentID,
+		"provenance":   provenanceAuditDetails(provenance),
 	}); err != nil {
 		return "", fmt.Errorf("audit deployment: %w", err)
 	}
@@ -259,10 +283,10 @@ func (s *Store) deploy(ctx context.Context, value domain.Manifest, contentHash, 
 		}
 		command, err := tx.Exec(ctx, `
 			UPDATE deployments
-			SET status = $3, revision_id = $4, error = '', updated_at = now(), finished_at = now(),
+			SET status = $3, revision_id = $4, provenance = $6, error = '', updated_at = now(), finished_at = now(),
 				lease_owner = NULL, lease_expires_at = NULL
 			WHERE id = $1 AND lease_owner = $2 AND status = $5 AND cancel_requested_at IS NULL`,
-			deploymentID, workerID, domain.DeploymentSucceeded, revisionID, domain.DeploymentActivating)
+			deploymentID, workerID, domain.DeploymentSucceeded, revisionID, domain.DeploymentActivating, provenanceJSON)
 		if err != nil {
 			return "", fmt.Errorf("complete deployment: %w", err)
 		}
@@ -273,6 +297,7 @@ func (s *Store) deploy(ctx context.Context, value domain.Manifest, contentHash, 
 			"deploymentId": deploymentID,
 			"revisionId":   revisionID,
 			"contentHash":  contentHash,
+			"provenance":   provenanceAuditDetails(provenance),
 		}); err != nil {
 			return "", fmt.Errorf("audit successful deployment: %w", err)
 		}
@@ -281,6 +306,30 @@ func (s *Store) deploy(ctx context.Context, value domain.Manifest, contentHash, 
 		return "", err
 	}
 	return revisionID, nil
+}
+
+func validSHA256Digest(value string) bool {
+	return strings.HasPrefix(value, "sha256:") && validSHA256Hex(strings.TrimPrefix(value, "sha256:"))
+}
+
+func validSHA256Hex(value string) bool {
+	if len(value) != sha256.Size*2 || strings.ToLower(value) != value {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func provenanceAuditDetails(value domain.ArtifactProvenance) map[string]any {
+	if value.ArtifactDigest == "" {
+		return nil
+	}
+	return map[string]any{
+		"artifactDigest": value.ArtifactDigest,
+		"signingKeyId":   value.SigningKeyID,
+		"runtimeImage":   value.RuntimeImage,
+		"buildImage":     value.BuildImage,
+	}
 }
 
 func replaceTriggers(ctx context.Context, tx pgx.Tx, automationID, revisionID string, triggers []domain.Trigger) error {
@@ -557,7 +606,7 @@ func (s *Store) EnqueueDueSchedules(ctx context.Context, now time.Time, limit in
 
 func (s *Store) AcquireRun(ctx context.Context, workerID string, leaseDuration time.Duration) (*domain.RunnableRun, error) {
 	var run domain.RunnableRun
-	var manifestJSON, eventJSON, stateJSON []byte
+	var manifestJSON, eventJSON, stateJSON, provenanceJSON []byte
 	err := s.pool.QueryRow(ctx, `
 		WITH candidate AS (
 			SELECT r.id
@@ -590,7 +639,7 @@ func (s *Store) AcquireRun(ctx context.Context, workerID string, leaseDuration t
 		)
 		SELECT c.id, c.automation_id, c.revision_id, c.event_id, c.status,
 			c.attempt, c.max_attempts, c.created_at, c.started_at, c.finished_at,
-			c.error, c.result, rev.artifact_path, rev.manifest, e.envelope,
+			c.error, c.result, rev.artifact_path, rev.provenance, rev.manifest, e.envelope,
 			COALESCE(state.value, '{}'::jsonb), COALESCE(state.version, 0)
 		FROM claimed c
 		JOIN revisions rev ON rev.id = c.revision_id
@@ -598,7 +647,7 @@ func (s *Store) AcquireRun(ctx context.Context, workerID string, leaseDuration t
 		LEFT JOIN automation_state state ON state.automation_id = c.automation_id`, workerID, leaseDuration.String()).Scan(
 		&run.ID, &run.AutomationID, &run.RevisionID, &run.EventID, &run.Status,
 		&run.Attempt, &run.MaxAttempts, &run.CreatedAt, &run.StartedAt, &run.FinishedAt,
-		&run.Error, &run.Result, &run.ArtifactPath, &manifestJSON, &eventJSON,
+		&run.Error, &run.Result, &run.ArtifactPath, &provenanceJSON, &manifestJSON, &eventJSON,
 		&stateJSON, &run.StateVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -607,6 +656,9 @@ func (s *Store) AcquireRun(ctx context.Context, workerID string, leaseDuration t
 		return nil, err
 	}
 	if err := json.Unmarshal(manifestJSON, &run.Manifest); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(provenanceJSON, &run.Provenance); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(eventJSON, &run.Event); err != nil {
@@ -811,7 +863,7 @@ func (s *Store) GetAutomation(ctx context.Context, automationID string) (Automat
 	triggerRows.Close()
 
 	revisionRows, err := s.pool.Query(ctx, `
-		SELECT id, content_hash, id = $2, created_at
+		SELECT id, content_hash, id = $2, provenance, created_at
 		FROM revisions WHERE automation_id = $1 ORDER BY created_at DESC, id DESC`,
 		automationID, value.ActiveRevisionID)
 	if err != nil {
@@ -821,12 +873,102 @@ func (s *Store) GetAutomation(ctx context.Context, automationID string) (Automat
 	value.Revisions = make([]RevisionSummary, 0)
 	for revisionRows.Next() {
 		var revision RevisionSummary
-		if err := revisionRows.Scan(&revision.ID, &revision.ContentHash, &revision.Active, &revision.CreatedAt); err != nil {
+		var provenanceJSON []byte
+		if err := revisionRows.Scan(&revision.ID, &revision.ContentHash, &revision.Active, &provenanceJSON, &revision.CreatedAt); err != nil {
 			return AutomationDetail{}, err
+		}
+		var artifactProvenance domain.ArtifactProvenance
+		if err := json.Unmarshal(provenanceJSON, &artifactProvenance); err != nil {
+			return AutomationDetail{}, err
+		}
+		if artifactProvenance.ArtifactDigest != "" {
+			revision.Provenance = &artifactProvenance
 		}
 		value.Revisions = append(value.Revisions, revision)
 	}
 	return value, revisionRows.Err()
+}
+
+func (s *Store) GetRevisionArtifact(ctx context.Context, automationID, revisionID string) (RevisionArtifact, error) {
+	var value RevisionArtifact
+	var manifestJSON, provenanceJSON []byte
+	err := s.pool.QueryRow(ctx, `
+		SELECT automation_id, id, content_hash, artifact_path, manifest, provenance
+		FROM revisions WHERE automation_id = $1 AND id = $2`, automationID, revisionID).
+		Scan(&value.AutomationID, &value.RevisionID, &value.ContentHash, &value.Path, &manifestJSON, &provenanceJSON)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RevisionArtifact{}, ErrRevisionNotFound
+	}
+	if err != nil {
+		return RevisionArtifact{}, err
+	}
+	if value.Path == "" {
+		return RevisionArtifact{}, ErrRevisionArtifactUnavailable
+	}
+	if err := json.Unmarshal(manifestJSON, &value.Manifest); err != nil {
+		return RevisionArtifact{}, err
+	}
+	if err := json.Unmarshal(provenanceJSON, &value.Provenance); err != nil {
+		return RevisionArtifact{}, err
+	}
+	return value, nil
+}
+
+func (s *Store) ListRevisionArtifacts(ctx context.Context) ([]RevisionArtifact, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT automation_id, id, content_hash, artifact_path, manifest, provenance
+		FROM revisions WHERE artifact_path <> '' ORDER BY automation_id, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var values []RevisionArtifact
+	for rows.Next() {
+		var value RevisionArtifact
+		var manifestJSON, provenanceJSON []byte
+		if err := rows.Scan(&value.AutomationID, &value.RevisionID, &value.ContentHash, &value.Path, &manifestJSON, &provenanceJSON); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(manifestJSON, &value.Manifest); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(provenanceJSON, &value.Provenance); err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
+func (s *Store) AdoptRevisionProvenance(ctx context.Context, artifact RevisionArtifact, value domain.ArtifactProvenance) (bool, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return false, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	command, err := tx.Exec(ctx, `
+		UPDATE revisions SET provenance = $3
+		WHERE automation_id = $1 AND id = $2 AND provenance = '{}'::jsonb`,
+		artifact.AutomationID, artifact.RevisionID, encoded)
+	if err != nil {
+		return false, err
+	}
+	if command.RowsAffected() == 0 {
+		return false, tx.Commit(ctx)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE deployments SET provenance = $2 WHERE revision_id = $1`, artifact.RevisionID, encoded); err != nil {
+		return false, err
+	}
+	if err := insertAuditEvent(ctx, tx, "artifact.adopted", artifact.AutomationID, "system:upgrade", map[string]any{
+		"revisionId": artifact.RevisionID, "provenance": provenanceAuditDetails(value),
+	}); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
 }
 
 // SetAutomationEnabled pauses or resumes automatic trigger ingestion. Manual
@@ -1062,7 +1204,7 @@ func (s *Store) ListDeploymentsFiltered(ctx context.Context, automationID, statu
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, status, automation_id, package_digest, content_hash,
-			COALESCE(revision_id, ''), COALESCE(retry_of, ''), actor, error,
+			COALESCE(revision_id, ''), COALESCE(retry_of, ''), actor, error, provenance,
 			created_at, updated_at, started_at, finished_at, cancel_requested_at
 		FROM deployments
 		WHERE ($1 = '' OR automation_id = $1) AND ($2 = '' OR status = $2)
@@ -1086,7 +1228,7 @@ func (s *Store) GetDeployment(ctx context.Context, deploymentID string) (domain.
 	var value domain.Deployment
 	err := scanDeployment(s.pool.QueryRow(ctx, `
 		SELECT id, status, automation_id, package_digest, content_hash,
-			COALESCE(revision_id, ''), COALESCE(retry_of, ''), actor, error,
+			COALESCE(revision_id, ''), COALESCE(retry_of, ''), actor, error, provenance,
 			created_at, updated_at, started_at, finished_at, cancel_requested_at
 		FROM deployments WHERE id = $1`, deploymentID), &value)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1117,7 +1259,7 @@ func (s *Store) getDeploymentByIdempotencyKey(ctx context.Context, idempotencyKe
 	var value domain.Deployment
 	err := scanDeployment(s.pool.QueryRow(ctx, `
 		SELECT id, status, automation_id, package_digest, content_hash,
-			COALESCE(revision_id, ''), COALESCE(retry_of, ''), actor, error,
+			COALESCE(revision_id, ''), COALESCE(retry_of, ''), actor, error, provenance,
 			created_at, updated_at, started_at, finished_at, cancel_requested_at
 		FROM deployments WHERE idempotency_key = $1`, idempotencyKey), &value)
 	return value, err
@@ -1125,6 +1267,7 @@ func (s *Store) getDeploymentByIdempotencyKey(ctx context.Context, idempotencyKe
 
 func (s *Store) AcquireDeployment(ctx context.Context, workerID string, leaseDuration time.Duration) (*domain.RunnableDeployment, error) {
 	var value domain.RunnableDeployment
+	var provenanceJSON []byte
 	err := s.pool.QueryRow(ctx, `
 		WITH candidate AS (
 			SELECT id FROM deployments
@@ -1142,18 +1285,21 @@ func (s *Store) AcquireDeployment(ctx context.Context, workerID string, leaseDur
 			RETURNING d.*
 		)
 		SELECT id, status, automation_id, package_digest, content_hash,
-			COALESCE(revision_id, ''), COALESCE(retry_of, ''), actor, error,
+			COALESCE(revision_id, ''), COALESCE(retry_of, ''), actor, error, provenance,
 			created_at, updated_at, started_at, finished_at, cancel_requested_at,
 			source_path
 		FROM claimed`, workerID, leaseDuration.String(), domain.DeploymentQueued,
 		domain.DeploymentValidating, domain.DeploymentBuilding, domain.DeploymentChecking, domain.DeploymentActivating).Scan(
 		&value.ID, &value.Status, &value.AutomationID, &value.PackageDigest, &value.ContentHash,
-		&value.RevisionID, &value.RetryOf, &value.Actor, &value.Error, &value.CreatedAt, &value.UpdatedAt,
+		&value.RevisionID, &value.RetryOf, &value.Actor, &value.Error, &provenanceJSON, &value.CreatedAt, &value.UpdatedAt,
 		&value.StartedAt, &value.FinishedAt, &value.CancelRequestedAt, &value.SourcePath)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err := setDeploymentProvenance(&value.Deployment, provenanceJSON); err != nil {
 		return nil, err
 	}
 	return &value, nil
@@ -1456,10 +1602,25 @@ type rowScanner interface {
 }
 
 func scanDeployment(row rowScanner, value *domain.Deployment) error {
-	return row.Scan(&value.ID, &value.Status, &value.AutomationID, &value.PackageDigest,
+	var provenanceJSON []byte
+	if err := row.Scan(&value.ID, &value.Status, &value.AutomationID, &value.PackageDigest,
 		&value.ContentHash, &value.RevisionID, &value.RetryOf, &value.Actor, &value.Error,
-		&value.CreatedAt, &value.UpdatedAt, &value.StartedAt, &value.FinishedAt,
-		&value.CancelRequestedAt)
+		&provenanceJSON, &value.CreatedAt, &value.UpdatedAt, &value.StartedAt, &value.FinishedAt,
+		&value.CancelRequestedAt); err != nil {
+		return err
+	}
+	return setDeploymentProvenance(value, provenanceJSON)
+}
+
+func setDeploymentProvenance(value *domain.Deployment, encoded []byte) error {
+	var artifactProvenance domain.ArtifactProvenance
+	if err := json.Unmarshal(encoded, &artifactProvenance); err != nil {
+		return err
+	}
+	if artifactProvenance.ArtifactDigest != "" {
+		value.Provenance = &artifactProvenance
+	}
+	return nil
 }
 
 func (s *Store) ListRuns(ctx context.Context, limit int) ([]domain.Run, error) {

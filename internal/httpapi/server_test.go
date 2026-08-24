@@ -79,6 +79,18 @@ type fakeStore struct {
 	ingestedMetadata   map[string]any
 }
 
+type fakeArtifactVerifier struct {
+	automationID string
+	revisionID   string
+	err          error
+}
+
+func (v *fakeArtifactVerifier) VerifyRevision(_ context.Context, automationID, revisionID string) error {
+	v.automationID = automationID
+	v.revisionID = revisionID
+	return v.err
+}
+
 func (s *fakeStore) Ping(context.Context) error { return s.pingErr }
 
 func (s *fakeStore) IngestEvent(_ context.Context, _, _, _, externalID string, _ time.Time, data json.RawMessage, metadata map[string]any) (string, bool, error) {
@@ -783,6 +795,24 @@ func TestDeploymentLifecycleMutationsAndRollbackAreAgentAccessible(t *testing.T)
 	server.server.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"changed":true`) {
 		t.Fatalf("rollback status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestRollbackRefusesArtifactThatFailsProvenanceVerification(t *testing.T) {
+	verifier := &fakeArtifactVerifier{err: context.DeadlineExceeded}
+	server := New(&fakeStore{}, ":0", "management-secret", WithArtifactVerifier(verifier))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/automations/example/rollback", strings.NewReader(`{"revisionId":"rev_previous"}`))
+	request.Header.Set("Authorization", "Bearer management-secret")
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	server.server.Handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "provenance verification failed") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if verifier.automationID != "example" || verifier.revisionID != "rev_previous" {
+		t.Fatalf("verified automation=%q revision=%q", verifier.automationID, verifier.revisionID)
 	}
 }
 

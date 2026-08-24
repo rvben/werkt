@@ -173,30 +173,48 @@ type Run struct {
 type RunnableRun struct {
 	Run
 	ArtifactPath string
+	Provenance   ArtifactProvenance
 	Manifest     Manifest
 	Event        EventEnvelope
 	State        json.RawMessage
 	StateVersion int64
 }
 
+// ArtifactProvenance binds one immutable artifact tree to the effective images
+// and source content that produced a revision. The signature is verified from
+// externally custodied key material before every execution attempt.
+type ArtifactProvenance struct {
+	Version        int    `json:"version"`
+	ArtifactDigest string `json:"artifactDigest"`
+	ContentHash    string `json:"contentHash"`
+	AutomationID   string `json:"automationId"`
+	RuntimeImage   string `json:"runtimeImage,omitempty"`
+	BuildImage     string `json:"buildImage,omitempty"`
+	Algorithm      string `json:"algorithm"`
+	SigningKeyID   string `json:"signingKeyId"`
+	PublicKey      string `json:"publicKey"`
+	Signature      string `json:"signature"`
+}
+
 // Deployment is the durable, agent-visible lifecycle of one uploaded package.
 // SourcePath and the idempotency key stay internal to the control plane.
 type Deployment struct {
-	ID                string           `json:"id"`
-	Status            string           `json:"status"`
-	AutomationID      string           `json:"automationId,omitempty"`
-	PackageDigest     string           `json:"packageDigest"`
-	ContentHash       string           `json:"contentHash,omitempty"`
-	RevisionID        string           `json:"revisionId,omitempty"`
-	RetryOf           string           `json:"retryOf,omitempty"`
-	Actor             string           `json:"actor"`
-	Error             string           `json:"error,omitempty"`
-	Steps             []DeploymentStep `json:"steps,omitempty"`
-	CreatedAt         time.Time        `json:"createdAt"`
-	UpdatedAt         time.Time        `json:"updatedAt"`
-	StartedAt         *time.Time       `json:"startedAt,omitempty"`
-	FinishedAt        *time.Time       `json:"finishedAt,omitempty"`
-	CancelRequestedAt *time.Time       `json:"cancelRequestedAt,omitempty"`
+	ID                string              `json:"id"`
+	Status            string              `json:"status"`
+	AutomationID      string              `json:"automationId,omitempty"`
+	PackageDigest     string              `json:"packageDigest"`
+	ContentHash       string              `json:"contentHash,omitempty"`
+	RevisionID        string              `json:"revisionId,omitempty"`
+	RetryOf           string              `json:"retryOf,omitempty"`
+	Actor             string              `json:"actor"`
+	Error             string              `json:"error,omitempty"`
+	Provenance        *ArtifactProvenance `json:"provenance,omitempty"`
+	Steps             []DeploymentStep    `json:"steps,omitempty"`
+	CreatedAt         time.Time           `json:"createdAt"`
+	UpdatedAt         time.Time           `json:"updatedAt"`
+	StartedAt         *time.Time          `json:"startedAt,omitempty"`
+	FinishedAt        *time.Time          `json:"finishedAt,omitempty"`
+	CancelRequestedAt *time.Time          `json:"cancelRequestedAt,omitempty"`
 }
 
 type RunnableDeployment struct {

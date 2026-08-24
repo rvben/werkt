@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Werkt API
-  version: 1.1.0
+  version: 1.2.0
   description: Agent-facing management API and trigger ingress for Werkt automations.
 servers:
   - url: http://127.0.0.1:8080
@@ -664,6 +664,7 @@ components:
                   id: {type: string}
                   contentHash: {type: string}
                   active: {type: boolean}
+                  provenance: {$ref: "#/components/schemas/ArtifactProvenance"}
                   createdAt: {type: string, format: date-time}
                 required: [id, contentHash, active, createdAt]
           required: [manifest, triggers, revisions]
@@ -696,6 +697,7 @@ components:
         retryOf: {type: string}
         actor: {type: string}
         error: {type: string}
+        provenance: {$ref: "#/components/schemas/ArtifactProvenance"}
         steps:
           type: array
           items: {$ref: "#/components/schemas/DeploymentStep"}
@@ -705,6 +707,21 @@ components:
         finishedAt: {type: string, format: date-time}
         cancelRequestedAt: {type: string, format: date-time}
       required: [id, status, packageDigest, actor, createdAt, updatedAt]
+    ArtifactProvenance:
+      type: object
+      additionalProperties: false
+      properties:
+        version: {type: integer, const: 1}
+        artifactDigest: {type: string, pattern: "^sha256:[a-f0-9]{64}$"}
+        contentHash: {type: string, pattern: "^[a-f0-9]{64}$"}
+        automationId: {type: string}
+        runtimeImage: {type: string}
+        buildImage: {type: string}
+        algorithm: {type: string, const: ed25519}
+        signingKeyId: {type: string, pattern: "^sha256:[a-f0-9]{64}$"}
+        publicKey: {type: string}
+        signature: {type: string}
+      required: [version, artifactDigest, contentHash, automationId, algorithm, signingKeyId, publicKey, signature]
     DeploymentStep:
       type: object
       properties:

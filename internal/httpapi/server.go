@@ -45,6 +45,7 @@ type Server struct {
 	deploymentIntake DeploymentIntake
 	retention        RetentionManager
 	secrets          SecretManager
+	artifacts        ArtifactVerifier
 	managementToken  string
 	server           *http.Server
 }
@@ -85,6 +86,10 @@ type SecretManager interface {
 	Resolve(context.Context, []string) (map[string]string, error)
 }
 
+type ArtifactVerifier interface {
+	VerifyRevision(context.Context, string, string) error
+}
+
 type Option func(*Server)
 
 func WithDeploymentIntake(intake DeploymentIntake) Option {
@@ -97,6 +102,10 @@ func WithRetentionManager(manager RetentionManager) Option {
 
 func WithSecretManager(manager SecretManager) Option {
 	return func(server *Server) { server.secrets = manager }
+}
+
+func WithArtifactVerifier(verifier ArtifactVerifier) Option {
+	return func(server *Server) { server.artifacts = verifier }
 }
 
 func New(store Store, address, managementToken string, options ...Option) *Server {
@@ -296,8 +305,23 @@ func (s *Server) rollbackAutomation(response http.ResponseWriter, request *http.
 		writeError(response, http.StatusBadRequest, "revisionId is required")
 		return
 	}
+	automationID := request.PathValue("automation")
+	revisionID := strings.TrimSpace(body.RevisionID)
+	if s.artifacts != nil {
+		if err := s.artifacts.VerifyRevision(request.Context(), automationID, revisionID); err != nil {
+			switch {
+			case errors.Is(err, database.ErrRevisionNotFound):
+				writeError(response, http.StatusNotFound, "revision not found for automation")
+			case errors.Is(err, database.ErrRevisionArtifactUnavailable):
+				writeError(response, http.StatusConflict, err.Error())
+			default:
+				writeError(response, http.StatusConflict, "revision artifact provenance verification failed")
+			}
+			return
+		}
+	}
 	changed, err := s.store.RollbackAutomation(
-		request.Context(), request.PathValue("automation"), strings.TrimSpace(body.RevisionID), requestActor(request),
+		request.Context(), automationID, revisionID, requestActor(request),
 	)
 	switch {
 	case errors.Is(err, database.ErrAutomationNotFound):

@@ -22,6 +22,7 @@ import (
 	"github.com/rvben/werkt/internal/managementclient"
 	"github.com/rvben/werkt/internal/manifest"
 	"github.com/rvben/werkt/internal/packageio"
+	"github.com/rvben/werkt/internal/provenance"
 	"github.com/rvben/werkt/internal/runner"
 	"github.com/rvben/werkt/internal/secretvault"
 	"github.com/rvben/werkt/internal/service"
@@ -382,7 +383,15 @@ func recoveryCommand(arguments []string) error {
 	if err != nil {
 		return fmt.Errorf("verify restored secrets: %w", err)
 	}
-	return printJSON(map[string]any{"database": "ok", "secretsVerified": verified})
+	attestor, err := provenance.NewAttestor(configuration.SecretKey)
+	if err != nil {
+		return fmt.Errorf("verify restored provenance key: %w", err)
+	}
+	artifactsVerified, err := service.NewArtifactCustodian(store, attestor).VerifyAll(ctx)
+	if err != nil {
+		return fmt.Errorf("verify restored artifacts: %w", err)
+	}
+	return printJSON(map[string]any{"database": "ok", "secretsVerified": verified, "artifactsVerified": artifactsVerified})
 }
 
 func serve(arguments []string) error {
@@ -403,23 +412,28 @@ func serve(arguments []string) error {
 	}
 	defer store.Close()
 
-	var vault *secretvault.Vault
-	if configuration.SecretKey == "" {
-		slog.Warn("secret vault is disabled; set WERKT_SECRET_KEY before deploying automations with secret references")
-	} else {
-		vault, err = secretvault.New(store, configuration.SecretKey)
-		if err != nil {
-			return fmt.Errorf("configure secret vault: %w", err)
-		}
+	attestor, err := provenance.NewAttestor(configuration.SecretKey)
+	if err != nil {
+		return fmt.Errorf("configure artifact provenance: %w", err)
 	}
-	var secretResolver runner.SecretResolver
-	if vault != nil {
-		secretResolver = vault
+	vault, err := secretvault.New(store, configuration.SecretKey)
+	if err != nil {
+		return fmt.Errorf("configure secret vault: %w", err)
 	}
+	custodian := service.NewArtifactCustodian(store, attestor)
+	adopted, err := custodian.AdoptLegacy(ctx)
+	if err != nil {
+		return fmt.Errorf("adopt legacy artifact provenance: %w", err)
+	}
+	if adopted > 0 {
+		slog.Warn("adopted pre-provenance artifacts during trusted upgrade", "artifacts", adopted)
+	}
+	var secretResolver runner.SecretResolver = vault
 	executor, err := newExecutor(configuration, secretResolver)
 	if err != nil {
 		return err
 	}
+	executor = runner.NewVerifyingExecutor(executor, attestor)
 	hostname, _ := os.Hostname()
 	for index := range *workers {
 		workerID := fmt.Sprintf("%s-%d-%d", hostname, os.Getpid(), index)
@@ -429,7 +443,11 @@ func serve(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	deployer := service.NewDeployer(store, configuration.DataDir, builder)
+	var pinImages func(domain.Manifest) (domain.Manifest, error)
+	if configuration.Executor == "husker" {
+		pinImages = provenance.PinHuskerImages
+	}
+	deployer := service.NewDeployer(store, configuration.DataDir, builder, attestor, pinImages)
 	deploymentWorkerID := fmt.Sprintf("%s-%d-deployments", hostname, os.Getpid())
 	go service.NewDeploymentWorker(store, deployer, deploymentWorkerID, configuration.DeploymentPoll).Run(ctx)
 	go service.NewScheduler(store, configuration.SchedulerPoll).Run(ctx)
@@ -447,7 +465,7 @@ func serve(arguments []string) error {
 		Entries:         configuration.MaxPackageEntries,
 	})
 	retention := service.NewRetentionManager(store, configuration.DataDir)
-	apiOptions := []httpapi.Option{httpapi.WithDeploymentIntake(intake), httpapi.WithRetentionManager(retention)}
+	apiOptions := []httpapi.Option{httpapi.WithDeploymentIntake(intake), httpapi.WithRetentionManager(retention), httpapi.WithArtifactVerifier(custodian)}
 	if vault != nil {
 		apiOptions = append(apiOptions, httpapi.WithSecretManager(vault))
 	}

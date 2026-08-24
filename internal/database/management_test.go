@@ -59,7 +59,7 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 		Execution: domain.Execution{Retries: 1, Concurrency: "forbid"},
 	}
 	hash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	revisionID, err := store.Deploy(ctx, value, hash, t.TempDir())
+	revisionID, err := store.Deploy(ctx, value, hash, t.TempDir(), testArtifactProvenance(value, hash))
 	if err != nil {
 		t.Fatal(err)
 	}

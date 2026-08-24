@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/rvben/werkt/internal/domain"
+	"github.com/rvben/werkt/internal/provenance"
 )
 
 const (
@@ -121,9 +122,16 @@ func NewHuskerRunner(config HuskerConfig) (*HuskerRunner, error) {
 	}, nil
 }
 
+func (r *HuskerRunner) PinImages(value domain.Manifest) (domain.Manifest, error) {
+	return provenance.PinHuskerImages(value)
+}
+
 func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (Result, error) {
 	if len(run.Manifest.Runtime.Command) == 0 {
 		return Result{}, errors.New("runtime command is empty")
+	}
+	if _, err := provenance.PinHuskerImages(run.Manifest); err != nil {
+		return Result{}, err
 	}
 	rootFS := run.Manifest.Runtime.Image
 	if rootFS == "" {
@@ -479,6 +487,13 @@ func archiveDirectory(directory string) ([]byte, error) {
 		relative, err := filepath.Rel(absolute, path)
 		if err != nil {
 			return err
+		}
+		first, _, _ := strings.Cut(filepath.ToSlash(relative), "/")
+		if first == provenance.MetadataDirectory {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return fmt.Errorf("reserved provenance metadata path %q is not a directory", provenance.MetadataDirectory)
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
 			return fmt.Errorf("artifact contains symbolic link: %s", relative)
