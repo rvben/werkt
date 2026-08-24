@@ -1,0 +1,35 @@
+name: Feature request
+description: Propose a focused improvement to Werkt's automation lifecycle.
+title: "feat: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the user or operator problem without prescribing an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Explain the observable behavior that would solve the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe current workarounds or simpler alternatives.
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Contract and security impact
+      description: Note expected changes to manifests, APIs, execution isolation, secrets, networking, or compatibility.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This request is about the reusable open-source platform, not a private environment.
+          required: true

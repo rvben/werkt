@@ -295,3 +295,9 @@ The `process` executor runs builds and deployed commands as child processes on t
 ## License
 
 Werkt is licensed under the [Apache License 2.0](LICENSE).
+
+## Contributing and support
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow,
+[SUPPORT.md](SUPPORT.md) for support boundaries, and [SECURITY.md](SECURITY.md)
+for private vulnerability reporting.
