@@ -1,0 +1,63 @@
+name: Bug report
+description: Report reproducible behavior that does not match Werkt's documented contract.
+title: "bug: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Remove credentials, private addresses, and environment-specific data before submitting. Report vulnerabilities privately according to SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Werkt version
+      description: Provide a release version or full commit SHA.
+      placeholder: v0.1.0 or abcdef012345...
+    validations:
+      required: true
+  - type: dropdown
+    id: executor
+    attributes:
+      label: Executor
+      options:
+        - process
+        - husker
+        - not applicable
+        - unknown
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include operating system, architecture, PostgreSQL version, and relevant sanitized configuration.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: List exact steps and include the smallest safe manifest or request that reproduces the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include sanitized errors or logs when useful.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed credentials, private addresses, and environment-specific data.
+          required: true
+        - label: This is not a vulnerability report.
+          required: true
