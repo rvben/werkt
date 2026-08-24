@@ -89,6 +89,25 @@ go run ./cmd/werkt runs
 curl http://localhost:8080/api/v1/runs
 ```
 
+## Install a release
+
+Werkt publishes static Linux and macOS archives for AMD64 and ARM64. Download
+the archive and `SHA256SUMS` from the matching GitHub release, verify both the
+checksum and GitHub build provenance, then install the binary:
+
+```bash
+gh release download v0.1.0 --repo rvben/werkt
+sha256sum --check SHA256SUMS --ignore-missing
+gh attestation verify werkt-v0.1.0-linux-amd64.tar.gz --repo rvben/werkt
+tar -xzf werkt-v0.1.0-linux-amd64.tar.gz
+sudo install -m 0755 werkt-v0.1.0-linux-amd64/werkt /usr/local/bin/werkt
+werkt version
+```
+
+Use `shasum -a 256 -c SHA256SUMS` on macOS. Release builds embed their exact
+version, commit, and build time; archives and the checksum manifest receive
+GitHub artifact attestations before the draft release is made public.
+
 For a non-local deployment, configure a management token:
 
 ```bash
