@@ -32,10 +32,10 @@ jobs:
       WERKT_TEST_DATABASE_URL: postgres://werkt_test:werkt_test@127.0.0.1:5432/werkt_test?sslmode=disable
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: false
@@ -53,7 +53,7 @@ jobs:
           cp scripts/staging-smoke.sh dist/staging-smoke.sh
           chmod 0755 dist/werkt dist/staging-smoke.sh
           (cd dist && sha256sum werkt > werkt.sha256)
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: werkt-staging-${{ github.run_id }}
           path: dist/
@@ -67,7 +67,7 @@ jobs:
       name: staging
       url: ${{ vars.WERKT_STAGING_URL }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: werkt-staging-${{ github.run_id }}
           path: release
