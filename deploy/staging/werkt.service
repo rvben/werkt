@@ -1,0 +1,43 @@
+[Unit]
+Description=Werkt staging control plane
+Documentation=https://github.com/rvben/werkt
+Wants=network-online.target werkt-husker-tunnel.service werkt-postgres.service
+After=network-online.target werkt-husker-tunnel.service werkt-postgres.service
+
+[Service]
+Type=simple
+User=werkt
+Group=werkt
+EnvironmentFile=/etc/werkt/werkt.env
+WorkingDirectory=/var/lib/werkt
+ExecStart=/usr/local/bin/werkt serve -workers 2
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+UMask=0027
+
+StateDirectory=werkt
+StateDirectoryMode=0750
+RuntimeDirectory=werkt
+RuntimeDirectoryMode=0750
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

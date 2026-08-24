@@ -1,0 +1,44 @@
+[Unit]
+Description=Private tunnel from Werkt to the Husker staging executor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=werkt
+Group=werkt
+EnvironmentFile=/etc/werkt/husker-tunnel.env
+ExecStart=/usr/bin/ssh -NT \
+  -L 127.0.0.1:17777:127.0.0.1:7777 \
+  -o BatchMode=yes \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=15 \
+  -o ServerAliveCountMax=3 \
+  -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile=/etc/werkt/husker_known_hosts \
+  -i /etc/werkt/husker_tunnel_key \
+  ${WERKT_HUSKER_SSH_TARGET}
+Restart=always
+RestartSec=3
+TimeoutStopSec=10
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

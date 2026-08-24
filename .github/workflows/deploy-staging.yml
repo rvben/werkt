@@ -1,0 +1,94 @@
+name: Deploy staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to build and deploy
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-deployment
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.11-alpine
+        env:
+          POSTGRES_DB: werkt_test
+          POSTGRES_USER: werkt_test
+          POSTGRES_PASSWORD: werkt_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U werkt_test -d werkt_test"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 20
+
+    env:
+      WERKT_TEST_DATABASE_URL: postgres://werkt_test:werkt_test@127.0.0.1:5432/werkt_test?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify
+        run: |
+          go vet ./...
+          go test ./... -count=1
+          WERKT_BROWSER_TESTS=1 go test ./internal/httpapi -run TestWorkspaceBrowserKeyboardFocusAndResponsiveModality -count=1
+          ./scripts/check-public-safety.sh --history
+      - name: Build immutable release
+        run: |
+          mkdir -p dist
+          go build -trimpath -o dist/werkt ./cmd/werkt
+          git rev-parse HEAD > dist/commit
+          cp scripts/staging-smoke.sh dist/staging-smoke.sh
+          chmod 0755 dist/werkt dist/staging-smoke.sh
+          (cd dist && sha256sum werkt > werkt.sha256)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: werkt-staging-${{ github.run_id }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    needs: build
+    runs-on: [self-hosted, linux, x64, staging-control]
+    environment:
+      name: staging
+      url: ${{ vars.WERKT_STAGING_URL }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: werkt-staging-${{ github.run_id }}
+          path: release
+      - name: Verify release checksum
+        working-directory: release
+        run: sha256sum --check werkt.sha256
+      - name: Install with automatic readiness rollback
+        run: |
+          commit=$(tr -d '\n' < release/commit)
+          sudo /usr/local/sbin/install-werkt-release "$PWD/release/werkt" "$commit"
+      - name: Smoke test protected staging
+        env:
+          WERKT_STAGING_URL: ${{ vars.WERKT_STAGING_URL }}
+          WERKT_MANAGEMENT_TOKEN: ${{ secrets.WERKT_MANAGEMENT_TOKEN }}
+        run: |
+          export WERKT_EXPECTED_COMMIT
+          WERKT_EXPECTED_COMMIT=$(tr -d '\n' < release/commit)
+          release/staging-smoke.sh

@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $EUID -ne 0 ]]; then
+  echo "install-werkt-release must run as root" >&2
+  exit 1
+fi
+if [[ $# -ne 2 ]]; then
+  echo "usage: install-werkt-release BINARY COMMIT" >&2
+  exit 2
+fi
+
+source_binary=$1
+commit=$2
+if [[ ! -f $source_binary || ! -x $source_binary ]]; then
+  echo "release binary must be a regular executable file" >&2
+  exit 1
+fi
+if [[ ! $commit =~ ^[0-9a-f]{40}$ ]]; then
+  echo "commit must be a full lowercase Git SHA" >&2
+  exit 1
+fi
+
+release_root=/usr/local/lib/werkt/releases
+release_dir=$release_root/$commit
+release_binary=$release_dir/werkt
+active_link=/usr/local/bin/werkt
+temporary_link=/usr/local/bin/.werkt-next
+previous_target=
+if [[ -L $active_link ]]; then
+  previous_target=$(readlink "$active_link")
+elif [[ -e $active_link ]]; then
+  echo "$active_link exists but is not a managed symlink" >&2
+  exit 1
+fi
+
+install -d -m 0755 -o root -g root "$release_dir"
+install -m 0755 -o root -g root "$source_binary" "$release_binary"
+
+rollback() {
+  echo "staging readiness failed; restoring the previous release" >&2
+  if [[ -n $previous_target ]]; then
+    ln -sfn "$previous_target" "$temporary_link"
+    mv -Tf "$temporary_link" "$active_link"
+    systemctl restart werkt.service
+  else
+    systemctl stop werkt.service || true
+    rm -f "$active_link" "$temporary_link"
+  fi
+}
+
+ln -sfn "$release_binary" "$temporary_link"
+mv -Tf "$temporary_link" "$active_link"
+systemctl restart werkt.service
+
+ready=false
+for _ in {1..60}; do
+  response=$(curl --silent --show-error --max-time 2 http://127.0.0.1:8080/readyz || true)
+  if [[ $response == *"\"commit\":\"$commit\""* ]]; then
+    ready=true
+    break
+  fi
+  sleep 1
+done
+if [[ $ready != true ]]; then
+  rollback
+  exit 1
+fi
+
+echo "installed Werkt staging release $commit"

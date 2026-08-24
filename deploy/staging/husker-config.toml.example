@@ -1,0 +1,20 @@
+# Pinned staging contract: Husker v0.4.47 on Linux x86-64 with Firecracker.
+data_dir = "/var/lib/husker"
+state_dir = "/var/lib/husker"
+default_cpus = 1
+default_memory = 256
+max_vms = 4
+
+# Replace before installation. The daemon remains bound to loopback and Werkt
+# reaches it only through the restricted SSH tunnel.
+api_token = "REPLACE_WITH_A_LONG_RANDOM_TOKEN"
+api_sensitive_rate_limit_per_minute = 120
+
+vmm = "firecracker"
+resource_limits = true
+memory_overhead_mib = 256
+cpu_limit = true
+reclaim_grace_secs = 60
+
+# Host bind mounts stay denied. Werkt transfers bounded artifacts over the API.
+allowed_mount_host_paths = []
