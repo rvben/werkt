@@ -72,6 +72,10 @@ func (r *HuskerRunner) Build(parent context.Context, directory string, value dom
 
 	provisionContext, cancelProvision := context.WithTimeout(parent, r.provisionTimeout)
 	defer cancelProvision()
+	rootFS, err = r.ensureOCIImage(provisionContext, rootFS)
+	if err != nil {
+		return fmt.Errorf("prepare husker build image: %w", err)
+	}
 	owner := "werkt/build/" + value.Metadata.Name
 	if err := r.createVM(provisionContext, vmName, owner, rootFS, r.buildNetwork, nil, lifetime); err != nil {
 		return fmt.Errorf("create husker build VM: %w", err)
