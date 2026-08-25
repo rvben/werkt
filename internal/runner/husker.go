@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rvben/werkt/internal/domain"
@@ -67,6 +68,8 @@ type HuskerRunner struct {
 	downloadChunkSize int
 	client            *http.Client
 	secrets           SecretResolver
+	imageMu           sync.Mutex
+	resolvedImages    map[string]string
 }
 
 func NewHuskerRunner(config HuskerConfig) (*HuskerRunner, error) {
@@ -119,6 +122,7 @@ func NewHuskerRunner(config HuskerConfig) (*HuskerRunner, error) {
 		downloadChunkSize: config.DownloadChunkSize,
 		client:            config.HTTPClient,
 		secrets:           config.Secrets,
+		resolvedImages:    make(map[string]string),
 	}, nil
 }
 
@@ -167,6 +171,10 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 
 	provisionContext, cancelProvision := context.WithTimeout(parent, r.provisionTimeout)
 	defer cancelProvision()
+	rootFS, err = r.ensureOCIImage(provisionContext, rootFS)
+	if err != nil {
+		return Result{}, fmt.Errorf("prepare husker runtime image: %w", err)
+	}
 	network := runtimeNetwork(run.Manifest.Runtime)
 	if err := r.createVM(provisionContext, vmName, "werkt/"+run.ID, rootFS, network, run.Manifest.Runtime.Egress, lifetime); err != nil {
 		return Result{}, fmt.Errorf("create husker VM: %w", err)
@@ -271,6 +279,70 @@ func runtimeNetwork(runtime domain.Runtime) string {
 		return "filtered"
 	}
 	return "none"
+}
+
+// ensureOCIImage imports a digest-pinned OCI reference under a bounded,
+// deterministic catalog name before VM creation. Husker otherwise derives a
+// catalog name directly from the reference, which can exceed its 64-character
+// resource-name limit for immutable references.
+func (r *HuskerRunner) ensureOCIImage(ctx context.Context, reference string) (string, error) {
+	r.imageMu.Lock()
+	defer r.imageMu.Unlock()
+
+	if name, ok := r.resolvedImages[reference]; ok {
+		return name, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
+	name := huskerImageName(reference)
+	var existing imageResponse
+	err := r.doJSON(ctx, http.MethodGet, "/v1/images/"+url.PathEscape(name), nil, http.StatusOK, &existing)
+	if err == nil {
+		if err := verifyHuskerImage(existing, name, reference); err != nil {
+			return "", err
+		}
+		r.resolvedImages[reference] = name
+		return name, nil
+	}
+	var apiErr *huskerAPIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusNotFound {
+		return "", err
+	}
+
+	request := importOCIImageRequest{Name: name, Reference: reference}
+	var imported imageResponse
+	err = r.doJSON(ctx, http.MethodPost, "/v1/images/import-oci", request, http.StatusCreated, &imported)
+	if err != nil {
+		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusConflict || apiErr.Kind != "image_already_exists" {
+			return "", err
+		}
+		if err := r.doJSON(ctx, http.MethodGet, "/v1/images/"+url.PathEscape(name), nil, http.StatusOK, &imported); err != nil {
+			return "", err
+		}
+	}
+	if err := verifyHuskerImage(imported, name, reference); err != nil {
+		return "", err
+	}
+	r.resolvedImages[reference] = name
+	return name, nil
+}
+
+func huskerImageName(reference string) string {
+	digest := sha256.Sum256([]byte(reference))
+	return "werkt-oci-" + hex.EncodeToString(digest[:24])
+}
+
+func verifyHuskerImage(image imageResponse, name, reference string) error {
+	if image.Name != name {
+		return fmt.Errorf("husker returned image %q while resolving %q", image.Name, name)
+	}
+	wantSource := "oci://" + strings.TrimPrefix(reference, "oci://")
+	if image.SourcePath != wantSource {
+		return fmt.Errorf("husker image %q resolves to unexpected source %q", name, image.SourcePath)
+	}
+	return nil
 }
 
 func (r *HuskerRunner) createVM(ctx context.Context, name, owner, rootFS, network string, egress []domain.EgressRule, lifetime time.Duration) error {
@@ -576,6 +648,16 @@ type createVMRequest struct {
 	Egress           []egressRuleRequest `json:"egress,omitempty"`
 	ExpiresAfterSecs uint64              `json:"expires_after_secs"`
 	Owner            string              `json:"owner"`
+}
+
+type importOCIImageRequest struct {
+	Name      string `json:"name"`
+	Reference string `json:"reference"`
+}
+
+type imageResponse struct {
+	Name       string `json:"name"`
+	SourcePath string `json:"source_path"`
 }
 
 type egressRuleRequest struct {

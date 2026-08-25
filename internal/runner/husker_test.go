@@ -36,6 +36,33 @@ func (r testSecretResolver) Resolve(_ context.Context, names []string) (map[stri
 	return values, nil
 }
 
+func serveTestHuskerImageImport(t *testing.T, response http.ResponseWriter, request *http.Request, imported *importOCIImageRequest) bool {
+	t.Helper()
+	switch {
+	case request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1/images/werkt-oci-"):
+		writeJSONStatus(t, response, http.StatusNotFound, map[string]string{
+			"kind":    "image_not_found",
+			"message": "image not found",
+		})
+		return true
+	case request.Method == http.MethodPost && request.URL.Path == "/v1/images/import-oci":
+		var body importOCIImageRequest
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode image import: %v", err)
+		}
+		if imported != nil {
+			*imported = body
+		}
+		writeJSONStatus(t, response, http.StatusCreated, imageResponse{
+			Name:       body.Name,
+			SourcePath: "oci://" + strings.TrimPrefix(body.Reference, "oci://"),
+		})
+		return true
+	default:
+		return false
+	}
+}
+
 func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 	directory := t.TempDir()
 	if err := os.WriteFile(filepath.Join(directory, "main.py"), []byte("print('hello')\n"), 0o644); err != nil {
@@ -48,12 +75,16 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 	createNetwork := ""
 	var createEgress []egressRuleRequest
 	createRootFS := ""
+	var importedImage importOCIImageRequest
 	createOwner := ""
 	createLifetime := uint64(0)
 	runtimeSeen := false
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Authorization") != "Bearer test-token" {
 			http.Error(response, "missing token", http.StatusUnauthorized)
+			return
+		}
+		if serveTestHuskerImageImport(t, response, request, &importedImage) {
 			return
 		}
 		switch {
@@ -186,8 +217,11 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 	if len(createEgress) != 2 || createEgress[0].Protocol != "tcp" || createEgress[1].Protocol != "udp" {
 		t.Fatalf("egress = %#v", createEgress)
 	}
-	if createRootFS != "python@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+	if createRootFS != huskerImageName("python@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") {
 		t.Fatalf("rootfs = %q", createRootFS)
+	}
+	if importedImage.Reference != "python@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || importedImage.Name != createRootFS {
+		t.Fatalf("image import = %#v", importedImage)
 	}
 	if createOwner != "werkt/run_test" {
 		t.Fatalf("owner = %q", createOwner)
@@ -214,6 +248,78 @@ func TestRuntimeNetworkIsOfflineUnlessTheManifestDeclaresEgress(t *testing.T) {
 	}
 	if got := runtimeNetwork(domain.Runtime{Egress: []domain.EgressRule{{Host: "api.example.com", Port: 443}}}); got != "filtered" {
 		t.Fatalf("policy runtime network = %q", got)
+	}
+}
+
+func TestHuskerRunnerReusesExistingBoundedImageAlias(t *testing.T) {
+	reference := "registry.example.com/team/very-long-runtime-name@sha256:" + strings.Repeat("a", 64)
+	wantName := huskerImageName(reference)
+	if len(wantName) > 64 {
+		t.Fatalf("image name length = %d", len(wantName))
+	}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		if request.Method != http.MethodGet || request.URL.Path != "/v1/images/"+wantName {
+			http.Error(response, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		writeJSON(t, response, imageResponse{Name: wantName, SourcePath: "oci://" + reference})
+	}))
+	defer server.Close()
+
+	runner, err := NewHuskerRunner(HuskerConfig{URL: server.URL, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		name, err := runner.ensureOCIImage(context.Background(), reference)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if name != wantName {
+			t.Fatalf("image name = %q, want %q", name, wantName)
+		}
+	}
+	if requests != 1 {
+		t.Fatalf("catalog requests = %d, want 1", requests)
+	}
+}
+
+func TestHuskerRunnerHandlesConcurrentImageImportWinner(t *testing.T) {
+	reference := "python@sha256:" + strings.Repeat("b", 64)
+	wantName := huskerImageName(reference)
+	gets := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/v1/images/"+wantName:
+			gets++
+			if gets == 1 {
+				writeJSONStatus(t, response, http.StatusNotFound, map[string]string{"kind": "image_not_found", "message": "image not found"})
+				return
+			}
+			writeJSON(t, response, imageResponse{Name: wantName, SourcePath: "oci://" + reference})
+		case request.Method == http.MethodPost && request.URL.Path == "/v1/images/import-oci":
+			writeJSONStatus(t, response, http.StatusConflict, map[string]string{
+				"kind":    "image_already_exists",
+				"message": "image already exists",
+			})
+		default:
+			http.Error(response, "unexpected request", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+
+	runner, err := NewHuskerRunner(HuskerConfig{URL: server.URL, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, err := runner.ensureOCIImage(context.Background(), reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != wantName || gets != 2 {
+		t.Fatalf("image name = %q, gets = %d", name, gets)
 	}
 }
 
@@ -252,6 +358,9 @@ func TestHuskerRunnerCleansUpAfterAutomationFailure(t *testing.T) {
 	}
 	deleted := false
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if serveTestHuskerImageImport(t, response, request, nil) {
+			return
+		}
 		switch {
 		case request.Method == http.MethodPost && request.URL.Path == "/v1/vms":
 			response.WriteHeader(http.StatusCreated)
@@ -313,9 +422,13 @@ func TestHuskerRunnerBuildsInVMAndPromotesOutput(t *testing.T) {
 	deleted := false
 	readRequests := 0
 	var created createVMRequest
+	var importedImage importOCIImageRequest
 	buildSeen := false
 	checkSeen := false
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if serveTestHuskerImageImport(t, response, request, &importedImage) {
+			return
+		}
 		switch {
 		case request.Method == http.MethodPost && request.URL.Path == "/v1/vms":
 			if err := json.NewDecoder(request.Body).Decode(&created); err != nil {
@@ -401,8 +514,11 @@ func TestHuskerRunnerBuildsInVMAndPromotesOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	if created.RootFSPath != "golang@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" {
+	if created.RootFSPath != huskerImageName("golang@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee") {
 		t.Fatalf("rootfs = %q", created.RootFSPath)
+	}
+	if importedImage.Reference != "golang@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" || importedImage.Name != created.RootFSPath {
+		t.Fatalf("image import = %#v", importedImage)
 	}
 	if created.Network != "nat" {
 		t.Fatalf("network = %q", created.Network)
@@ -445,6 +561,9 @@ func TestHuskerRunnerCleansUpAfterBuildFailure(t *testing.T) {
 	}
 	deleted := false
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if serveTestHuskerImageImport(t, response, request, nil) {
+			return
+		}
 		switch {
 		case request.Method == http.MethodPost && request.URL.Path == "/v1/vms":
 			response.WriteHeader(http.StatusCreated)
@@ -559,6 +678,15 @@ func TestArchiveDirectoryPreservesRelativePathsAndExecutableMode(t *testing.T) {
 func writeJSON(t *testing.T, response http.ResponseWriter, value any) {
 	t.Helper()
 	response.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(response).Encode(value); err != nil {
+		t.Errorf("encode response: %v", err)
+	}
+}
+
+func writeJSONStatus(t *testing.T, response http.ResponseWriter, status int, value any) {
+	t.Helper()
+	response.Header().Set("Content-Type", "application/json")
+	response.WriteHeader(status)
 	if err := json.NewEncoder(response).Encode(value); err != nil {
 		t.Errorf("encode response: %v", err)
 	}

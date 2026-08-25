@@ -12,7 +12,7 @@ The source package stays private to the control plane and is retained after a te
 
 When a manifest defines `runtime.build` or `deployment.checks`, deployment copies the source into a private staging directory before invoking the selected builder. Checks are ordered command arrays with stable IDs and independent timeouts. They run after the optional build and must all pass before activation. The process backend invokes these commands on the Werkt host for trusted local development only. The Husker backend instead:
 
-1. Creates a fresh VM from the digest-pinned `runtime.buildImage`, falling back only to the digest-pinned `runtime.image`.
+1. Ensures the digest-pinned `runtime.buildImage` (falling back only to the digest-pinned `runtime.image`) is present in Husker's image catalog under a bounded, deterministic name, then creates a fresh VM from it.
 2. Gives the VM an independent hard expiration and `owner: werkt/build/<automation-id>`.
 3. Uploads and extracts the source, then invokes the build and check arrays directly without a shell in the same disposable VM.
 4. Archives the completed guest workspace and downloads it using bounded ranged reads.
@@ -62,7 +62,7 @@ Standard output and error are redacted against the exact secrets resolved for th
 
 1. Werkt derives a collision-resistant VM name from the run ID and attempt.
 2. It verifies the Ed25519 attestation and current artifact-tree digest before crossing the execution boundary.
-3. It creates a VM from the digest-pinned `runtime.image` with the requested resources, a manifest-derived network policy, `owner: werkt/<run-id>`, and a hard lifetime covering provisioning, execution, and cleanup grace.
+3. It ensures the digest-pinned `runtime.image` is present in Husker's image catalog under a bounded, deterministic name, then creates a VM from it with the requested resources, a manifest-derived network policy, `owner: werkt/<run-id>`, and a hard lifetime covering provisioning, execution, and cleanup grace.
 4. It waits for the guest agent, uploads the compressed immutable artifact in bounded chunks, and extracts it into a fresh guest directory.
 5. It uploads the event, initializes the result, and invokes `runtime.command` without a shell.
 6. It collects bounded logs and the JSON result, then destroys the VM using a cleanup context independent of the run context.
