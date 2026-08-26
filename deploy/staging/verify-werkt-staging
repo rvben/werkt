@@ -63,6 +63,15 @@ if [[ $authorized_status != 200 ]]; then
   exit 1
 fi
 
+session_status=$(request -o "$temporary_directory/session.json" -w '%{http_code}' \
+  http://127.0.0.1:8080/api/v1/auth/session)
+if [[ $session_status != 200 ]] \
+  || ! grep -Fq '"environment":"staging"' "$temporary_directory/session.json" \
+  || ! grep -Fq '"instance":"staging-control"' "$temporary_directory/session.json"; then
+  echo "operator scope is not staging/staging-control" >&2
+  exit 1
+fi
+
 recovery_json=$(runuser --user werkt --preserve-environment -- /usr/local/bin/werkt recovery verify)
 if [[ $recovery_json != *'"database": "ok"'* || $recovery_json != *'"artifactsVerified"'* ]]; then
   echo "database, vault, and artifact recovery verification failed" >&2

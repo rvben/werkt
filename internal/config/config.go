@@ -1,11 +1,21 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+)
+
+// TargetEnvironment and TargetInstance are optional deployment-target values
+// supplied through linker flags. Ordinary builds remain development-oriented;
+// target-bound builds use these values as defaults and reject conflicting
+// runtime overrides before serving traffic.
+var (
+	TargetEnvironment string
+	TargetInstance    string
 )
 
 type Config struct {
@@ -56,8 +66,8 @@ func Load() Config {
 		DatabaseURL:              env("WERKT_DATABASE_URL", "postgres://automations:automations@localhost:54329/automations?sslmode=disable"),
 		DataDir:                  env("WERKT_DATA_DIR", filepath.Join(".", "data")),
 		ListenAddress:            env("WERKT_LISTEN_ADDR", "127.0.0.1:8080"),
-		Environment:              env("WERKT_ENVIRONMENT", "development"),
-		Instance:                 os.Getenv("WERKT_INSTANCE"),
+		Environment:              env("WERKT_ENVIRONMENT", envValue(TargetEnvironment, "development")),
+		Instance:                 env("WERKT_INSTANCE", TargetInstance),
 		ManagementToken:          os.Getenv("WERKT_MANAGEMENT_TOKEN"),
 		ManagementReadToken:      os.Getenv("WERKT_MANAGEMENT_READ_TOKEN"),
 		ManagementOperateToken:   os.Getenv("WERKT_MANAGEMENT_OPERATE_TOKEN"),
@@ -92,6 +102,26 @@ func Load() Config {
 		HuskerProvisionTimeout:   durationEnv("WERKT_HUSKER_PROVISION_TIMEOUT", 2*time.Minute),
 		HuskerCleanupTimeout:     durationEnv("WERKT_HUSKER_CLEANUP_TIMEOUT", 30*time.Second),
 	}
+}
+
+// ValidateDeploymentTarget prevents a target-bound binary from presenting
+// itself as a different environment or instance because of configuration
+// drift. Untargeted development and release builds remain unrestricted.
+func ValidateDeploymentTarget(value Config) error {
+	if TargetEnvironment != "" && value.Environment != TargetEnvironment {
+		return fmt.Errorf("WERKT_ENVIRONMENT %q conflicts with build target %q", value.Environment, TargetEnvironment)
+	}
+	if TargetInstance != "" && value.Instance != TargetInstance {
+		return fmt.Errorf("WERKT_INSTANCE %q conflicts with build target %q", value.Instance, TargetInstance)
+	}
+	return nil
+}
+
+func envValue(value, fallback string) string {
+	if value != "" {
+		return value
+	}
+	return fallback
 }
 
 func csvEnv(key string) []string {

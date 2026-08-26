@@ -405,6 +405,9 @@ func serve(arguments []string) error {
 		return errors.New("workers must be at least 1")
 	}
 	configuration := config.Load()
+	if err := config.ValidateDeploymentTarget(configuration); err != nil {
+		return fmt.Errorf("validate deployment target: %w", err)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	store, err := openStore(ctx, configuration)

@@ -46,6 +46,12 @@ Create these root-owned files outside Git:
 | `/etc/werkt/husker_known_hosts` | `0644` | Pinned execution-host SSH key |
 | `/usr/local/sbin/verify-werkt-staging` | `0755`, owner `root` | Host-local authenticated deployment check |
 
+Keep `WERKT_ENVIRONMENT=staging` and `WERKT_INSTANCE=staging-control` from the
+example environment file. The protected workflow embeds those values as the
+staging artifact's fallback operator scope and refuses conflicting runtime
+overrides before opening the server. This makes a mislabeled control plane fail
+the installer's readiness window and recover the previous release automatically.
+
 Generate independent staging credentials. Keep the vault key outside database
 backups and never reuse production values:
 
@@ -143,11 +149,12 @@ the existing release and add the environment setting; older Werkt releases
 accept the pinned syntax, so the protected upgrade can adopt and execute it.
 
 Run the **Deploy staging** workflow manually. It verifies the current `main`,
-builds one immutable binary, checks its checksum on the control host, switches
-the managed symlink, and rolls back automatically unless `/readyz` reports the
-expected commit. The final smoke test confirms the workspace, authentication
-boundary, database readiness, build identity, retained artifact verification,
-and one attested canary execution.
+builds one immutable target-bound binary, checks its checksum on the control
+host, switches the managed symlink, and rolls back automatically unless
+`/readyz` reports the expected commit. The final smoke test confirms the exact
+`staging` / `staging-control` operator scope, workspace, authentication boundary,
+database readiness, build identity, retained artifact verification, and one
+attested canary execution.
 
 ## Backup and restore gate
 
