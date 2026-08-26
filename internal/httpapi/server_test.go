@@ -77,6 +77,9 @@ type fakeStore struct {
 	ingestedExternalID string
 	ingestedData       json.RawMessage
 	ingestedMetadata   map[string]any
+	runSummaries       []domain.RunSummary
+	listRunCursor      database.ListCursor
+	listRunLimit       int
 }
 
 type fakeArtifactVerifier struct {
@@ -209,8 +212,10 @@ func (s *fakeStore) EnqueueManualRun(_ context.Context, _ string, externalID, ex
 	return "run_manual", true, nil
 }
 
-func (s *fakeStore) ListRunsFiltered(context.Context, string, string, int) ([]domain.Run, error) {
-	return []domain.Run{}, nil
+func (s *fakeStore) ListRunSummariesPage(_ context.Context, _, _ string, cursor database.ListCursor, limit int) ([]domain.RunSummary, error) {
+	s.listRunCursor = cursor
+	s.listRunLimit = limit
+	return s.runSummaries, nil
 }
 
 func (s *fakeStore) GetRun(_ context.Context, runID string) (domain.Run, error) {
@@ -220,11 +225,11 @@ func (s *fakeStore) GetRun(_ context.Context, runID string) (domain.Run, error) 
 	return domain.Run{ID: runID, Status: domain.RunSucceeded}, nil
 }
 
-func (s *fakeStore) ListAuditEvents(context.Context, string, int) ([]database.AuditEvent, error) {
+func (s *fakeStore) ListAuditEventsPage(context.Context, database.AuditFilter, database.ListCursor, int) ([]database.AuditEvent, error) {
 	return []database.AuditEvent{}, nil
 }
 
-func (s *fakeStore) ListDeploymentsFiltered(context.Context, string, string, int) ([]domain.Deployment, error) {
+func (s *fakeStore) ListDeploymentsPage(context.Context, string, string, database.ListCursor, int) ([]domain.Deployment, error) {
 	return []domain.Deployment{{ID: "dep_example", Status: domain.DeploymentSucceeded}}, nil
 }
 
@@ -377,6 +382,21 @@ func TestWorkspaceServesEmbeddedAssetsWithoutExposingManagementToken(t *testing.
 	}
 }
 
+func TestAPIGuideMakesTheMachineContractHumanNavigable(t *testing.T) {
+	server := New(&fakeStore{}, ":0", "management-secret")
+	request := httptest.NewRequest(http.MethodGet, "/api/", nil)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.HasPrefix(response.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("status=%d content-type=%q body=%s", response.Code, response.Header().Get("Content-Type"), response.Body.String())
+	}
+	for _, marker := range []string{"Operate Werkt without guessing", "/api/openapi.yaml", "X-Werkt-Next-Cursor", "insufficient_scope"} {
+		if !strings.Contains(response.Body.String(), marker) {
+			t.Errorf("API guide omitted %q", marker)
+		}
+	}
+}
+
 func TestWorkspaceClientKeepsOperationalStateAuthoritative(t *testing.T) {
 	script, err := workspaceFiles.ReadFile("workspace/workspace.js")
 	if err != nil {
@@ -390,8 +410,9 @@ func TestWorkspaceClientKeepsOperationalStateAuthoritative(t *testing.T) {
 		"feedControllers[kind]?.abort()",
 		"detailRunsController?.abort()",
 		"deploymentPollController?.abort()",
+		"runPollController?.abort()",
 		"Promise.allSettled",
-		"Showing the latest",
+		"records loaded",
 		"window.addEventListener(\"popstate\"",
 		"data-relative-time",
 	} {
@@ -834,6 +855,83 @@ func TestManagementQueryValidation(t *testing.T) {
 	}
 }
 
+func TestScopedManagementTokensEnforceOperationBoundaries(t *testing.T) {
+	server := New(&fakeStore{}, ":0", "",
+		WithScopedManagementToken("reader", ScopeRead),
+		WithScopedManagementToken("operator", ScopeRead, ScopeOperate),
+	)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/automations", nil)
+	request.Header.Set("Authorization", "Bearer reader")
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("read status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPatch, "/api/v1/automations/example", strings.NewReader(`{"enabled":false}`))
+	request.Header.Set("Authorization", "Bearer reader")
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), `"code":"insufficient_scope"`) || !strings.Contains(response.Body.String(), `"requiredScope":"operate"`) {
+		t.Fatalf("read-only mutation status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPatch, "/api/v1/automations/example", strings.NewReader(`{"enabled":false}`))
+	request.Header.Set("Authorization", "Bearer operator")
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("operator mutation status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestRunListingUsesOpaqueCursorAndReturnsSummaryPage(t *testing.T) {
+	created := time.Date(2026, 8, 26, 18, 30, 0, 0, time.UTC)
+	store := &fakeStore{runSummaries: []domain.RunSummary{
+		{ID: "run-new", AutomationID: "example", RevisionID: "rev-a", Status: domain.RunSucceeded, Attempt: 1, MaxAttempts: 3, CreatedAt: created},
+		{ID: "run-old", AutomationID: "example", RevisionID: "rev-a", Status: domain.RunFailed, Attempt: 3, MaxAttempts: 3, CreatedAt: created.Add(-time.Minute)},
+	}}
+	server := New(store, ":0", "")
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/runs?limit=1", nil)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || store.listRunLimit != 2 {
+		t.Fatalf("status=%d requested limit=%d body=%s", response.Code, store.listRunLimit, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "run-old") || strings.Contains(response.Body.String(), `"logs"`) {
+		t.Fatalf("listing was not a one-item log-free summary: %s", response.Body.String())
+	}
+	cursor := response.Header().Get("X-Werkt-Next-Cursor")
+	if cursor == "" || !strings.Contains(response.Header().Get("Link"), `rel="next"`) {
+		t.Fatalf("pagination headers cursor=%q link=%q", cursor, response.Header().Get("Link"))
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/runs?limit=1&cursor="+cursor, nil)
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || store.listRunCursor.ID != "run-new" || !store.listRunCursor.CreatedAt.Equal(created) {
+		t.Fatalf("cursor status=%d parsed=%#v body=%s", response.Code, store.listRunCursor, response.Body.String())
+	}
+}
+
+func TestProblemsHaveStableCodeAndRequestID(t *testing.T) {
+	server := New(&fakeStore{}, ":0", "management-secret")
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil)
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	requestID := response.Header().Get("X-Request-ID")
+	if response.Code != http.StatusUnauthorized || requestID == "" {
+		t.Fatalf("status=%d request-id=%q", response.Code, response.Header().Get("X-Request-ID"))
+	}
+	if !strings.Contains(response.Body.String(), `"code":"authentication_required"`) || !strings.Contains(response.Body.String(), `"requestId":"`+requestID+`"`) || !strings.Contains(response.Body.String(), `"retryable":false`) {
+		t.Fatalf("problem body=%s", response.Body.String())
+	}
+}
+
 func TestOpenAPIContractIsPublicAndDocumentsManagementRoutes(t *testing.T) {
 	server := New(&fakeStore{}, ":0", "management-secret")
 	request := httptest.NewRequest(http.MethodGet, "/api/openapi.yaml", nil)
@@ -848,12 +946,18 @@ func TestOpenAPIContractIsPublicAndDocumentsManagementRoutes(t *testing.T) {
 	var document struct {
 		OpenAPI string                    `yaml:"openapi"`
 		Paths   map[string]map[string]any `yaml:"paths"`
+		Servers []struct {
+			URL string `yaml:"url"`
+		} `yaml:"servers"`
 	}
 	if err := yaml.Unmarshal(response.Body.Bytes(), &document); err != nil {
 		t.Fatalf("decode OpenAPI: %v", err)
 	}
 	if document.OpenAPI != "3.1.0" {
 		t.Fatalf("openapi = %q", document.OpenAPI)
+	}
+	if len(document.Servers) != 1 || document.Servers[0].URL != "/" {
+		t.Fatalf("servers = %#v, want one relative origin", document.Servers)
 	}
 	for _, path := range []string{
 		"/api/v1/automations", "/api/v1/automations/{automation}",

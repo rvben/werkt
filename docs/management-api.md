@@ -17,6 +17,8 @@ When OIDC is configured, choose **Connection** and continue with Authelia. Werkt
 
 The connection dialog retains bearer-token access as an explicit agent/troubleshooting fallback. That token is held in `sessionStorage`, is never rendered into the page or embedded asset, and is cleared when the browser tab closes.
 
+The top bar and every mutation confirmation show `WERKT_ENVIRONMENT`, `WERKT_INSTANCE`, and the attributed actor. This makes the operational target explicit before an operator pauses, rolls back, cancels, retries, or queues work. The workspace deliberately keeps secret and retention workflows API/CLI-only because they are safety-sensitive administrative operations; deployments are created by agents or the CLI and then monitored or recovered in the workspace.
+
 The workspace is a convenience for operators, not a requirement for automation or agent access. An API-only deployment remains fully supported.
 
 ## Authentication and attribution
@@ -28,7 +30,11 @@ Authorization: Bearer <token>
 X-Werkt-Actor: agent:operator
 ```
 
-`X-Werkt-Actor` is recorded in the audit trail but is attribution supplied by the authenticated caller, not a separate identity proof. If omitted, it is recorded as `api`. When `WERKT_MANAGEMENT_TOKEN` is empty, management authentication is disabled for local development and Werkt emits a startup warning. Werkt binds to `127.0.0.1:8080` by default; explicitly configure both a token and `WERKT_LISTEN_ADDR` before exposing it beyond the host.
+`X-Werkt-Actor` is recorded in the audit trail but is attribution supplied by the authenticated caller, not a separate identity proof. If omitted, it is recorded as `api`. When every full-access and scoped management token is empty, management authentication is disabled for local development and Werkt emits a startup warning. Werkt binds to `127.0.0.1:8080` by default; explicitly configure a token and `WERKT_LISTEN_ADDR` before exposing it beyond the host.
+
+For least privilege, configure scoped tokens instead of the legacy full-access token. `WERKT_MANAGEMENT_READ_TOKEN` grants reads; `WERKT_MANAGEMENT_OPERATE_TOKEN` adds pause/resume, rollback, and manual runs; `WERKT_MANAGEMENT_DEPLOY_TOKEN` adds deployment lifecycle; `WERKT_MANAGEMENT_SECRETS_TOKEN` adds secret lifecycle; and `WERKT_MANAGEMENT_RETENTION_TOKEN` adds retention plan/apply. Each non-read token also receives read access so its caller can verify outcomes. A valid token that lacks the required scope receives `403` with problem code `insufficient_scope` and the required scope in `context`.
+
+Every error response contains stable `code`, human-readable `message`, backwards-compatible `error`, `retryable`, and an `X-Request-ID` echoed as `requestId`. Some conflicts include machine-readable context such as the deployment, automation, revision, secret, or required scope.
 
 The embedded workspace may instead use the OIDC session cookie. Configure all of `WERKT_OIDC_ISSUER`, `WERKT_OIDC_CLIENT_ID`, `WERKT_OIDC_CLIENT_SECRET`, `WERKT_OIDC_REDIRECT_URL`, `WERKT_OIDC_ALLOWED_EMAILS`, and `WERKT_OIDC_SESSION_SECRET`. The issuer and redirect must use HTTPS, the session secret must be at least 32 bytes, and allowed emails are a comma-separated allowlist. Browser sessions default to 12 hours and can be adjusted with `WERKT_OIDC_SESSION_TTL`. OIDC discovery is retried on a later login if the provider is temporarily unavailable; bearer-token access remains available.
 
@@ -70,7 +76,7 @@ A new upload returns `202 Accepted`; an idempotent retry returns `200 OK` and th
 
 The lifecycle is `queued` → `validating` → optional `building` → optional `checking` → `activating` → `succeeded`. Any active stage can become `failed` or `cancelled`. The deployment detail includes ordered validation, build, check, and activation steps with bounded logs, errors, and timings. A successful response includes the automation, source content hash, immutable revision, and `provenance`: the signed artifact digest, effective digest-pinned images, signature algorithm, public key, and installation signing-key fingerprint. Revision activation, provenance persistence, and the transition to `succeeded` commit in the same database transaction.
 
-`GET /api/v1/deployments` returns newest first and accepts `automation`, `status`, and `limit` filters. Agents should poll the resource named by `Location` until `succeeded`, `failed`, or `cancelled`; the CLI implements this contract:
+`GET /api/v1/deployments` returns newest first and accepts `automation`, `status`, `limit`, and opaque `cursor` filters. When more history exists, the response includes `X-Werkt-Next-Cursor` and a relative `Link` with `rel="next"`. Agents should poll the resource named by `Location` until `succeeded`, `failed`, or `cancelled`; the CLI implements this contract:
 
 ```bash
 WERKT_API_URL=https://werkt.example \
@@ -148,6 +154,6 @@ Manual runs use the active immutable revision and the manifest's retry and concu
 
 ## Runs and audit history
 
-`GET /api/v1/runs` accepts `automation`, `status`, and `limit` filters. `limit` must be from 1 to 500. `GET /api/v1/runs/{id}` returns one run.
+`GET /api/v1/runs` accepts `automation`, `status`, `limit`, and opaque `cursor` filters. `limit` must be from 1 to 500. Listings return log-free summaries; `GET /api/v1/runs/{id}` returns the full event identity, sanitized logs, error, and structured result. A next page is advertised with `X-Werkt-Next-Cursor` and a relative `Link`.
 
-`GET /api/v1/audit` accepts `automation` and `limit`. Deployments, pause/resume changes, newly created manual runs, secret lifecycle changes, retention plans, and retention outcomes are recorded transactionally with their database state change. Idempotent no-ops do not create duplicate audit events.
+`GET /api/v1/audit` accepts `automation`, `action`, `actor`, RFC 3339 `since`/`until`, `limit`, and opaque `cursor`. Deployments, pause/resume changes, newly created manual runs, secret lifecycle changes, retention plans, and retention outcomes are recorded transactionally with their database state change. Idempotent no-ops do not create duplicate audit events.

@@ -12,6 +12,10 @@
   const diagnosisContent = document.querySelector("#diagnosis-content");
   const connectionState = document.querySelector("#connection-state");
   const connectionStateLabel = document.querySelector("#connection-state-label");
+  const operatorScope = document.querySelector("#operator-scope");
+  const scopeEnvironment = document.querySelector("#scope-environment");
+  const scopeInstance = document.querySelector("#scope-instance");
+  const scopeActor = document.querySelector("#scope-actor");
   const searchInput = document.querySelector("#automation-search");
   const globalSearch = document.querySelector("#global-search-control");
   const mobileSearchButton = document.querySelector("#mobile-search-button");
@@ -37,6 +41,9 @@
   const runTargetAutomation = document.querySelector("#run-target-automation");
   const runTargetRevision = document.querySelector("#run-target-revision");
   const runTargetLifecycle = document.querySelector("#run-target-lifecycle");
+  const runTargetEnvironment = document.querySelector("#run-target-environment");
+  const runTargetInstance = document.querySelector("#run-target-instance");
+  const runTargetActor = document.querySelector("#run-target-actor");
   const actionDialog = document.querySelector("#action-dialog");
   const actionForm = document.querySelector("#action-form");
   const actionTitle = document.querySelector("#action-dialog-title");
@@ -45,6 +52,9 @@
   const actionSubmit = document.querySelector("#action-submit");
   const actionDismiss = document.querySelector("#action-dismiss");
   const actionIconUse = document.querySelector("#action-icon-use");
+  const actionScopeEnvironment = document.querySelector("#action-scope-environment");
+  const actionScopeInstance = document.querySelector("#action-scope-instance");
+  const actionScopeActor = document.querySelector("#action-scope-actor");
   const receiptRegion = document.querySelector("#receipt-region");
   const toastRegion = document.querySelector("#toast-region");
 
@@ -63,14 +73,20 @@
   let detailRunsController = null;
   let deploymentPollRequest = 0;
   let deploymentPollController = null;
+  let runPollRequest = 0;
+  let runPollController = null;
   const feedRequests = {runs: 0, deployments: 0, audit: 0};
   const feedControllers = {runs: null, deployments: null, audit: null};
   const diagnosisModalQuery = window.matchMedia("(max-width: 74rem)");
 
   class APIError extends Error {
-    constructor(message, status) {
+    constructor(message, status, problem = {}) {
       super(message);
       this.status = status;
+      this.code = problem.code || "request_failed";
+      this.retryable = Boolean(problem.retryable);
+      this.requestId = problem.requestId || "";
+      this.context = problem.context || {};
     }
   }
 
@@ -78,7 +94,7 @@
 
   const state = {
     token: readToken(),
-    auth: {configured: false, authenticated: false, identity: null, csrfToken: ""},
+    auth: {configured: false, authenticated: false, identity: null, csrfToken: "", scope: {environment: "development", instance: location.host, actor: "connecting"}},
     automations: [],
     runs: [],
     deployments: [],
@@ -88,6 +104,7 @@
     selectedAutomation: "",
     selectedRun: null,
     selectedDeployment: null,
+    selectedAudit: null,
     diagnosisReturnFocus: null,
     diagnosisTab: "summary",
     view: "automations",
@@ -101,6 +118,7 @@
     pendingManualRun: null,
     feedErrors: {runs: "", deployments: "", audit: ""},
     feedLoading: {runs: true, deployments: true, audit: true},
+    feedNextCursor: {runs: "", deployments: "", audit: ""},
     detailRunsError: "",
   };
 
@@ -150,15 +168,43 @@
 
   function writeRoute(mode = "replace") {
     const url = new URL(location.href);
+    const existing = new URLSearchParams(url.search);
     const params = new URLSearchParams();
     if (state.view !== "automations") params.set("view", state.view);
     if (state.enabledFilter !== "all") params.set("enabled", state.enabledFilter);
     if (state.runStatusFilter !== "all") params.set("runStatus", state.runStatusFilter);
     if (state.deploymentStatusFilter !== "all") params.set("deploymentStatus", state.deploymentStatusFilter);
     if (state.query) params.set("q", state.query);
+    for (const key of ["run", "deployment", "audit", "tab"]) {
+      if (existing.has(key)) params.set(key, existing.get(key));
+    }
     url.search = params.toString();
     url.hash = state.selectedAutomation ? `/${encodeURIComponent(state.selectedAutomation)}` : "";
     history[mode === "push" ? "pushState" : "replaceState"](null, "", url);
+  }
+
+  function readDiagnosisRoute() {
+    const params = new URLSearchParams(location.search);
+    if (params.get("run")) return {kind: "run", id: params.get("run"), tab: params.get("tab") || "summary"};
+    if (params.get("deployment")) return {kind: "deployment", id: params.get("deployment")};
+    if (params.get("audit")) return {kind: "audit", id: params.get("audit")};
+    return null;
+  }
+
+  function writeDiagnosisRoute(kind = "", id = "", mode = "replace") {
+    const url = new URL(location.href);
+    ["run", "deployment", "audit", "tab"].forEach((key) => url.searchParams.delete(key));
+    if (kind && id) url.searchParams.set(kind, id);
+    if (kind === "run" && state.diagnosisTab !== "summary") url.searchParams.set("tab", state.diagnosisTab);
+    history[mode === "push" ? "pushState" : "replaceState"](null, "", url);
+  }
+
+  function openDiagnosisRoute() {
+    const route = readDiagnosisRoute();
+    if (!route) return;
+    if (route.kind === "run") openRun(route.id, ["summary", "logs", "output"].includes(route.tab) ? route.tab : "summary", false);
+    else if (route.kind === "deployment") openDeployment(route.id, false);
+    else openAudit(route.id, false);
   }
 
   function applyRouteState() {
@@ -172,12 +218,14 @@
     Object.assign(state, route);
     if (canonicalized) writeRoute();
     searchInput.value = state.query;
-    closeDiagnosis({restoreFocus: false});
+    closeDiagnosis({restoreFocus: false, syncRoute: false});
     if (state.selectedAutomation && state.selectedAutomation !== previousSelection && state.automations.some((item) => item.id === state.selectedAutomation)) {
       loadAutomation(state.selectedAutomation);
+      window.setTimeout(openDiagnosisRoute, 0);
       return;
     }
     render();
+    window.setTimeout(openDiagnosisRoute, 0);
   }
 
   function isAbort(error) {
@@ -197,10 +245,14 @@
 
   function recoveryGuidance(error) {
     if (error instanceof APIError) {
+      const request = error.requestId ? ` Request ID: ${error.requestId}.` : "";
+      if (error.code === "insufficient_scope") return `This token does not grant the required ${error.context.requiredScope || "operation"} scope. Connect with an appropriate scoped token or an OIDC operator session.${request}`;
+      if (error.code === "active_revision_changed") return `The active revision changed. Refresh the automation, review its new revision, and queue the run again.${request}`;
+      if (error.code === "deployment_source_unavailable") return `The retained deployment source was pruned, so this package cannot be retried. Upload the intended package as a new deployment.${request}`;
       if (error.status === 404) return "The management endpoint or requested resource was not found. Verify this server exposes the current management API, then retry.";
       if (error.status === 409) return "The resource changed while the request was in progress. Refresh and review the current state before retrying.";
-      if (error.status >= 500) return "The management API reported a server error. Verify the server is healthy, then retry.";
-      return "The management API rejected the request. Review Connection settings and retry.";
+      if (error.status >= 500) return `The management API reported a server error. Verify the server is healthy, then retry.${request}`;
+      return `The management API rejected the request. Review Connection settings and retry.${request}`;
     }
     if (error instanceof TypeError) return "Werkt could not reach the management API. Verify the server and network connection, then retry.";
     return "Retry the request. If it still fails, verify the server and Connection settings.";
@@ -232,7 +284,8 @@
     } else if (!["GET", "HEAD", "OPTIONS"].includes((options.method || "GET").toUpperCase()) && state.auth.csrfToken) {
       headers.set("X-Werkt-CSRF", state.auth.csrfToken);
     }
-    const response = await fetch(path, {...options, headers});
+    const {page = false, ...fetchOptions} = options;
+    const response = await fetch(path, {...fetchOptions, headers});
     const contentType = response.headers.get("Content-Type") || "";
     const body = contentType.includes("application/json") ? await response.json() : null;
     if (response.status === 401) {
@@ -243,8 +296,9 @@
       throw new AuthenticationRequired();
     }
     if (!response.ok) {
-      throw new APIError(body?.error || `Request failed with status ${response.status}`, response.status);
+      throw new APIError(body?.message || body?.error || `Request failed with status ${response.status}`, response.status, body || {});
     }
+    if (page) return {items: body, nextCursor: response.headers.get("X-Werkt-Next-Cursor") || ""};
     return body;
   }
 
@@ -258,11 +312,30 @@
         authenticated: Boolean(session.authenticated),
         identity: session.identity || null,
         csrfToken: session.csrfToken || "",
+        scope: session.scope || {environment: "development", instance: location.host, actor: "unknown"},
       };
     } catch (_) {
-      state.auth = {configured: false, authenticated: false, identity: null, csrfToken: ""};
+      state.auth = {configured: false, authenticated: false, identity: null, csrfToken: "", scope: {environment: "development", instance: location.host, actor: "unavailable"}};
     }
+    renderOperatorScope();
     renderConnectionAuth();
+  }
+
+  function currentScope() {
+    const scope = state.auth.scope || {};
+    return {
+      environment: scope.environment || "development",
+      instance: scope.instance || location.host,
+      actor: state.token ? "workspace:operator" : (scope.actor || "unknown"),
+    };
+  }
+
+  function renderOperatorScope() {
+    const scope = currentScope();
+    scopeEnvironment.textContent = scope.environment;
+    scopeInstance.textContent = scope.instance;
+    scopeActor.textContent = scope.actor;
+    operatorScope.title = `${scope.environment} · ${scope.instance} · ${scope.actor}`;
   }
 
   function identityLabel() {
@@ -345,9 +418,9 @@
         })
         : Promise.resolve();
       const feeds = await Promise.allSettled([
-        api(`/api/v1/runs?limit=${HISTORY_LIMIT}`, {signal}),
-        api(`/api/v1/deployments?limit=${HISTORY_LIMIT}`, {signal}),
-        api(`/api/v1/audit?limit=${HISTORY_LIMIT}`, {signal}),
+        api(`/api/v1/runs?limit=${HISTORY_LIMIT}`, {signal, page: true}),
+        api(`/api/v1/deployments?limit=${HISTORY_LIMIT}`, {signal, page: true}),
+        api(`/api/v1/audit?limit=${HISTORY_LIMIT}`, {signal, page: true}),
       ]);
       if (request !== workspaceRequest) return;
       for (const [index, kind] of ["runs", "deployments", "audit"].entries()) {
@@ -355,13 +428,15 @@
         const result = feeds[index];
         state.feedLoading[kind] = false;
         if (result.status === "fulfilled") {
-          state[kind] = result.value;
+          state[kind] = result.value.items;
+          state.feedNextCursor[kind] = result.value.nextCursor;
           state.feedErrors[kind] = "";
         } else if (!isAbort(result.reason)) {
           state.feedErrors[kind] = feedMessage(kind, result.reason);
         }
       }
       render();
+      openDiagnosisRoute();
       await detailPromise;
     } catch (error) {
       if (!isAbort(error) && !(error instanceof AuthenticationRequired)) renderFatalError(error);
@@ -383,7 +458,7 @@
     const encoded = encodeURIComponent(automationID);
     const [detailResult, runsResult] = await Promise.allSettled([
       api(`/api/v1/automations/${encoded}`, {signal}),
-      api(`/api/v1/runs?automation=${encoded}&limit=${HISTORY_LIMIT}`, {signal}),
+      api(`/api/v1/runs?automation=${encoded}&limit=${HISTORY_LIMIT}`, {signal, page: true}),
     ]);
     if (request !== detailRequest || automationID !== state.selectedAutomation) return;
     if (detailResult.status === "rejected") throw detailResult.reason;
@@ -391,7 +466,7 @@
     if (runsRequest !== detailRunsRequest) {
       // A newer explicit run-history refresh owns this surface.
     } else if (runsResult.status === "fulfilled") {
-      state.detailRuns = runsResult.value;
+      state.detailRuns = runsResult.value.items;
       state.detailRunsError = "";
     } else if (!isAbort(runsResult.reason)) {
       state.detailRunsError = detailRunsMessage(runsResult.reason);
@@ -422,6 +497,7 @@
   }
 
   function render() {
+    renderOperatorScope();
     renderNavigation();
     renderInventory();
     renderCurrentView();
@@ -480,7 +556,9 @@
       ? `Showing ${automations.length} ${automations.length === 1 ? "automation" : "automations"} needing attention in ${projectCount} ${projectCount === 1 ? "project" : "projects"}.`
       : `Showing ${automations.length} of ${state.automations.length} automations.`;
     if (!automations.length) {
-      inventoryList.innerHTML = `<div class="empty-state"><div class="empty-state-inner"><span class="empty-symbol">${icon("search")}</span><h2>No matching automations</h2><p>Adjust the search or lifecycle filter to restore the inventory.</p></div></div>`;
+      inventoryList.innerHTML = state.automations.length
+        ? `<div class="empty-state"><div class="empty-state-inner"><span class="empty-symbol">${icon("search")}</span><h2>No matching automations</h2><p>Adjust the search or lifecycle filter to restore the inventory.</p></div></div>`
+        : `<div class="empty-state"><div class="empty-state-inner"><span class="empty-symbol">${icon("bolt")}</span><h2>No automations yet</h2><p>Deploy a package to create the first immutable revision.</p></div></div>`;
       return;
     }
     const projects = new Map();
@@ -577,7 +655,7 @@
         </section>
 
         <section class="workspace-section" aria-labelledby="revisions-heading">
-          <div class="section-heading"><div><h3 id="revisions-heading">Latest revisions</h3><p>${Math.min(detail.revisions?.length || 0, 8)} most recent immutable revisions</p></div></div>
+          <div class="section-heading"><div><h3 id="revisions-heading">Latest revisions</h3><p>${revisionCountLabel(Math.min(detail.revisions?.length || 0, 8))}</p></div></div>
           ${renderRevisions(detail.revisions || [])}
         </section>
       </div>
@@ -602,8 +680,8 @@
   }
 
   function renderRunsTable(runs, compact = false) {
-    if (!runs.length) return `<div class="empty-state"><div class="empty-state-inner"><h2>No runs yet</h2><p>Trigger this automation or queue a manual diagnostic run to see execution history.</p></div></div>`;
-    return `<table class="data-table"><thead><tr><th class="status-column">Status</th>${compact ? "" : "<th>Automation</th>"}<th>Started</th><th class="hide-tablet">Attempt</th><th class="wide">Run ID</th><th class="hide-tablet">Duration</th></tr></thead><tbody>${runs.map((run) => `<tr><td data-label="Status"><span class="status-badge status-${statusClass(run.status)}">${escapeHTML(capitalize(run.status))}</span></td>${compact ? "" : `<td data-label="Automation"><button class="table-button" type="button" data-automation="${escapeHTML(run.automationId)}">${escapeHTML(run.automationId)}</button></td>`}<td data-label="Started" class="tabular">${relativeTimeElement(run.startedAt || run.createdAt)}</td><td data-label="Attempt" class="hide-tablet">${escapeHTML(`${run.attempt}/${run.maxAttempts}`)}</td><td data-label="Run"><button class="table-button" type="button" data-run="${escapeHTML(run.id)}" aria-label="Diagnose run ${escapeHTML(run.id)}"><span class="mono">${escapeHTML(shortID(run.id, compact ? 18 : 26))}</span></button></td><td data-label="Duration" class="hide-tablet tabular">${escapeHTML(runDuration(run))}</td></tr>`).join("")}</tbody></table>`;
+    if (!runs.length) return `<div class="empty-state"><div class="empty-state-inner"><h2>No runs yet</h2><p>${compact ? "Trigger this automation" : "Trigger an automation"} or queue a manual diagnostic run to see execution history.</p></div></div>`;
+    return `<table class="data-table runs-table"><thead><tr><th class="status-column">Status</th>${compact ? "" : "<th>Automation</th>"}<th>Started</th><th class="hide-tablet">Attempt</th><th class="wide">Run ID</th><th class="hide-tablet">Duration</th><th class="run-actions-column"><span class="sr-only">Run actions</span></th></tr></thead><tbody>${runs.map((run) => `<tr><td data-label="Status"><span class="status-badge status-${statusClass(run.status)}">${escapeHTML(capitalize(run.status))}</span></td>${compact ? "" : `<td data-label="Automation"><button class="table-button" type="button" data-automation="${escapeHTML(run.automationId)}">${escapeHTML(run.automationId)}</button></td>`}<td data-label="Started" class="tabular">${relativeTimeElement(run.startedAt || run.createdAt)}</td><td data-label="Attempt" class="hide-tablet">${escapeHTML(`${run.attempt}/${run.maxAttempts}`)}</td><td data-label="Run"><button class="table-button" type="button" data-run="${escapeHTML(run.id)}" aria-label="Inspect run ${escapeHTML(run.id)}"><span class="mono">${escapeHTML(shortID(run.id, compact ? 18 : 26))}</span></button></td><td data-label="Duration" class="hide-tablet tabular">${escapeHTML(runDuration(run))}</td><td data-label="Actions" class="run-actions-column"><button class="button button-quiet button-compact" type="button" data-run-logs="${escapeHTML(run.id)}" aria-label="View logs for run ${escapeHTML(run.id)}">View logs</button></td></tr>`).join("")}</tbody></table>`;
   }
 
   function renderRevisions(revisions) {
@@ -611,9 +689,13 @@
     return `<div class="revision-list">${revisions.slice(0, 8).map((revision) => `<div class="revision-row"><strong class="mono">${escapeHTML(shortID(revision.id, 18))}${revision.active ? " · active" : ""}</strong><span class="mono" title="Source content SHA-256 · ${escapeHTML(revision.contentHash)}">${escapeHTML(shortID(revision.contentHash, 16))}</span><span class="mono" title="${escapeHTML(revision.provenance?.artifactDigest || "Unattested artifact")}">${revision.provenance ? `Attested · ${escapeHTML(shortID(revision.provenance.artifactDigest, 17))}` : "Unattested"}</span><span class="tabular">${escapeHTML(formatDate(revision.createdAt))}</span><span class="revision-action">${revision.active ? '<span class="muted-value">Current</span>' : `<button class="button button-quiet button-compact" type="button" data-rollback-revision="${escapeHTML(revision.id)}" ${state.mutating ? "disabled" : ""}>${icon("rollback")}Roll back</button>`}</span></div>`).join("")}</div>`;
   }
 
+  function revisionCountLabel(count) {
+    return `${count} most recent immutable ${count === 1 ? "revision" : "revisions"}`;
+  }
+
   function renderGlobalRuns() {
     const runs = state.runStatusFilter === "all" ? state.runs : state.runs.filter((run) => run.status === state.runStatusFilter);
-    workspaceContent.innerHTML = `<section class="global-view"><header class="global-view-header"><div><h1>Runs</h1><p>Up to ${HISTORY_LIMIT} recent runs across every automation. ${escapeHTML(historyScope(state.runs.length))}. Open a run to inspect attempts, logs, and structured output.</p></div><div class="global-toolbar"><label class="sr-only" for="run-status-filter">Filter runs by status</label><select class="select-control" id="run-status-filter"><option value="all">All statuses</option>${["queued", "running", "succeeded", "failed"].map((status) => `<option value="${status}"${state.runStatusFilter === status ? " selected" : ""}>${capitalize(status)}</option>`).join("")}</select></div></header>${feedNotice("runs")}${state.feedLoading.runs && !runs.length ? "" : renderRunsTable(runs)}</section>`;
+    workspaceContent.innerHTML = `<section class="global-view"><header class="global-view-header"><div><h1>Runs</h1><p>Recent runs across every automation. ${escapeHTML(historyScope(state.runs.length))}. Open a run to inspect attempts, logs, and structured output.</p></div><div class="global-toolbar"><label class="sr-only" for="run-status-filter">Filter runs by status</label><select class="select-control" id="run-status-filter"><option value="all">All statuses</option>${["queued", "running", "succeeded", "failed"].map((status) => `<option value="${status}"${state.runStatusFilter === status ? " selected" : ""}>${capitalize(status)}</option>`).join("")}</select></div></header>${feedNotice("runs")}${state.feedLoading.runs && !runs.length ? "" : renderRunsTable(runs)}${feedFooter("runs")}</section>`;
   }
 
   function renderGlobalDeployments() {
@@ -625,7 +707,7 @@
         return deployment.status === state.deploymentStatusFilter;
       });
     const activeCount = state.deployments.filter((deployment) => !deployment.finishedAt).length;
-    workspaceContent.innerHTML = `<section class="global-view"><header class="global-view-header"><div><h1>Deployments</h1><p>Up to ${HISTORY_LIMIT} recent package promotions across every automation. ${escapeHTML(historyScope(state.deployments.length))}.${activeCount ? ` ${activeCount} ${activeCount === 1 ? "deployment is" : "deployments are"} still in progress.` : ""}</p></div><div class="global-toolbar"><label class="sr-only" for="deployment-status-filter">Filter deployments by status</label><select class="select-control" id="deployment-status-filter"><option value="all">All statuses</option>${["in-progress", "succeeded", "failed"].map((status) => `<option value="${status}"${state.deploymentStatusFilter === status ? " selected" : ""}>${status === "in-progress" ? "In progress" : status === "failed" ? "Failed or cancelled" : "Succeeded"}</option>`).join("")}</select></div></header>${feedNotice("deployments")}${state.feedLoading.deployments && !deployments.length ? "" : renderDeploymentsTable(deployments)}</section>`;
+    workspaceContent.innerHTML = `<section class="global-view"><header class="global-view-header"><div><h1>Deployments</h1><p>Recent package promotions across every automation. ${escapeHTML(historyScope(state.deployments.length))}.${activeCount ? ` ${activeCount} ${activeCount === 1 ? "deployment is" : "deployments are"} still in progress.` : ""}</p></div><div class="global-toolbar"><label class="sr-only" for="deployment-status-filter">Filter deployments by status</label><select class="select-control" id="deployment-status-filter"><option value="all">All statuses</option>${["in-progress", "succeeded", "failed"].map((status) => `<option value="${status}"${state.deploymentStatusFilter === status ? " selected" : ""}>${status === "in-progress" ? "In progress" : status === "failed" ? "Failed or cancelled" : "Succeeded"}</option>`).join("")}</select></div></header>${feedNotice("deployments")}${state.feedLoading.deployments && !deployments.length ? "" : renderDeploymentsTable(deployments)}${feedFooter("deployments")}</section>`;
   }
 
   function renderDeploymentsTable(deployments) {
@@ -634,22 +716,30 @@
   }
 
   function renderGlobalAudit() {
-    workspaceContent.innerHTML = `<section class="global-view"><header class="global-view-header"><div><h1>Audit</h1><p>Up to ${HISTORY_LIMIT} recent lifecycle changes attributed through the management API. ${escapeHTML(historyScope(state.audit.length))}.</p></div></header>${feedNotice("audit")}${state.feedLoading.audit && !state.audit.length ? "" : renderAuditTable(state.audit)}</section>`;
+    workspaceContent.innerHTML = `<section class="global-view"><header class="global-view-header"><div><h1>Audit</h1><p>Recent lifecycle changes attributed through the management API. ${escapeHTML(historyScope(state.audit.length))}. Open an event for its exact timestamp and recorded context.</p></div></header>${feedNotice("audit")}${state.feedLoading.audit && !state.audit.length ? "" : renderAuditTable(state.audit)}${feedFooter("audit")}</section>`;
   }
 
   function renderAuditTable(events) {
     if (!events.length) return `<div class="empty-state"><div class="empty-state-inner"><h2>No audit activity yet</h2><p>Deployments and management mutations will appear here with actor attribution.</p></div></div>`;
-    return `<table class="data-table"><thead><tr><th class="wide">Action</th><th>Automation</th><th>Actor</th><th>When</th></tr></thead><tbody>${events.map((event) => `<tr><td data-label="Action">${escapeHTML(humanizeAction(event.action))}</td><td data-label="Automation"><button class="table-button" type="button" data-automation="${escapeHTML(event.automationId)}"><span class="mono">${escapeHTML(event.automationId)}</span></button></td><td data-label="Actor">${escapeHTML(event.actor)}</td><td data-label="When" class="tabular">${relativeTimeElement(event.createdAt)}</td></tr>`).join("")}</tbody></table>`;
+    return `<table class="data-table"><thead><tr><th class="wide">Action</th><th>Automation</th><th>Actor</th><th>When</th><th class="action-column"><span class="sr-only">Open</span></th></tr></thead><tbody>${events.map((event) => `<tr><td data-label="Action"><button class="table-button" type="button" data-audit="${escapeHTML(event.id)}">${escapeHTML(humanizeAction(event.action))}</button></td><td data-label="Automation"><button class="table-button" type="button" data-automation="${escapeHTML(event.automationId)}"><span class="mono">${escapeHTML(event.automationId)}</span></button></td><td data-label="Actor">${escapeHTML(event.actor)}</td><td data-label="When" class="tabular">${relativeTimeElement(event.createdAt)}</td><td class="action-column"><button class="icon-button" type="button" data-audit="${escapeHTML(event.id)}" aria-label="Inspect audit event ${escapeHTML(event.id)}">${icon("chevron")}</button></td></tr>`).join("")}</tbody></table>`;
   }
 
-  async function openRun(runID) {
+  function feedFooter(kind) {
+    if (!state.feedNextCursor[kind]) return "";
+    return `<div class="feed-footer"><button class="button button-quiet" type="button" data-load-more="${kind}" ${state.feedLoading[kind] ? "disabled" : ""}>${state.feedLoading[kind] ? "Loading…" : "Load older records"}</button></div>`;
+  }
+
+  async function openRun(runID, initialTab = "summary", pushRoute = true) {
     const request = ++diagnosisRequest;
     diagnosisController?.abort();
     diagnosisController = new AbortController();
     deploymentPollRequest += 1;
     deploymentPollController?.abort();
+    runPollRequest += 1;
+    runPollController?.abort();
     state.selectedDeployment = null;
     state.selectedRun = null;
+    state.selectedAudit = null;
     state.diagnosisReturnFocus = document.activeElement;
     diagnosisPane.hidden = false;
     shell.classList.add("has-diagnosis");
@@ -659,7 +749,8 @@
       const run = await api(`/api/v1/runs/${encodeURIComponent(runID)}`, {signal: diagnosisController.signal});
       if (request !== diagnosisRequest) return;
       state.selectedRun = run;
-      state.diagnosisTab = "summary";
+      state.diagnosisTab = initialTab;
+      if (pushRoute) writeDiagnosisRoute("run", run.id, "push");
       renderDiagnosis(true);
     } catch (error) {
       if (!isAbort(error) && !(error instanceof AuthenticationRequired)) {
@@ -668,14 +759,17 @@
     }
   }
 
-  async function openDeployment(deploymentID) {
+  async function openDeployment(deploymentID, pushRoute = true) {
     const request = ++diagnosisRequest;
     diagnosisController?.abort();
     diagnosisController = new AbortController();
     deploymentPollRequest += 1;
     deploymentPollController?.abort();
+    runPollRequest += 1;
+    runPollController?.abort();
     state.selectedDeployment = null;
     state.selectedRun = null;
+    state.selectedAudit = null;
     state.diagnosisReturnFocus = document.activeElement;
     diagnosisPane.hidden = false;
     shell.classList.add("has-diagnosis");
@@ -685,6 +779,7 @@
       const deployment = await api(`/api/v1/deployments/${encodeURIComponent(deploymentID)}`, {signal: diagnosisController.signal});
       if (request !== diagnosisRequest) return;
       state.selectedDeployment = deployment;
+      if (pushRoute) writeDiagnosisRoute("deployment", deployment.id, "push");
       renderDeploymentDiagnosis(true);
     } catch (error) {
       if (!isAbort(error) && !(error instanceof AuthenticationRequired)) {
@@ -693,16 +788,42 @@
     }
   }
 
-  function closeDiagnosis({restoreFocus = true} = {}) {
+  function openAudit(auditID, pushRoute = true) {
+    const audit = state.audit.find((event) => event.id === auditID);
+    if (!audit) {
+      showToast("That audit event is no longer in the loaded history. Refresh Audit and try again.", true);
+      return;
+    }
+    deploymentPollRequest += 1;
+    deploymentPollController?.abort();
+    runPollRequest += 1;
+    runPollController?.abort();
+    state.selectedRun = null;
+    state.selectedDeployment = null;
+    state.selectedAudit = audit;
+    if (pushRoute) writeDiagnosisRoute("audit", audit.id, "push");
+    state.diagnosisReturnFocus = document.activeElement;
+    diagnosisPane.hidden = false;
+    shell.classList.add("has-diagnosis");
+    diagnosisContent.innerHTML = `<div class="diagnosis-header"><div class="diagnosis-header-top"><h2 id="diagnosis-title">Audit event</h2><button class="icon-button" type="button" data-close-diagnosis aria-label="Close audit event">${icon("close")}</button></div><div class="diagnosis-run"><span class="status-badge status-active">Recorded</span><code title="${escapeHTML(audit.id)}">${escapeHTML(audit.id)}</code></div><p class="diagnosis-meta"><span>${escapeHTML(humanizeAction(audit.action))}</span><span>${escapeHTML(formatDate(audit.createdAt))}</span></p></div><div class="diagnosis-body"><dl class="diagnosis-facts"><dt>Action</dt><dd class="mono">${escapeHTML(audit.action)}</dd><dt>Automation</dt><dd class="mono">${escapeHTML(audit.automationId || "—")}</dd><dt>Actor</dt><dd class="mono">${escapeHTML(audit.actor)}</dd><dt>Recorded</dt><dd class="tabular">${escapeHTML(formatDate(audit.createdAt))}</dd></dl><h3>Recorded context</h3><pre class="code-block">${escapeHTML(prettyJSON(audit.details) || "No additional context was recorded.")}</pre></div>`;
+    syncDiagnosisModality();
+    diagnosisContent.querySelector("[data-close-diagnosis]")?.focus();
+  }
+
+  function closeDiagnosis({restoreFocus = true, syncRoute = true} = {}) {
     diagnosisRequest += 1;
     diagnosisController?.abort();
     deploymentPollRequest += 1;
     deploymentPollController?.abort();
+    runPollRequest += 1;
+    runPollController?.abort();
     diagnosisPane.hidden = true;
     shell.classList.remove("has-diagnosis");
     syncDiagnosisModality();
     state.selectedRun = null;
     state.selectedDeployment = null;
+    state.selectedAudit = null;
+    if (syncRoute) writeDiagnosisRoute();
     const returnFocus = state.diagnosisReturnFocus;
     state.diagnosisReturnFocus = null;
     if (!restoreFocus) return;
@@ -734,7 +855,7 @@
     if (!run) return;
     const tabs = ["summary", "logs", "output"];
     const activeTab = state.diagnosisTab;
-    diagnosisContent.innerHTML = `<div class="diagnosis-header"><div class="diagnosis-header-top"><h2 id="diagnosis-title">Run diagnosis</h2><button class="icon-button" type="button" data-close-diagnosis aria-label="Close run diagnosis">${icon("close")}</button></div><div class="diagnosis-run"><span class="status-badge status-${statusClass(run.status)}">${escapeHTML(capitalize(run.status))}</span><code title="${escapeHTML(run.id)}">${escapeHTML(run.id)}</code></div><p class="diagnosis-meta"><span>${escapeHTML(run.automationId)}</span><span>${escapeHTML(runDuration(run))}</span><span>attempt ${escapeHTML(`${run.attempt}/${run.maxAttempts}`)}</span></p><div class="diagnosis-tabs" role="tablist" aria-label="Run detail">${tabs.map((tab) => `<button id="diagnosis-tab-${tab}" class="tab-button" type="button" role="tab" data-diagnosis-tab="${tab}" aria-controls="diagnosis-panel-${tab}" aria-selected="${activeTab === tab}" tabindex="${activeTab === tab ? "0" : "-1"}">${capitalize(tab)}</button>`).join("")}</div></div><div class="diagnosis-body">${renderRunFailure(run)}${tabs.map((tab) => `<div id="diagnosis-panel-${tab}" role="tabpanel" aria-labelledby="diagnosis-tab-${tab}" tabindex="0" ${activeTab === tab ? "" : "hidden"}>${activeTab === tab ? diagnosisTabContent(run) : ""}</div>`).join("")}</div>`;
+    diagnosisContent.innerHTML = `<div class="diagnosis-header"><div class="diagnosis-header-top"><h2 id="diagnosis-title">Run diagnosis</h2><button class="icon-button" type="button" data-close-diagnosis aria-label="Close run diagnosis">${icon("close")}</button></div><div class="diagnosis-run"><span class="status-badge status-${statusClass(run.status)}" data-run-status>${escapeHTML(capitalize(run.status))}</span><code title="${escapeHTML(run.id)}">${escapeHTML(run.id)}</code></div><p class="diagnosis-meta"><span>${escapeHTML(run.automationId)}</span><span data-run-duration>${escapeHTML(runDuration(run))}</span><span>attempt <span data-run-attempt>${escapeHTML(`${run.attempt}/${run.maxAttempts}`)}</span></span></p><div class="diagnosis-tabs" role="tablist" aria-label="Run detail">${tabs.map((tab) => `<button id="diagnosis-tab-${tab}" class="tab-button" type="button" role="tab" data-diagnosis-tab="${tab}" aria-controls="diagnosis-panel-${tab}" aria-selected="${activeTab === tab}" tabindex="${activeTab === tab ? "0" : "-1"}">${capitalize(tab)}</button>`).join("")}</div></div><div class="diagnosis-body">${renderRunFailure(run)}${tabs.map((tab) => `<div id="diagnosis-panel-${tab}" role="tabpanel" aria-labelledby="diagnosis-tab-${tab}" tabindex="0" ${activeTab === tab ? "" : "hidden"}>${activeTab === tab ? diagnosisTabContent(run) : ""}</div>`).join("")}</div>`;
     if (focusPanel) diagnosisContent.querySelector("[data-close-diagnosis]").focus();
   }
 
@@ -743,6 +864,20 @@
     if (!deployment) return;
     diagnosisContent.innerHTML = `<div class="diagnosis-header"><div class="diagnosis-header-top"><h2 id="diagnosis-title">Deployment details</h2><button class="icon-button" type="button" data-close-diagnosis aria-label="Close deployment details">${icon("close")}</button></div><div class="diagnosis-run"><span class="status-badge status-${statusClass(deployment.status)}" data-deployment-status>${escapeHTML(capitalize(deployment.status))}</span><code title="${escapeHTML(deployment.id)}">${escapeHTML(deployment.id)}</code></div><p class="diagnosis-meta"><span>${escapeHTML(deployment.automationId || "Manifest not validated yet")}</span><span data-deployment-duration>${escapeHTML(deploymentDuration(deployment))}</span><span>${escapeHTML(deployment.actor)}</span></p><div data-deployment-actions>${deploymentActions(deployment)}</div></div><div class="diagnosis-body">${deploymentDiagnosisBody(deployment)}</div>`;
     if (focusPanel) diagnosisContent.querySelector("[data-close-diagnosis]").focus();
+  }
+
+  function updateRunDiagnosis(run) {
+    const status = diagnosisContent.querySelector("[data-run-status]");
+    if (!status) {
+      renderDiagnosis();
+      return;
+    }
+    status.className = `status-badge status-${statusClass(run.status)}`;
+    status.textContent = capitalize(run.status);
+    diagnosisContent.querySelector("[data-run-duration]").textContent = runDuration(run);
+    diagnosisContent.querySelector("[data-run-attempt]").textContent = `${run.attempt}/${run.maxAttempts}`;
+    const body = diagnosisContent.querySelector(".diagnosis-body");
+    if (!body.contains(document.activeElement)) body.innerHTML = `${renderRunFailure(run)}${["summary", "logs", "output"].map((tab) => `<div id="diagnosis-panel-${tab}" role="tabpanel" aria-labelledby="diagnosis-tab-${tab}" tabindex="0" ${state.diagnosisTab === tab ? "" : "hidden"}>${state.diagnosisTab === tab ? diagnosisTabContent(run) : ""}</div>`).join("")}`;
   }
 
   function deploymentActions(deployment) {
@@ -786,6 +921,7 @@
 
   function selectDiagnosisTab(tab, moveFocus = true) {
     state.diagnosisTab = tab;
+    if (state.selectedRun) writeDiagnosisRoute("run", state.selectedRun.id);
     renderDiagnosis();
     if (moveFocus) diagnosisContent.querySelector(`[data-diagnosis-tab="${tab}"]`)?.focus();
   }
@@ -903,6 +1039,10 @@
     runTargetAutomation.textContent = automationID;
     runTargetRevision.textContent = detail.activeRevisionId;
     runTargetLifecycle.textContent = detail.enabled ? "Active" : "Paused · manual runs remain available";
+    const scope = currentScope();
+    runTargetEnvironment.textContent = scope.environment;
+    runTargetInstance.textContent = scope.instance;
+    runTargetActor.textContent = scope.actor;
     runPayload.value = sourceRunID
       ? `{\n  "reason": "diagnose ${sourceRunID}"\n}`
       : '{\n  "reason": "operator diagnostic"\n}';
@@ -973,6 +1113,10 @@
   function openAction(action) {
     state.pendingAction = action;
     actionError.textContent = "";
+    const scope = currentScope();
+    actionScopeEnvironment.textContent = scope.environment;
+    actionScopeInstance.textContent = scope.instance;
+    actionScopeActor.textContent = scope.actor;
     if (action.kind === "rollback") {
       actionIconUse.setAttribute("href", "#icon-rollback");
       actionTitle.textContent = "Roll back revision?";
@@ -1070,7 +1214,9 @@
   }
 
   async function refreshDeploymentLists() {
-    state.deployments = await api(`/api/v1/deployments?limit=${HISTORY_LIMIT}`);
+    const page = await api(`/api/v1/deployments?limit=${HISTORY_LIMIT}`, {page: true});
+    state.deployments = page.items;
+    state.feedNextCursor.deployments = page.nextCursor;
     if (state.view === "deployments") renderGlobalDeployments();
   }
 
@@ -1086,9 +1232,10 @@
     state.feedLoading[kind] = true;
     render();
     try {
-      const values = await api(paths[kind], {signal: feedControllers[kind].signal});
+      const page = await api(paths[kind], {signal: feedControllers[kind].signal, page: true});
       if (request !== feedRequests[kind]) return;
-      state[kind] = values;
+      state[kind] = page.items;
+      state.feedNextCursor[kind] = page.nextCursor;
       state.feedErrors[kind] = "";
       showToast(`${capitalize(kind)} refreshed.`);
     } catch (error) {
@@ -1100,6 +1247,29 @@
     render();
   }
 
+  async function loadMore(kind) {
+    const cursor = state.feedNextCursor[kind];
+    if (!cursor || state.feedLoading[kind]) return;
+    const paths = {
+      runs: "/api/v1/runs",
+      deployments: "/api/v1/deployments",
+      audit: "/api/v1/audit",
+    };
+    state.feedLoading[kind] = true;
+    render();
+    try {
+      const page = await api(`${paths[kind]}?limit=${HISTORY_LIMIT}&cursor=${encodeURIComponent(cursor)}`, {page: true});
+      const known = new Set(state[kind].map((item) => item.id));
+      state[kind].push(...page.items.filter((item) => !known.has(item.id)));
+      state.feedNextCursor[kind] = page.nextCursor;
+    } catch (error) {
+      if (!(error instanceof AuthenticationRequired)) showToast(`Older ${kind} could not be loaded. ${recoveryGuidance(error)}`, true);
+    } finally {
+      state.feedLoading[kind] = false;
+      render();
+    }
+  }
+
   async function refreshDetailRuns() {
     const automationID = state.selectedAutomation;
     if (!automationID) return;
@@ -1107,9 +1277,9 @@
     detailRunsController?.abort();
     detailRunsController = new AbortController();
     try {
-      const runs = await api(`/api/v1/runs?automation=${encodeURIComponent(automationID)}&limit=${HISTORY_LIMIT}`, {signal: detailRunsController.signal});
+      const page = await api(`/api/v1/runs?automation=${encodeURIComponent(automationID)}&limit=${HISTORY_LIMIT}`, {signal: detailRunsController.signal, page: true});
       if (request !== detailRunsRequest || automationID !== state.selectedAutomation) return;
-      state.detailRuns = runs;
+      state.detailRuns = page.items;
       state.detailRunsError = "";
     } catch (error) {
       if (request !== detailRunsRequest || automationID !== state.selectedAutomation || isAbort(error)) return;
@@ -1167,7 +1337,7 @@
   }
 
   function historyScope(count) {
-    if (count >= HISTORY_LIMIT) return `Showing the latest ${HISTORY_LIMIT} records`;
+    if (count >= HISTORY_LIMIT) return `${count} records loaded`;
     return `${count} ${count === 1 ? "record" : "records"}`;
   }
 
@@ -1251,7 +1421,12 @@
   }
 
   function stepDuration(step) {
-    if (!step.startedAt) return "Not started";
+    if (!step.startedAt) {
+      if (step.status === "succeeded") return "Completed";
+      if (step.status === "failed") return "Failed before start was recorded";
+      if (step.status === "cancelled") return "Cancelled before start";
+      return "Not started";
+    }
     return deploymentDuration({createdAt: step.startedAt, finishedAt: step.finishedAt});
   }
 
@@ -1314,6 +1489,7 @@
       closeDiagnosis();
       writeRoute("push");
       render();
+      document.querySelector("#workspace-main")?.scrollTo({top: 0});
       document.querySelector("#workspace-main")?.focus();
       return;
     }
@@ -1330,10 +1506,14 @@
       renderInventory();
       return;
     }
+    const runLogsButton = event.target.closest("[data-run-logs]");
+    if (runLogsButton) { openRun(runLogsButton.dataset.runLogs, "logs"); return; }
     const runButton = event.target.closest("[data-run]");
     if (runButton) { openRun(runButton.dataset.run); return; }
     const deploymentButton = event.target.closest("[data-deployment]");
     if (deploymentButton) { openDeployment(deploymentButton.dataset.deployment); return; }
+    const auditButton = event.target.closest("[data-audit]");
+    if (auditButton) { openAudit(auditButton.dataset.audit); return; }
     const cancelDeploymentButton = event.target.closest("[data-cancel-deployment]");
     if (cancelDeploymentButton) { openAction({kind: "cancel", deploymentId: cancelDeploymentButton.dataset.cancelDeployment}); return; }
     const retryDeploymentButton = event.target.closest("[data-retry-deployment]");
@@ -1379,6 +1559,8 @@
     if (event.target.closest("[data-retry]")) { loadWorkspace(); }
     const retryFeed = event.target.closest("[data-retry-feed]");
     if (retryFeed) { refreshFeed(retryFeed.dataset.retryFeed); return; }
+    const loadMoreButton = event.target.closest("[data-load-more]");
+    if (loadMoreButton) { loadMore(loadMoreButton.dataset.loadMore); return; }
     if (event.target.closest("[data-retry-detail]")) { loadAutomation(state.selectedAutomation); return; }
     if (event.target.closest("[data-retry-detail-runs]")) { refreshDetailRuns(); }
     if (event.target.closest("[data-dismiss-receipt]")) { event.target.closest(".receipt")?.remove(); return; }
@@ -1404,6 +1586,7 @@
   mobileSearchButton.addEventListener("click", () => setMobileSearch(!globalSearch.classList.contains("is-open")));
   helpButton.addEventListener("click", () => openHelp());
   document.querySelector("#connection-button").addEventListener("click", () => openConnection());
+  operatorScope.addEventListener("click", () => openConnection());
   oidcLoginButton.addEventListener("click", () => {
     state.token = "";
     writeToken("");
@@ -1419,6 +1602,7 @@
       });
       if (!response.ok) throw new Error("logout failed");
       state.auth = {...state.auth, authenticated: false, identity: null, csrfToken: ""};
+      renderOperatorScope();
       renderConnectionAuth();
       connectionDialog.close();
       await loadWorkspace({preserveSelection: true});
@@ -1434,6 +1618,7 @@
     tokenInput.value = "";
     tokenInput.removeAttribute("aria-invalid");
     renderConnectionAuth();
+    renderOperatorScope();
     connectionDialog.close();
     loadWorkspace({preserveSelection: true});
   });
@@ -1467,6 +1652,7 @@
       return;
     }
     writeToken(state.token);
+    renderOperatorScope();
     connectionError.textContent = "";
     tokenInput.removeAttribute("aria-invalid");
     connectionDialog.close();
@@ -1592,6 +1778,33 @@
   }
 
   window.setTimeout(pollSelectedDeployment, 2000);
+
+  async function pollSelectedRun() {
+    const run = state.selectedRun;
+    if (run && !state.mutating && !["succeeded", "failed"].includes(run.status)) {
+      const request = ++runPollRequest;
+      runPollController = new AbortController();
+      try {
+        const refreshed = await api(`/api/v1/runs/${encodeURIComponent(run.id)}`, {signal: runPollController.signal});
+        if (request === runPollRequest && !diagnosisPane.hidden && !state.selectedDeployment && state.selectedRun?.id === run.id) {
+          state.selectedRun = refreshed;
+          const summary = state.runs.find((item) => item.id === run.id);
+          if (summary) Object.assign(summary, refreshed);
+          const detailSummary = state.detailRuns.find((item) => item.id === run.id);
+          if (detailSummary) Object.assign(detailSummary, refreshed);
+          updateRunDiagnosis(refreshed);
+          if (state.view === "runs") renderGlobalRuns();
+        }
+      } catch (error) {
+        if (request === runPollRequest && !isAbort(error) && !(error instanceof AuthenticationRequired)) {
+          showToast(`Run refresh failed. ${recoveryGuidance(error)}`, true);
+        }
+      }
+    }
+    window.setTimeout(pollSelectedRun, 2000);
+  }
+
+  window.setTimeout(pollSelectedRun, 2000);
 
   window.setInterval(refreshTemporalValues, 30000);
   document.addEventListener("visibilitychange", refreshTemporalValues);

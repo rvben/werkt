@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -47,6 +49,9 @@ type Server struct {
 	secrets          SecretManager
 	artifacts        ArtifactVerifier
 	managementToken  string
+	scopedTokens     []scopedManagementToken
+	environment      string
+	instance         string
 	browserAuth      *BrowserAuth
 	server           *http.Server
 }
@@ -60,10 +65,10 @@ type Store interface {
 	SetAutomationEnabled(context.Context, string, bool, string) (bool, error)
 	RollbackAutomation(context.Context, string, string, string) (bool, error)
 	EnqueueManualRun(context.Context, string, string, string, json.RawMessage, string) (string, bool, error)
-	ListRunsFiltered(context.Context, string, string, int) ([]domain.Run, error)
+	ListRunSummariesPage(context.Context, string, string, database.ListCursor, int) ([]domain.RunSummary, error)
 	GetRun(context.Context, string) (domain.Run, error)
-	ListAuditEvents(context.Context, string, int) ([]database.AuditEvent, error)
-	ListDeploymentsFiltered(context.Context, string, string, int) ([]domain.Deployment, error)
+	ListAuditEventsPage(context.Context, database.AuditFilter, database.ListCursor, int) ([]database.AuditEvent, error)
+	ListDeploymentsPage(context.Context, string, string, database.ListCursor, int) ([]domain.Deployment, error)
 	GetDeployment(context.Context, string) (domain.Deployment, error)
 	RequestDeploymentCancellation(context.Context, string, string) (domain.Deployment, error)
 	RetryDeployment(context.Context, string, string, string, string) (domain.Deployment, bool, error)
@@ -93,6 +98,21 @@ type ArtifactVerifier interface {
 
 type Option func(*Server)
 
+type ManagementScope string
+
+const (
+	ScopeRead      ManagementScope = "read"
+	ScopeOperate   ManagementScope = "operate"
+	ScopeDeploy    ManagementScope = "deploy"
+	ScopeSecrets   ManagementScope = "secrets"
+	ScopeRetention ManagementScope = "retention"
+)
+
+type scopedManagementToken struct {
+	digest [32]byte
+	scopes map[ManagementScope]struct{}
+}
+
 func WithDeploymentIntake(intake DeploymentIntake) Option {
 	return func(server *Server) { server.deploymentIntake = intake }
 }
@@ -113,8 +133,29 @@ func WithBrowserAuth(auth *BrowserAuth) Option {
 	return func(server *Server) { server.browserAuth = auth }
 }
 
+func WithOperatorScope(environment, instance string) Option {
+	return func(server *Server) {
+		server.environment = strings.TrimSpace(environment)
+		server.instance = strings.TrimSpace(instance)
+	}
+}
+
+func WithScopedManagementToken(token string, scopes ...ManagementScope) Option {
+	return func(server *Server) {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			return
+		}
+		allowed := make(map[ManagementScope]struct{}, len(scopes))
+		for _, scope := range scopes {
+			allowed[scope] = struct{}{}
+		}
+		server.scopedTokens = append(server.scopedTokens, scopedManagementToken{digest: sha256.Sum256([]byte(token)), scopes: allowed})
+	}
+}
+
 func New(store Store, address, managementToken string, options ...Option) *Server {
-	value := &Server{store: store, managementToken: managementToken}
+	value := &Server{store: store, managementToken: managementToken, environment: "development", instance: address}
 	for _, option := range options {
 		option(value)
 	}
@@ -126,35 +167,36 @@ func New(store Store, address, managementToken string, options ...Option) *Serve
 	mux.HandleFunc("GET /healthz", value.health)
 	mux.HandleFunc("GET /readyz", value.health)
 	mux.HandleFunc("GET /api/openapi.yaml", value.openAPI)
+	mux.HandleFunc("GET /api/{$}", value.apiGuide)
 	mux.HandleFunc("GET /api/v1/auth/session", value.browserSession)
 	mux.HandleFunc("GET /api/v1/auth/login", value.browserLogin)
 	mux.HandleFunc("GET /api/v1/auth/callback", value.browserCallback)
 	mux.HandleFunc("POST /api/v1/auth/logout", value.browserLogout)
 	mux.HandleFunc("POST /api/v1/hooks/{automation}/{trigger}", value.webhook)
 	mux.HandleFunc("POST /api/v1/email/{automation}/{trigger}", value.email)
-	mux.Handle("GET /api/v1/automations", value.requireManagementAuth(http.HandlerFunc(value.automations)))
-	mux.Handle("GET /api/v1/automations/{automation}", value.requireManagementAuth(http.HandlerFunc(value.automation)))
-	mux.Handle("PATCH /api/v1/automations/{automation}", value.requireManagementAuth(http.HandlerFunc(value.updateAutomation)))
-	mux.Handle("POST /api/v1/automations/{automation}/runs", value.requireManagementAuth(http.HandlerFunc(value.manualRun)))
-	mux.Handle("POST /api/v1/automations/{automation}/rollback", value.requireManagementAuth(http.HandlerFunc(value.rollbackAutomation)))
-	mux.Handle("GET /api/v1/runs", value.requireManagementAuth(http.HandlerFunc(value.runs)))
-	mux.Handle("GET /api/v1/runs/{run}", value.requireManagementAuth(http.HandlerFunc(value.run)))
-	mux.Handle("GET /api/v1/audit", value.requireManagementAuth(http.HandlerFunc(value.audit)))
-	mux.Handle("POST /api/v1/deployments", value.requireManagementAuth(http.HandlerFunc(value.createDeployment)))
-	mux.Handle("GET /api/v1/deployments", value.requireManagementAuth(http.HandlerFunc(value.deployments)))
-	mux.Handle("GET /api/v1/deployments/{deployment}", value.requireManagementAuth(http.HandlerFunc(value.deployment)))
-	mux.Handle("POST /api/v1/deployments/{deployment}/cancel", value.requireManagementAuth(http.HandlerFunc(value.cancelDeployment)))
-	mux.Handle("POST /api/v1/deployments/{deployment}/retry", value.requireManagementAuth(http.HandlerFunc(value.retryDeployment)))
-	mux.Handle("POST /api/v1/retention/plans", value.requireManagementAuth(http.HandlerFunc(value.createRetentionPlan)))
-	mux.Handle("GET /api/v1/retention/plans/{plan}", value.requireManagementAuth(http.HandlerFunc(value.retentionPlan)))
-	mux.Handle("POST /api/v1/retention/plans/{plan}/apply", value.requireManagementAuth(http.HandlerFunc(value.applyRetentionPlan)))
-	mux.Handle("GET /api/v1/secrets", value.requireManagementAuth(http.HandlerFunc(value.secretsList)))
-	mux.Handle("GET /api/v1/secrets/{secret}", value.requireManagementAuth(http.HandlerFunc(value.secret)))
-	mux.Handle("PUT /api/v1/secrets/{secret}", value.requireManagementAuth(http.HandlerFunc(value.putSecret)))
-	mux.Handle("DELETE /api/v1/secrets/{secret}", value.requireManagementAuth(http.HandlerFunc(value.deleteSecret)))
+	mux.Handle("GET /api/v1/automations", value.requireManagementAuth(ScopeRead, http.HandlerFunc(value.automations)))
+	mux.Handle("GET /api/v1/automations/{automation}", value.requireManagementAuth(ScopeRead, http.HandlerFunc(value.automation)))
+	mux.Handle("PATCH /api/v1/automations/{automation}", value.requireManagementAuth(ScopeOperate, http.HandlerFunc(value.updateAutomation)))
+	mux.Handle("POST /api/v1/automations/{automation}/runs", value.requireManagementAuth(ScopeOperate, http.HandlerFunc(value.manualRun)))
+	mux.Handle("POST /api/v1/automations/{automation}/rollback", value.requireManagementAuth(ScopeOperate, http.HandlerFunc(value.rollbackAutomation)))
+	mux.Handle("GET /api/v1/runs", value.requireManagementAuth(ScopeRead, http.HandlerFunc(value.runs)))
+	mux.Handle("GET /api/v1/runs/{run}", value.requireManagementAuth(ScopeRead, http.HandlerFunc(value.run)))
+	mux.Handle("GET /api/v1/audit", value.requireManagementAuth(ScopeRead, http.HandlerFunc(value.audit)))
+	mux.Handle("POST /api/v1/deployments", value.requireManagementAuth(ScopeDeploy, http.HandlerFunc(value.createDeployment)))
+	mux.Handle("GET /api/v1/deployments", value.requireManagementAuth(ScopeRead, http.HandlerFunc(value.deployments)))
+	mux.Handle("GET /api/v1/deployments/{deployment}", value.requireManagementAuth(ScopeRead, http.HandlerFunc(value.deployment)))
+	mux.Handle("POST /api/v1/deployments/{deployment}/cancel", value.requireManagementAuth(ScopeDeploy, http.HandlerFunc(value.cancelDeployment)))
+	mux.Handle("POST /api/v1/deployments/{deployment}/retry", value.requireManagementAuth(ScopeDeploy, http.HandlerFunc(value.retryDeployment)))
+	mux.Handle("POST /api/v1/retention/plans", value.requireManagementAuth(ScopeRetention, http.HandlerFunc(value.createRetentionPlan)))
+	mux.Handle("GET /api/v1/retention/plans/{plan}", value.requireManagementAuth(ScopeRetention, http.HandlerFunc(value.retentionPlan)))
+	mux.Handle("POST /api/v1/retention/plans/{plan}/apply", value.requireManagementAuth(ScopeRetention, http.HandlerFunc(value.applyRetentionPlan)))
+	mux.Handle("GET /api/v1/secrets", value.requireManagementAuth(ScopeSecrets, http.HandlerFunc(value.secretsList)))
+	mux.Handle("GET /api/v1/secrets/{secret}", value.requireManagementAuth(ScopeSecrets, http.HandlerFunc(value.secret)))
+	mux.Handle("PUT /api/v1/secrets/{secret}", value.requireManagementAuth(ScopeSecrets, http.HandlerFunc(value.putSecret)))
+	mux.Handle("DELETE /api/v1/secrets/{secret}", value.requireManagementAuth(ScopeSecrets, http.HandlerFunc(value.deleteSecret)))
 	value.server = &http.Server{
 		Addr:              address,
-		Handler:           requestLogger(mux),
+		Handler:           requestMetadata(requestLogger(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -182,7 +224,7 @@ func (s *Server) createDeployment(response http.ResponseWriter, request *http.Re
 		case errors.Is(err, service.ErrDeploymentDigestMismatch):
 			writeError(response, http.StatusUnprocessableEntity, err.Error())
 		case errors.Is(err, database.ErrDeploymentIdempotencyConflict):
-			writeError(response, http.StatusConflict, err.Error())
+			writeProblem(response, http.StatusConflict, "idempotency_conflict", err.Error(), false, map[string]any{"header": "Idempotency-Key"})
 		case errors.Is(err, packageio.ErrCompressedLimit), errors.Is(err, packageio.ErrExpandedLimit), errors.Is(err, packageio.ErrEntryLimit):
 			writeError(response, http.StatusRequestEntityTooLarge, err.Error())
 		case errors.Is(err, packageio.ErrUnsafeArchive), errors.Is(err, packageio.ErrInvalidArchive):
@@ -215,10 +257,20 @@ func (s *Server) deployments(response http.ResponseWriter, request *http.Request
 		writeError(response, http.StatusBadRequest, "status must be queued, validating, building, checking, activating, succeeded, failed, or cancelled")
 		return
 	}
-	values, err := s.store.ListDeploymentsFiltered(request.Context(), request.URL.Query().Get("automation"), status, limit)
+	cursor, err := requestCursor(request)
+	if err != nil {
+		writeProblem(response, http.StatusBadRequest, "invalid_cursor", err.Error(), false, nil)
+		return
+	}
+	values, err := s.store.ListDeploymentsPage(request.Context(), request.URL.Query().Get("automation"), status, cursor, limit+1)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "list deployments")
 		return
+	}
+	if len(values) > limit {
+		values = values[:limit]
+		last := values[len(values)-1]
+		writeNextPageHeaders(response, request, database.ListCursor{CreatedAt: last.CreatedAt, ID: last.ID})
 	}
 	writeJSON(response, http.StatusOK, values)
 }
@@ -260,7 +312,7 @@ func (s *Server) cancelDeployment(response http.ResponseWriter, request *http.Re
 	case errors.Is(err, database.ErrDeploymentNotFound):
 		writeError(response, http.StatusNotFound, "deployment not found")
 	case errors.Is(err, database.ErrDeploymentNotCancellable):
-		writeError(response, http.StatusConflict, err.Error())
+		writeProblem(response, http.StatusConflict, "deployment_not_cancellable", err.Error(), false, map[string]any{"deploymentId": request.PathValue("deployment")})
 	case err != nil:
 		writeError(response, http.StatusInternalServerError, "cancel deployment")
 	default:
@@ -288,8 +340,12 @@ func (s *Server) retryDeployment(response http.ResponseWriter, request *http.Req
 	switch {
 	case errors.Is(err, database.ErrDeploymentNotFound):
 		writeError(response, http.StatusNotFound, "deployment not found")
-	case errors.Is(err, database.ErrDeploymentNotRetryable), errors.Is(err, database.ErrDeploymentSourceUnavailable), errors.Is(err, database.ErrDeploymentIdempotencyConflict):
-		writeError(response, http.StatusConflict, err.Error())
+	case errors.Is(err, database.ErrDeploymentNotRetryable):
+		writeProblem(response, http.StatusConflict, "deployment_not_retryable", err.Error(), false, map[string]any{"deploymentId": request.PathValue("deployment")})
+	case errors.Is(err, database.ErrDeploymentSourceUnavailable):
+		writeProblem(response, http.StatusConflict, "deployment_source_unavailable", err.Error(), false, map[string]any{"deploymentId": request.PathValue("deployment")})
+	case errors.Is(err, database.ErrDeploymentIdempotencyConflict):
+		writeProblem(response, http.StatusConflict, "idempotency_conflict", err.Error(), false, map[string]any{"header": "Idempotency-Key"})
 	case err != nil:
 		writeError(response, http.StatusInternalServerError, "retry deployment")
 	default:
@@ -322,9 +378,9 @@ func (s *Server) rollbackAutomation(response http.ResponseWriter, request *http.
 			case errors.Is(err, database.ErrRevisionNotFound):
 				writeError(response, http.StatusNotFound, "revision not found for automation")
 			case errors.Is(err, database.ErrRevisionArtifactUnavailable):
-				writeError(response, http.StatusConflict, err.Error())
+				writeProblem(response, http.StatusConflict, "revision_artifact_unavailable", err.Error(), false, map[string]any{"automationId": automationID, "revisionId": revisionID})
 			default:
-				writeError(response, http.StatusConflict, "revision artifact provenance verification failed")
+				writeProblem(response, http.StatusConflict, "revision_provenance_invalid", "revision artifact provenance verification failed", false, map[string]any{"automationId": automationID, "revisionId": revisionID})
 			}
 			return
 		}
@@ -338,7 +394,7 @@ func (s *Server) rollbackAutomation(response http.ResponseWriter, request *http.
 	case errors.Is(err, database.ErrRevisionNotFound):
 		writeError(response, http.StatusNotFound, "revision not found for automation")
 	case errors.Is(err, database.ErrRevisionArtifactUnavailable):
-		writeError(response, http.StatusConflict, err.Error())
+		writeProblem(response, http.StatusConflict, "revision_artifact_unavailable", err.Error(), false, map[string]any{"automationId": automationID, "revisionId": revisionID})
 	case err != nil:
 		writeError(response, http.StatusInternalServerError, "rollback automation")
 	default:
@@ -401,9 +457,9 @@ func (s *Server) applyRetentionPlan(response http.ResponseWriter, request *http.
 	case errors.Is(err, database.ErrRetentionPlanNotFound):
 		writeError(response, http.StatusNotFound, "retention plan not found")
 	case errors.Is(err, database.ErrRetentionPlanExpired):
-		writeError(response, http.StatusGone, err.Error())
+		writeProblem(response, http.StatusGone, "retention_plan_expired", err.Error(), false, map[string]any{"planId": request.PathValue("plan")})
 	case errors.Is(err, database.ErrRetentionPlanBusy):
-		writeError(response, http.StatusConflict, err.Error())
+		writeProblem(response, http.StatusConflict, "retention_plan_busy", err.Error(), true, map[string]any{"planId": request.PathValue("plan")})
 	case err != nil:
 		slog.Error("apply retention plan", "plan", request.PathValue("plan"), "error", err)
 		writeError(response, http.StatusInternalServerError, "apply retention plan")
@@ -487,7 +543,7 @@ func (s *Server) deleteSecret(response http.ResponseWriter, request *http.Reques
 	case errors.Is(err, database.ErrSecretNotFound):
 		writeError(response, http.StatusNotFound, "secret not found")
 	case errors.Is(err, database.ErrSecretInUse):
-		writeError(response, http.StatusConflict, err.Error())
+		writeProblem(response, http.StatusConflict, "secret_in_use", err.Error(), false, map[string]any{"secret": request.PathValue("secret")})
 	case err != nil:
 		writeError(response, http.StatusInternalServerError, "delete secret")
 	default:
@@ -865,7 +921,7 @@ func (s *Server) manualRun(response http.ResponseWriter, request *http.Request) 
 		return
 	}
 	if errors.Is(err, database.ErrAutomationRevisionChanged) {
-		writeError(response, http.StatusConflict, "active revision changed; refresh the automation and review the new run target")
+		writeProblem(response, http.StatusConflict, "active_revision_changed", "active revision changed; refresh the automation and review the new run target", false, map[string]any{"automationId": request.PathValue("automation")})
 		return
 	}
 	if err != nil {
@@ -890,10 +946,20 @@ func (s *Server) runs(response http.ResponseWriter, request *http.Request) {
 		writeError(response, http.StatusBadRequest, "status must be queued, running, succeeded, or failed")
 		return
 	}
-	values, err := s.store.ListRunsFiltered(request.Context(), request.URL.Query().Get("automation"), status, limit)
+	cursor, err := requestCursor(request)
+	if err != nil {
+		writeProblem(response, http.StatusBadRequest, "invalid_cursor", err.Error(), false, nil)
+		return
+	}
+	values, err := s.store.ListRunSummariesPage(request.Context(), request.URL.Query().Get("automation"), status, cursor, limit+1)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "list runs")
 		return
+	}
+	if len(values) > limit {
+		values = values[:limit]
+		last := values[len(values)-1]
+		writeNextPageHeaders(response, request, database.ListCursor{CreatedAt: last.CreatedAt, ID: last.ID})
 	}
 	writeJSON(response, http.StatusOK, values)
 }
@@ -917,34 +983,71 @@ func (s *Server) audit(response http.ResponseWriter, request *http.Request) {
 		writeError(response, http.StatusBadRequest, err.Error())
 		return
 	}
-	values, err := s.store.ListAuditEvents(request.Context(), request.URL.Query().Get("automation"), limit)
+	cursor, err := requestCursor(request)
+	if err != nil {
+		writeProblem(response, http.StatusBadRequest, "invalid_cursor", err.Error(), false, nil)
+		return
+	}
+	since, err := optionalTimeParameter(request, "since")
+	if err != nil {
+		writeProblem(response, http.StatusBadRequest, "invalid_since", err.Error(), false, nil)
+		return
+	}
+	until, err := optionalTimeParameter(request, "until")
+	if err != nil {
+		writeProblem(response, http.StatusBadRequest, "invalid_until", err.Error(), false, nil)
+		return
+	}
+	values, err := s.store.ListAuditEventsPage(request.Context(), database.AuditFilter{
+		AutomationID: request.URL.Query().Get("automation"),
+		Action:       request.URL.Query().Get("action"),
+		Actor:        request.URL.Query().Get("actor"),
+		Since:        since,
+		Until:        until,
+	}, cursor, limit+1)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "list audit events")
 		return
 	}
+	if len(values) > limit {
+		values = values[:limit]
+		last := values[len(values)-1]
+		writeNextPageHeaders(response, request, database.ListCursor{CreatedAt: last.CreatedAt, ID: last.ID})
+	}
 	writeJSON(response, http.StatusOK, values)
 }
 
-func (s *Server) requireManagementAuth(next http.Handler) http.Handler {
+func (s *Server) requireManagementAuth(scope ManagementScope, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Cache-Control", "no-store")
 		provided, found := strings.CutPrefix(request.Header.Get("Authorization"), "Bearer ")
 		if found {
 			expectedHash := sha256.Sum256([]byte(s.managementToken))
 			providedHash := sha256.Sum256([]byte(provided))
-			if s.managementToken == "" || subtle.ConstantTimeCompare(expectedHash[:], providedHash[:]) != 1 {
-				response.Header().Set("WWW-Authenticate", `Bearer realm="werkt-management"`)
-				writeError(response, http.StatusUnauthorized, "management authentication required")
+			if s.managementToken != "" && subtle.ConstantTimeCompare(expectedHash[:], providedHash[:]) == 1 {
+				next.ServeHTTP(response, request)
 				return
 			}
-			next.ServeHTTP(response, request)
+			for _, token := range s.scopedTokens {
+				if subtle.ConstantTimeCompare(token.digest[:], providedHash[:]) != 1 {
+					continue
+				}
+				if _, allowed := token.scopes[scope]; !allowed {
+					writeProblem(response, http.StatusForbidden, "insufficient_scope", "This token is not permitted to perform this operation.", false, map[string]any{"requiredScope": scope})
+					return
+				}
+				next.ServeHTTP(response, request)
+				return
+			}
+			response.Header().Set("WWW-Authenticate", `Bearer realm="werkt-management"`)
+			writeProblem(response, http.StatusUnauthorized, "authentication_required", "Management authentication is required.", false, nil)
 			return
 		}
 		if s.browserAuth != nil {
 			session, err := s.browserAuth.readSession(request)
 			if err == nil {
 				if !safeRequestMethod(request.Method) && !constantTimeEqual(request.Header.Get("X-Werkt-CSRF"), session.CSRF) {
-					writeError(response, http.StatusForbidden, "CSRF validation failed")
+					writeProblem(response, http.StatusForbidden, "csrf_validation_failed", "CSRF validation failed", false, nil)
 					return
 				}
 				request = request.WithContext(context.WithValue(request.Context(), browserIdentityContextKey{}, session.Identity))
@@ -952,12 +1055,12 @@ func (s *Server) requireManagementAuth(next http.Handler) http.Handler {
 				return
 			}
 		}
-		if s.managementToken == "" {
+		if s.managementToken == "" && len(s.scopedTokens) == 0 {
 			next.ServeHTTP(response, request)
 			return
 		}
 		response.Header().Set("WWW-Authenticate", `Bearer realm="werkt-management"`)
-		writeError(response, http.StatusUnauthorized, "management authentication required")
+		writeProblem(response, http.StatusUnauthorized, "authentication_required", "Management authentication is required.", false, nil)
 	})
 }
 
@@ -997,10 +1100,54 @@ func requestLimit(request *http.Request, fallback int) (int, error) {
 	return limit, nil
 }
 
+func requestCursor(request *http.Request) (database.ListCursor, error) {
+	raw := strings.TrimSpace(request.URL.Query().Get("cursor"))
+	if raw == "" {
+		return database.ListCursor{}, nil
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return database.ListCursor{}, errors.New("cursor is not valid base64url")
+	}
+	var cursor struct {
+		CreatedAt time.Time `json:"createdAt"`
+		ID        string    `json:"id"`
+	}
+	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.ID == "" || cursor.CreatedAt.IsZero() {
+		return database.ListCursor{}, errors.New("cursor is invalid or incomplete")
+	}
+	return database.ListCursor{CreatedAt: cursor.CreatedAt, ID: cursor.ID}, nil
+}
+
+func writeNextPageHeaders(response http.ResponseWriter, request *http.Request, cursor database.ListCursor) {
+	encoded, err := json.Marshal(map[string]any{"createdAt": cursor.CreatedAt, "id": cursor.ID})
+	if err != nil {
+		return
+	}
+	next := base64.RawURLEncoding.EncodeToString(encoded)
+	url := *request.URL
+	query := url.Query()
+	query.Set("cursor", next)
+	url.RawQuery = query.Encode()
+	response.Header().Set("X-Werkt-Next-Cursor", next)
+	response.Header().Set("Link", fmt.Sprintf("<%s>; rel=\"next\"", url.RequestURI()))
+}
+
+func optionalTimeParameter(request *http.Request, name string) (*time.Time, error) {
+	raw := strings.TrimSpace(request.URL.Query().Get(name))
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be an RFC 3339 timestamp", name)
+	}
+	return &value, nil
+}
+
 func requestActor(request *http.Request) string {
 	if identity, ok := request.Context().Value(browserIdentityContextKey{}).(browserIdentity); ok {
-		digest := sha256.Sum256([]byte(identity.Subject))
-		return "workspace:oidc:" + hex.EncodeToString(digest[:8])
+		return browserActor(identity)
 	}
 	actor := strings.TrimSpace(request.Header.Get("X-Werkt-Actor"))
 	actor = strings.Map(func(value rune) rune {
@@ -1019,6 +1166,11 @@ func requestActor(request *http.Request) string {
 	return actor
 }
 
+func browserActor(identity browserIdentity) string {
+	digest := sha256.Sum256([]byte(identity.Subject))
+	return "workspace:oidc:" + hex.EncodeToString(digest[:8])
+}
+
 func writeJSON(response http.ResponseWriter, status int, value any) {
 	response.Header().Set("Content-Type", "application/json")
 	response.WriteHeader(status)
@@ -1028,13 +1180,67 @@ func writeJSON(response http.ResponseWriter, status int, value any) {
 }
 
 func writeError(response http.ResponseWriter, status int, message string) {
-	writeJSON(response, status, map[string]string{"error": message})
+	writeProblem(response, status, defaultProblemCode(status), message, status >= 500, nil)
+}
+
+func writeProblem(response http.ResponseWriter, status int, code, message string, retryable bool, details map[string]any) {
+	problem := map[string]any{
+		"code":      code,
+		"message":   message,
+		"error":     message,
+		"retryable": retryable,
+	}
+	if requestID := response.Header().Get("X-Request-ID"); requestID != "" {
+		problem["requestId"] = requestID
+	}
+	if len(details) > 0 {
+		problem["context"] = details
+	}
+	writeJSON(response, status, problem)
+}
+
+func defaultProblemCode(status int) string {
+	switch status {
+	case http.StatusBadRequest, http.StatusUnprocessableEntity, http.StatusUnsupportedMediaType, http.StatusRequestEntityTooLarge:
+		return "invalid_request"
+	case http.StatusUnauthorized:
+		return "authentication_required"
+	case http.StatusForbidden:
+		return "permission_denied"
+	case http.StatusNotFound:
+		return "not_found"
+	case http.StatusConflict:
+		return "conflict"
+	case http.StatusTooManyRequests:
+		return "rate_limited"
+	case http.StatusServiceUnavailable:
+		return "service_unavailable"
+	default:
+		return "internal_error"
+	}
+}
+
+type requestIDContextKey struct{}
+
+func requestMetadata(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		buffer := make([]byte, 12)
+		var requestID string
+		if _, err := rand.Read(buffer); err == nil {
+			requestID = hex.EncodeToString(buffer)
+		} else {
+			requestID = strconv.FormatInt(time.Now().UnixNano(), 36)
+		}
+		response.Header().Set("X-Request-ID", requestID)
+		request = request.WithContext(context.WithValue(request.Context(), requestIDContextKey{}, requestID))
+		next.ServeHTTP(response, request)
+	})
 }
 
 func requestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		started := time.Now()
 		next.ServeHTTP(response, request)
-		slog.Info("HTTP request", "method", request.Method, "path", request.URL.Path, "duration", time.Since(started).Round(time.Millisecond).String())
+		slog.Info("HTTP request", "requestId", request.Context().Value(requestIDContextKey{}), "method", request.Method, "path", request.URL.Path, "duration", time.Since(started).Round(time.Millisecond).String())
 	})
 }

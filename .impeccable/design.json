@@ -1,23 +1,25 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-18T10:46:02Z",
+  "generatedAt": "2026-08-26T21:30:00Z",
   "title": "Design System: Werkt",
   "extensions": {
     "colorMeta": {
-      "primary": {"role": "primary", "displayName": "Signal Orange", "canonical": "oklch(0.59 0.205 42)", "tonalRamp": ["oklch(0.955 0.032 47)", "oklch(0.59 0.205 42)", "oklch(0.52 0.2 42)", "oklch(0.46 0.18 42)"]},
-      "ink": {"role": "neutral", "displayName": "Instrument Ink", "canonical": "oklch(0.19 0.018 43)", "tonalRamp": ["oklch(0.64 0.014 43)", "oklch(0.47 0.018 43)", "oklch(0.34 0.018 43)", "oklch(0.19 0.018 43)"]},
-      "canvas": {"role": "neutral", "displayName": "Warm Canvas", "canonical": "oklch(0.982 0.003 43)", "tonalRamp": ["oklch(1 0 0)", "oklch(0.982 0.003 43)", "oklch(0.89 0.009 43)"]},
-      "success": {"role": "semantic", "displayName": "Healthy Green", "canonical": "oklch(0.47 0.13 151)", "tonalRamp": ["oklch(0.95 0.035 151)", "oklch(0.47 0.13 151)"]},
-      "error": {"role": "semantic", "displayName": "Failure Red", "canonical": "oklch(0.5 0.19 25)", "tonalRamp": ["oklch(0.96 0.035 25)", "oklch(0.5 0.19 25)"]}
+      "primary": {"role": "primary", "displayName": "Signal Orange", "canonical": "oklch(0.52 0.19 42)", "tonalRamp": ["oklch(0.18 0.07 42)", "oklch(0.28 0.11 42)", "oklch(0.38 0.15 42)", "oklch(0.47 0.18 42)", "oklch(0.52 0.19 42)", "oklch(0.68 0.13 42)", "oklch(0.84 0.07 42)", "oklch(0.95 0.03 42)"]},
+      "ink": {"role": "neutral", "displayName": "Instrument Ink", "canonical": "oklch(0.19 0.018 43)", "tonalRamp": ["oklch(0.15 0.018 43)", "oklch(0.19 0.018 43)", "oklch(0.28 0.018 43)", "oklch(0.34 0.018 43)", "oklch(0.47 0.018 43)", "oklch(0.64 0.014 43)", "oklch(0.8 0.012 43)", "oklch(0.93 0.006 43)"]},
+      "canvas": {"role": "neutral", "displayName": "Warm Canvas", "canonical": "oklch(0.982 0.003 43)", "tonalRamp": ["oklch(0.15 0.003 43)", "oklch(0.28 0.003 43)", "oklch(0.42 0.003 43)", "oklch(0.58 0.003 43)", "oklch(0.72 0.003 43)", "oklch(0.84 0.003 43)", "oklch(0.93 0.003 43)", "oklch(0.982 0.003 43)"]},
+      "success": {"role": "semantic", "displayName": "Healthy Green", "canonical": "oklch(0.47 0.13 151)", "tonalRamp": ["oklch(0.16 0.05 151)", "oklch(0.25 0.08 151)", "oklch(0.34 0.11 151)", "oklch(0.47 0.13 151)", "oklch(0.58 0.11 151)", "oklch(0.7 0.08 151)", "oklch(0.84 0.05 151)", "oklch(0.95 0.035 151)"]},
+      "error": {"role": "semantic", "displayName": "Failure Red", "canonical": "oklch(0.5 0.19 25)", "tonalRamp": ["oklch(0.16 0.07 25)", "oklch(0.26 0.11 25)", "oklch(0.37 0.16 25)", "oklch(0.5 0.19 25)", "oklch(0.61 0.14 25)", "oklch(0.73 0.1 25)", "oklch(0.85 0.06 25)", "oklch(0.96 0.035 25)"]}
     },
     "typographyMeta": {
       "headline": {"displayName": "Headline", "purpose": "Automation and global-view titles."},
+      "api-display": {"displayName": "API display", "purpose": "Human-readable API guide hero only."},
+      "api-lead": {"displayName": "API lead", "purpose": "API guide introductory contract summary."},
       "body": {"displayName": "Body", "purpose": "UI copy and operator guidance."},
       "label": {"displayName": "Label", "purpose": "Compact metadata, filters, and table structure."},
       "mono": {"displayName": "Machine identity", "purpose": "Exact hashes, IDs, logs, and output."}
     },
     "shadows": [
-      {"name": "overlay-edge", "value": "-8px 0 0 oklch(0.15 0.018 43 / 0.08)", "purpose": "Responsive diagnosis drawer only."},
+      {"name": "overlay-edge", "value": "-0.5rem 0 1.75rem oklch(0.15 0.018 43 / 0.14)", "purpose": "Responsive diagnosis drawer only."},
       {"name": "dialog-lift", "value": "0 8px 0 oklch(0.15 0.018 43 / 0.12)", "purpose": "Modal dialogs only."},
       {"name": "toast-lift", "value": "0 6px 0 oklch(0.15 0.018 43 / 0.14)", "purpose": "Transient feedback only."}
     ],
@@ -30,9 +32,7 @@
       {"name": "diagnosis-drawer", "value": "1184px"},
       {"name": "tablet", "value": "896px"},
       {"name": "mobile", "value": "672px"}
-    ],
-    "northStar": "The Bench Instrument",
-    "rules": ["The One Signal Rule", "The Words-and-Color Rule", "The Exactness Rule", "Flat by Default"]
+    ]
   },
   "components": [
     {
@@ -41,7 +41,7 @@
       "refersTo": "button-primary",
       "description": "The single decisive action in a local context.",
       "html": "<button class=\"ds-button-primary\">Run now</button>",
-      "css": ".ds-button-primary { min-height: 2.5rem; padding: .5rem .85rem; border: 0; border-radius: .5rem; background: oklch(0.59 0.205 42); color: white; font: 700 .875rem/1.5 system-ui; } .ds-button-primary:hover { background: oklch(0.52 0.2 42); transform: translateY(-1px); }"
+      "css": ".ds-button-primary { min-height: 2.5rem; padding: .5rem .85rem; border: 0; border-radius: .5rem; background: oklch(0.52 0.19 42); color: white; font: 700 .875rem/1.5 system-ui; transition: background 180ms cubic-bezier(.22,1,.36,1), transform 90ms ease-out; } .ds-button-primary:hover { background: oklch(0.47 0.18 42); transform: translateY(-1px); } .ds-button-primary:focus-visible { outline: 2px solid oklch(0.52 0.19 42); outline-offset: 2px; } .ds-button-primary:active { background: oklch(0.46 0.18 42); transform: none; }"
     },
     {
       "name": "Selected Inventory Row",
@@ -49,7 +49,27 @@
       "refersTo": "inventory-selected",
       "description": "A compact automation row with explicit health and revision identity.",
       "html": "<button class=\"ds-inventory-selected\"><span aria-hidden=\"true\">●</span><strong>python-hello</strong><code>rev_81f…</code></button>",
-      "css": ".ds-inventory-selected { display: grid; grid-template-columns: auto 1fr auto; gap: .5rem; align-items: center; width: 100%; min-height: 3.25rem; padding: .5rem .75rem; border: 1px solid oklch(0.85 0.06 43); border-radius: .5rem; background: oklch(0.955 0.032 47); color: oklch(0.19 0.018 43); text-align: left; }"
+      "css": ".ds-inventory-selected { display: grid; grid-template-columns: auto 1fr auto; gap: .5rem; align-items: center; width: 100%; min-height: 3.25rem; padding: .5rem .75rem; border: 1px solid oklch(0.85 0.06 43); border-radius: .5rem; background: oklch(0.955 0.032 47); color: oklch(0.19 0.018 43); text-align: left; } .ds-inventory-selected:focus-visible { outline: 2px solid oklch(0.52 0.19 42); outline-offset: -2px; }"
+    },
+    {
+      "name": "Operator Scope",
+      "kind": "custom",
+      "description": "Environment, instance, and attributed actor at the operational decision point.",
+      "html": "<button class=\"ds-operator-scope\"><span class=\"ds-scope-env\">production</span><span>werkt-eu-1</span><code>workspace:oidc:a317…</code></button>",
+      "css": ".ds-operator-scope { display: grid; grid-template-columns: auto minmax(4rem,10rem); gap: .05rem .5rem; padding: .3rem .75rem; border: 1px solid oklch(0.89 0.009 43); border-radius: .5rem; background: oklch(0.982 0.003 43); color: oklch(0.47 0.018 43); text-align: left; } .ds-scope-env { grid-row: 1/3; align-self: center; padding: .12rem .42rem; border-radius: 999px; background: oklch(0.95 0.025 205); color: oklch(0.42 0.095 205); font: 750 .6875rem/1.15 system-ui; text-transform: uppercase; } .ds-operator-scope:hover { border-color: oklch(0.66 0.014 43); } .ds-operator-scope:focus-visible { outline: 2px solid oklch(0.52 0.19 42); outline-offset: 2px; }"
     }
-  ]
+  ],
+  "narrative": {
+    "northStar": "The Bench Instrument",
+    "overview": "Werkt is a precise working surface: bright, compact, and designed around readings and controls rather than decoration. Dense operational facts are separated by calm whitespace and one-pixel rules.",
+    "keyCharacteristics": ["Dense enough for operational work, with calm whitespace between responsibilities.", "Flat white and warm-neutral surfaces separated by one-pixel rules.", "Exact revisions, event IDs, attempts, logs, and output remain visible system truth.", "Responsive changes preserve the task hierarchy rather than merely shrinking it."],
+    "rules": [
+      {"name": "The One Signal Rule", "body": "Orange indicates the next useful action or the current selection; it is never ambient decoration.", "section": "colors"},
+      {"name": "The Words-and-Color Rule", "body": "Every semantic color is paired with a visible label or icon so color is never the sole carrier of state.", "section": "colors"},
+      {"name": "The Exactness Rule", "body": "Use monospace for values an agent or operator may copy, compare, or search; do not use it as a visual theme.", "section": "typography"},
+      {"name": "Flat by Default", "body": "Do not put shadows around inventory rows, sections, tables, or ordinary containers. Overlap must be real before elevation is used.", "section": "elevation"}
+    ],
+    "dos": ["Do lead with current lifecycle state and the next safe action.", "Do preserve exact revision, run, event, and attempt data.", "Do reflow dense tables into labeled rows on narrow screens."],
+    "donts": ["Don't assemble generic SaaS KPI dashboards from interchangeable metric cards.", "Don't use cyberpunk agent-console styling, neon gradients, glass panels, or ornamental terminals.", "Don't use semantic color without a visible textual state."]
+  }
 }

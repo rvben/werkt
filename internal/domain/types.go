@@ -170,6 +170,21 @@ type Run struct {
 	Result       json.RawMessage `json:"result,omitempty"`
 }
 
+// RunSummary is the bounded, log-free representation returned by run-list
+// endpoints. Full logs, errors, event identity, and structured results remain
+// available from the run detail endpoint.
+type RunSummary struct {
+	ID           string     `json:"id"`
+	AutomationID string     `json:"automationId"`
+	RevisionID   string     `json:"revisionId"`
+	Status       string     `json:"status"`
+	Attempt      int        `json:"attempt"`
+	MaxAttempts  int        `json:"maxAttempts"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	StartedAt    *time.Time `json:"startedAt,omitempty"`
+	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
+}
+
 type RunnableRun struct {
 	Run
 	ArtifactPath string

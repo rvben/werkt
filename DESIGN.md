@@ -10,8 +10,8 @@ colors:
   canvas: "oklch(0.982 0.003 43)"
   surface: "oklch(1 0 0)"
   surface-selected: "oklch(0.955 0.032 47)"
-  primary: "oklch(0.59 0.205 42)"
-  primary-hover: "oklch(0.52 0.2 42)"
+  primary: "oklch(0.52 0.19 42)"
+  primary-hover: "oklch(0.47 0.18 42)"
   success: "oklch(0.47 0.13 151)"
   error: "oklch(0.5 0.19 25)"
   info: "oklch(0.42 0.095 205)"
@@ -22,6 +22,17 @@ typography:
     fontWeight: 700
     lineHeight: 1.2
     letterSpacing: "-0.035em"
+  api-display:
+    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif"
+    fontSize: "clamp(2.4rem, 7vw, 5.75rem)"
+    fontWeight: 700
+    lineHeight: 0.94
+    letterSpacing: "-0.065em"
+  api-lead:
+    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif"
+    fontSize: "clamp(1rem, 2vw, 1.2rem)"
+    fontWeight: 400
+    lineHeight: 1.5
   title:
     fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif"
     fontSize: "1.125rem"
@@ -79,6 +90,7 @@ rounded:
   sm: "0.25rem"
   md: "0.5rem"
   lg: "0.75rem"
+  pill: "999px"
 spacing:
   1: "0.25rem"
   2: "0.5rem"
@@ -112,7 +124,7 @@ components:
 
 # Design System: Werkt
 
-## 1. Overview
+## Overview
 
 **Creative North Star: “The Bench Instrument”**
 
@@ -128,14 +140,14 @@ The interface is direct, assured, and useful. It rejects visual workflow canvase
 - Exact revisions, event IDs, attempts, logs, and output remain visible system truth.
 - Responsive changes preserve the task hierarchy rather than merely shrinking it.
 
-## 2. Colors
+## Colors
 
 The palette pairs warm paper neutrals with a single burnt-orange action color and unambiguous semantic states.
 
 ### Primary
 
-- **Signal Orange** (`oklch(0.59 0.205 42)`): primary actions, selection marks, active tabs, and focus.
-- **Deep Signal Orange** (`oklch(0.52 0.2 42)`): hover state only.
+- **Signal Orange**: primary actions, selection marks, active tabs, and focus.
+- **Deep Signal Orange**: hover state only.
 
 ### Neutral
 
@@ -158,7 +170,7 @@ The palette pairs warm paper neutrals with a single burnt-orange action color an
 
 **The Words-and-Color Rule.** Every semantic color is paired with a visible label or icon so color is never the sole carrier of state.
 
-## 3. Typography
+## Typography
 
 **Display Font:** system sans-serif stack
 **Body Font:** system sans-serif stack
@@ -179,13 +191,17 @@ The palette pairs warm paper neutrals with a single burnt-orange action color an
 
 **The Exactness Rule.** Use monospace for values an agent or operator may copy, compare, or search; do not use it as a visual theme.
 
-## 4. Elevation
+## Layout
+
+The desktop workspace uses a four-region instrument layout: a compact navigation rail, automation inventory, wide working surface, and an optional diagnosis pane. Global Runs, Deployments, and Audit views intentionally collapse the automation inventory so history gets the full working width. At tablet widths diagnosis becomes a modal side drawer; at mobile widths navigation moves to the bottom and inventory, detail, and diagnosis become focused views. A seven-step quarter-rem spacing scale governs both density and separation.
+
+## Elevation & Depth
 
 The workspace is flat by default. One-pixel rules and warm tonal shifts define structure; elevation appears only when a layer truly overlaps another layer.
 
 ### Shadow Vocabulary
 
-- **Overlay edge** (`-0.5rem 0 1.75rem oklch(0.15 0.018 43 / 0.08)`): the responsive diagnosis drawer.
+- **Overlay edge** (`-0.5rem 0 1.75rem oklch(0.15 0.018 43 / 0.14)`): the responsive diagnosis drawer.
 - **Dialog lift** (`0 0.75rem 2.5rem oklch(0.15 0.018 43 / 0.12)`): modal dialogs only.
 - **Toast lift** (`0 0.5rem 1.75rem oklch(0.15 0.018 43 / 0.14)`): transient feedback only.
 
@@ -193,7 +209,11 @@ The workspace is flat by default. One-pixel rules and warm tonal shifts define s
 
 **Flat by Default.** Do not put shadows around inventory rows, sections, tables, or ordinary containers. Overlap must be real before elevation is used.
 
-## 5. Components
+## Shapes
+
+Working panels stay square and meet at one-pixel rules. Interactive controls use compact quarter- to half-rem corners; dialogs and larger overlays may use three-quarter-rem corners. Pills are reserved for status, filters, and the explicit environment label. The asymmetric, skewed brand mark is the only recurring decorative geometry.
+
+## Components
 
 ### Buttons
 
@@ -233,7 +253,11 @@ The workspace is flat by default. One-pixel rules and warm tonal shifts define s
 
 The diagnosis pane is the signature component. Run diagnosis keeps identity, lifecycle state, attempt count, exact error, logs, and output together. Deployment diagnosis keeps package and revision identity with ordered promotion-step state, duration, bounded logs, errors, and recovery controls. It is a fourth desktop pane, a side drawer at tablet widths, and a focused full-screen surface on mobile.
 
-## 6. Do's and Don'ts
+### Operator scope
+
+The operator-scope control keeps environment, instance, and attributed actor visible in the top bar. Mutation confirmations repeat those values alongside the exact automation, revision, run, or deployment target so operational authority is legible at the decision point.
+
+## Do's and Don'ts
 
 ### Do:
 
