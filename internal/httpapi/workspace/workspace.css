@@ -511,6 +511,19 @@ dialog input:focus, dialog textarea:focus { border-color: var(--primary); box-sh
 dialog input[aria-invalid="true"], dialog textarea[aria-invalid="true"] { border-color: var(--error); }
 .field-message { min-height: 1.25rem; margin: var(--space-2) 0 0; color: var(--error); font-size: 0.75rem; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-5); }
+.browser-auth { margin-top: var(--space-5); padding-block: var(--space-4); border-block: 1px solid var(--line); }
+.browser-auth[hidden], .signed-in-auth[hidden], #signed-out-auth[hidden] { display: none; }
+.auth-button { width: 100%; justify-content: center; }
+.auth-note { margin: var(--space-2) 0 0; font-size: 0.75rem; text-align: center; }
+.signed-in-auth { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-1) var(--space-3); align-items: center; }
+.auth-kicker { color: var(--muted); font-size: 0.6875rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; }
+.signed-in-auth strong { min-width: 0; overflow: hidden; color: var(--ink); font-size: 0.875rem; text-overflow: ellipsis; white-space: nowrap; }
+.signed-in-auth .button { grid-column: 2; grid-row: 1 / span 2; }
+.token-fallback { margin-top: var(--space-4); }
+.token-fallback summary { cursor: pointer; color: var(--ink-soft); font-size: 0.8125rem; font-weight: 700; }
+.token-fallback summary:focus-visible { border-radius: var(--radius-sm); outline: 3px solid var(--focus); outline-offset: 3px; }
+.token-fallback > p { margin: var(--space-3) 0 0; font-size: 0.75rem; }
+.token-actions { margin-top: var(--space-3); }
 .run-target { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: var(--space-2) var(--space-3); margin: var(--space-4) 0 var(--space-5); padding: var(--space-3) 0; border-block: 1px solid var(--line); font-size: 0.75rem; }
 .run-target dt { color: var(--muted); }
 .run-target dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--ink); }

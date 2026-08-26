@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -468,6 +469,18 @@ func serve(arguments []string) error {
 	apiOptions := []httpapi.Option{httpapi.WithDeploymentIntake(intake), httpapi.WithRetentionManager(retention), httpapi.WithArtifactVerifier(custodian)}
 	if vault != nil {
 		apiOptions = append(apiOptions, httpapi.WithSecretManager(vault))
+	}
+	oidcValues := []string{configuration.OIDCIssuer, configuration.OIDCClientID, configuration.OIDCClientSecret, configuration.OIDCRedirectURL, configuration.OIDCSessionSecret}
+	if strings.TrimSpace(strings.Join(oidcValues, "")) != "" || len(configuration.OIDCAllowedEmails) > 0 {
+		browserAuth, err := httpapi.NewBrowserAuth(httpapi.BrowserAuthConfig{
+			Issuer: configuration.OIDCIssuer, ClientID: configuration.OIDCClientID, ClientSecret: configuration.OIDCClientSecret,
+			RedirectURL: configuration.OIDCRedirectURL, AllowedEmails: configuration.OIDCAllowedEmails,
+			SessionSecret: configuration.OIDCSessionSecret, SessionTTL: configuration.OIDCSessionTTL,
+		})
+		if err != nil {
+			return fmt.Errorf("configure browser authentication: %w", err)
+		}
+		apiOptions = append(apiOptions, httpapi.WithBrowserAuth(browserAuth))
 	}
 	api := httpapi.New(store, configuration.ListenAddress, configuration.ManagementToken, apiOptions...)
 	serverErrors := make(chan error, 1)

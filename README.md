@@ -58,7 +58,7 @@ go run ./cmd/werkt secret set --from-env PYTHON_HELLO_EMAIL_TOKEN examples/pytho
 go run ./cmd/werkt deploy ./examples/python-hello
 ```
 
-Open [http://localhost:8080/app/](http://localhost:8080/app/) to use the management workspace. If `WERKT_MANAGEMENT_TOKEN` is set, connect with the same token used by API clients; it remains scoped to the browser tab. The workspace does not have a privileged control path and attributes its mutations as `workspace:operator`.
+Open [http://localhost:8080/app/](http://localhost:8080/app/) to use the management workspace. A production deployment can use Authelia-compatible OIDC for encrypted, attributed browser sessions; the same bearer token used by API clients remains available as an agent/troubleshooting fallback scoped to the browser tab. The workspace has no privileged control path.
 
 Invoke its webhook from another terminal:
 
@@ -279,6 +279,13 @@ The event envelope is stable across every trigger and runtime:
 | `WERKT_LISTEN_ADDR` | `127.0.0.1:8080` |
 | `WERKT_MANAGEMENT_TOKEN` | empty; disables management authentication for local development |
 | `WERKT_SECRET_KEY` | required persistent base64-encoded 32-byte master key; domain-separated AES vault and Ed25519 provenance keys are derived from it |
+| `WERKT_OIDC_ISSUER` | empty; setting any OIDC value requires the complete OIDC configuration |
+| `WERKT_OIDC_CLIENT_ID` | empty |
+| `WERKT_OIDC_CLIENT_SECRET` | empty; confidential client secret |
+| `WERKT_OIDC_REDIRECT_URL` | empty; absolute HTTPS callback URL, normally `https://werkt.example/api/v1/auth/callback` |
+| `WERKT_OIDC_ALLOWED_EMAILS` | empty; required comma-separated email allowlist when OIDC is configured |
+| `WERKT_OIDC_SESSION_SECRET` | empty; required secret of at least 32 bytes for encrypted browser cookies |
+| `WERKT_OIDC_SESSION_TTL` | `12h` |
 | `WERKT_WORKER_POLL` | `500ms` |
 | `WERKT_SCHEDULER_POLL` | `1s` |
 | `WERKT_SHUTDOWN_PERIOD` | `10s` |

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -14,6 +15,13 @@ type Config struct {
 	ListenAddress           string
 	ManagementToken         string
 	SecretKey               string
+	OIDCIssuer              string
+	OIDCClientID            string
+	OIDCClientSecret        string
+	OIDCRedirectURL         string
+	OIDCAllowedEmails       []string
+	OIDCSessionSecret       string
+	OIDCSessionTTL          time.Duration
 	WorkerPoll              time.Duration
 	SchedulerPoll           time.Duration
 	ShutdownPeriod          time.Duration
@@ -43,6 +51,13 @@ func Load() Config {
 		ListenAddress:           env("WERKT_LISTEN_ADDR", "127.0.0.1:8080"),
 		ManagementToken:         os.Getenv("WERKT_MANAGEMENT_TOKEN"),
 		SecretKey:               os.Getenv("WERKT_SECRET_KEY"),
+		OIDCIssuer:              os.Getenv("WERKT_OIDC_ISSUER"),
+		OIDCClientID:            os.Getenv("WERKT_OIDC_CLIENT_ID"),
+		OIDCClientSecret:        os.Getenv("WERKT_OIDC_CLIENT_SECRET"),
+		OIDCRedirectURL:         os.Getenv("WERKT_OIDC_REDIRECT_URL"),
+		OIDCAllowedEmails:       csvEnv("WERKT_OIDC_ALLOWED_EMAILS"),
+		OIDCSessionSecret:       os.Getenv("WERKT_OIDC_SESSION_SECRET"),
+		OIDCSessionTTL:          durationEnv("WERKT_OIDC_SESSION_TTL", 12*time.Hour),
 		WorkerPoll:              durationEnv("WERKT_WORKER_POLL", 500*time.Millisecond),
 		SchedulerPoll:           durationEnv("WERKT_SCHEDULER_POLL", time.Second),
 		ShutdownPeriod:          durationEnv("WERKT_SHUTDOWN_PERIOD", 10*time.Second),
@@ -63,6 +78,21 @@ func Load() Config {
 		HuskerProvisionTimeout:  durationEnv("WERKT_HUSKER_PROVISION_TIMEOUT", 2*time.Minute),
 		HuskerCleanupTimeout:    durationEnv("WERKT_HUSKER_CLEANUP_TIMEOUT", 30*time.Second),
 	}
+}
+
+func csvEnv(key string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil
+	}
+	values := strings.Split(raw, ",")
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func int64Env(key string, fallback int64) int64 {

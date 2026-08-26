@@ -42,6 +42,38 @@ paths:
                   dirty: {type: boolean}
                 required: [status, version, commit, builtAt, dirty]
         "503": {$ref: "#/components/responses/Error"}
+  /api/v1/auth/session:
+    get:
+      operationId: getBrowserSession
+      description: Reports whether Authelia browser login is configured and whether the current encrypted session cookie is authenticated.
+      responses:
+        "200":
+          description: Browser authentication state. The CSRF token is present only for an authenticated session.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BrowserSession"}
+  /api/v1/auth/login:
+    get:
+      operationId: startBrowserLogin
+      description: Starts an OIDC authorization-code flow with PKCE and redirects to Authelia.
+      responses:
+        "302": {description: Redirect to the configured OIDC provider.}
+        "404": {$ref: "#/components/responses/Error"}
+  /api/v1/auth/callback:
+    get:
+      operationId: completeBrowserLogin
+      description: Verifies the OIDC response and establishes an encrypted HttpOnly browser session.
+      responses:
+        "302": {description: Redirect to the workspace with either a session or a safe error code.}
+  /api/v1/auth/logout:
+    post:
+      operationId: endBrowserSession
+      security: [{BrowserSession: []}]
+      parameters:
+        - {$ref: "#/components/parameters/CSRFToken"}
+      responses:
+        "200": {description: Browser session cleared.}
+        "403": {$ref: "#/components/responses/Error"}
   /api/v1/automations:
     get:
       operationId: listAutomations
@@ -513,6 +545,11 @@ components:
     BearerAuth:
       type: http
       scheme: bearer
+    BrowserSession:
+      type: apiKey
+      in: cookie
+      name: werkt_session
+      description: Encrypted HttpOnly OIDC session used by the embedded workspace. Unsafe requests also require X-Werkt-CSRF.
     WebhookHMAC:
       type: apiKey
       in: header
@@ -557,6 +594,12 @@ components:
       in: header
       description: Caller-supplied audit attribution; defaults to api.
       schema: {type: string, maxLength: 255}
+    CSRFToken:
+      name: X-Werkt-CSRF
+      in: header
+      required: true
+      description: Session-bound CSRF token returned by GET /api/v1/auth/session.
+      schema: {type: string}
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -615,6 +658,20 @@ components:
               created: {type: boolean}
             required: [deployment, created]
   schemas:
+    BrowserSession:
+      type: object
+      properties:
+        configured: {type: boolean}
+        authenticated: {type: boolean}
+        identity:
+          type: object
+          properties:
+            email: {type: string, format: email}
+            name: {type: string}
+            username: {type: string}
+        csrfToken: {type: string}
+        expiresAt: {type: string, format: date-time}
+      required: [configured, authenticated]
     Error:
       type: object
       properties:
