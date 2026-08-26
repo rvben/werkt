@@ -13,7 +13,9 @@ existence as readiness to accept work.
 
 `GET /app/` serves the responsive operator workspace embedded in the Werkt binary. It is deliberately a client of this management API rather than a separate administrative backend: deployment progress and diagnosis, inventory, detail, pause/resume, manual runs, run diagnosis, and audit history all use the endpoints documented below.
 
-When management authentication is enabled, choose **Connection** and enter the same bearer token an external agent would use. The token is held in `sessionStorage`, is never rendered into the page or embedded asset, and is cleared when the browser tab closes. Workspace mutations send `X-Werkt-Actor: workspace:operator` so they remain attributable in the audit trail.
+When OIDC is configured, choose **Connection** and continue with Authelia. Werkt uses authorization code flow with PKCE and nonce validation, verifies the signed ID token and UserInfo subject, requires an explicitly allowed email, and stores only an encrypted `HttpOnly`, `Secure`, `SameSite=Lax` browser session. Session mutations require a session-bound CSRF header, and audit attribution is derived from the verified subject rather than a browser-supplied header.
+
+The connection dialog retains bearer-token access as an explicit agent/troubleshooting fallback. That token is held in `sessionStorage`, is never rendered into the page or embedded asset, and is cleared when the browser tab closes.
 
 The workspace is a convenience for operators, not a requirement for automation or agent access. An API-only deployment remains fully supported.
 
@@ -27,6 +29,8 @@ X-Werkt-Actor: agent:operator
 ```
 
 `X-Werkt-Actor` is recorded in the audit trail but is attribution supplied by the authenticated caller, not a separate identity proof. If omitted, it is recorded as `api`. When `WERKT_MANAGEMENT_TOKEN` is empty, management authentication is disabled for local development and Werkt emits a startup warning. Werkt binds to `127.0.0.1:8080` by default; explicitly configure both a token and `WERKT_LISTEN_ADDR` before exposing it beyond the host.
+
+The embedded workspace may instead use the OIDC session cookie. Configure all of `WERKT_OIDC_ISSUER`, `WERKT_OIDC_CLIENT_ID`, `WERKT_OIDC_CLIENT_SECRET`, `WERKT_OIDC_REDIRECT_URL`, `WERKT_OIDC_ALLOWED_EMAILS`, and `WERKT_OIDC_SESSION_SECRET`. The issuer and redirect must use HTTPS, the session secret must be at least 32 bytes, and allowed emails are a comma-separated allowlist. Browser sessions default to 12 hours and can be adjusted with `WERKT_OIDC_SESSION_TTL`. OIDC discovery is retried on a later login if the provider is temporarily unavailable; bearer-token access remains available.
 
 Health checks and trigger ingress (`/hooks/...` and `/email/...`) do not accept the management token as authority and remain outside this middleware. Trigger ingress has independent per-trigger credentials described in [security.md](security.md).
 

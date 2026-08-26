@@ -20,6 +20,14 @@
   const connectionDialog = document.querySelector("#connection-dialog");
   const connectionForm = document.querySelector("#connection-form");
   const connectionError = document.querySelector("#connection-error");
+  const connectionDescription = document.querySelector("#connection-description");
+  const browserAuth = document.querySelector("#browser-auth");
+  const signedOutAuth = document.querySelector("#signed-out-auth");
+  const signedInAuth = document.querySelector("#signed-in-auth");
+  const authIdentity = document.querySelector("#auth-identity");
+  const oidcLoginButton = document.querySelector("#oidc-login-button");
+  const oidcLogoutButton = document.querySelector("#oidc-logout-button");
+  const tokenFallback = document.querySelector("#token-fallback");
   const tokenInput = document.querySelector("#management-token");
   const runDialog = document.querySelector("#run-dialog");
   const runForm = document.querySelector("#run-form");
@@ -70,6 +78,7 @@
 
   const state = {
     token: readToken(),
+    auth: {configured: false, authenticated: false, identity: null, csrfToken: ""},
     automations: [],
     runs: [],
     deployments: [],
@@ -217,20 +226,65 @@
   async function api(path, options = {}) {
     const headers = new Headers(options.headers || {});
     headers.set("Accept", "application/json");
-    headers.set("X-Werkt-Actor", "workspace:operator");
-    if (state.token) headers.set("Authorization", `Bearer ${state.token}`);
+    if (state.token) {
+      headers.set("Authorization", `Bearer ${state.token}`);
+      headers.set("X-Werkt-Actor", "workspace:operator");
+    } else if (!["GET", "HEAD", "OPTIONS"].includes((options.method || "GET").toUpperCase()) && state.auth.csrfToken) {
+      headers.set("X-Werkt-CSRF", state.auth.csrfToken);
+    }
     const response = await fetch(path, {...options, headers});
     const contentType = response.headers.get("Content-Type") || "";
     const body = contentType.includes("application/json") ? await response.json() : null;
     if (response.status === 401) {
       setConnection("error", "Authentication required");
-      openConnection("Enter the management token configured for this Werkt server.");
+      state.auth.authenticated = false;
+      state.auth.csrfToken = "";
+      openConnection(state.auth.configured ? "Your session ended. Sign in again to continue." : "Enter the management token configured for this Werkt server.");
       throw new AuthenticationRequired();
     }
     if (!response.ok) {
       throw new APIError(body?.error || `Request failed with status ${response.status}`, response.status);
     }
     return body;
+  }
+
+  async function refreshBrowserSession() {
+    try {
+      const response = await fetch("/api/v1/auth/session", {headers: {Accept: "application/json"}});
+      if (!response.ok) return;
+      const session = await response.json();
+      state.auth = {
+        configured: Boolean(session.configured),
+        authenticated: Boolean(session.authenticated),
+        identity: session.identity || null,
+        csrfToken: session.csrfToken || "",
+      };
+    } catch (_) {
+      state.auth = {configured: false, authenticated: false, identity: null, csrfToken: ""};
+    }
+    renderConnectionAuth();
+  }
+
+  function identityLabel() {
+    const identity = state.auth.identity || {};
+    return identity.name || identity.username || identity.email || "Authelia account";
+  }
+
+  function connectedLabel() {
+    if (state.token) return "Connected · token";
+    if (state.auth.authenticated) return `Connected · ${identityLabel()}`;
+    return "Connected";
+  }
+
+  function renderConnectionAuth() {
+    browserAuth.hidden = !state.auth.configured;
+    signedOutAuth.hidden = state.auth.authenticated;
+    signedInAuth.hidden = !state.auth.authenticated;
+    authIdentity.textContent = identityLabel();
+    connectionDescription.textContent = state.auth.configured
+      ? (state.auth.authenticated ? "Your browser session is verified by Authelia and attributed in Werkt's audit trail." : "Sign in with Authelia for a secure, attributed browser session.")
+      : "Connect with the management bearer token configured for this Werkt server.";
+    tokenFallback.open = Boolean(state.token) || !state.auth.configured;
   }
 
   function setConnection(kind, label) {
@@ -269,7 +323,7 @@
         state.feedErrors[kind] = "";
         state.feedLoading[kind] = true;
       }
-      setConnection("connected", "Connected");
+      setConnection("connected", connectedLabel());
 
       const hashSelection = readRoute().selectedAutomation;
       const candidate = preserveSelection ? (state.selectedAutomation || hashSelection) : hashSelection;
@@ -1069,15 +1123,18 @@
     if (connectionDialog.open) {
       if (message && !connectionError.textContent) {
         connectionError.textContent = message;
-        tokenInput.setAttribute("aria-invalid", "true");
+        tokenInput.toggleAttribute("aria-invalid", !state.auth.configured || Boolean(state.token));
       }
       return;
     }
     connectionError.textContent = message;
-    tokenInput.toggleAttribute("aria-invalid", Boolean(message));
+    tokenInput.toggleAttribute("aria-invalid", Boolean(message) && (!state.auth.configured || Boolean(state.token)));
     tokenInput.value = state.token;
+    renderConnectionAuth();
     if (!connectionDialog.open) connectionDialog.showModal();
-    tokenInput.focus();
+    if (state.auth.configured && !state.auth.authenticated && !state.token) oidcLoginButton.focus();
+    else if (state.auth.authenticated && !state.token) oidcLogoutButton.focus();
+    else tokenInput.focus();
   }
 
   function showToast(message, error = false) {
@@ -1347,11 +1404,36 @@
   mobileSearchButton.addEventListener("click", () => setMobileSearch(!globalSearch.classList.contains("is-open")));
   helpButton.addEventListener("click", () => openHelp());
   document.querySelector("#connection-button").addEventListener("click", () => openConnection());
+  oidcLoginButton.addEventListener("click", () => {
+    state.token = "";
+    writeToken("");
+    window.location.assign("/api/v1/auth/login");
+  });
+  oidcLogoutButton.addEventListener("click", async () => {
+    oidcLogoutButton.disabled = true;
+    connectionError.textContent = "";
+    try {
+      const response = await fetch("/api/v1/auth/logout", {
+        method: "POST",
+        headers: {Accept: "application/json", "X-Werkt-CSRF": state.auth.csrfToken},
+      });
+      if (!response.ok) throw new Error("logout failed");
+      state.auth = {...state.auth, authenticated: false, identity: null, csrfToken: ""};
+      renderConnectionAuth();
+      connectionDialog.close();
+      await loadWorkspace({preserveSelection: true});
+    } catch (_) {
+      connectionError.textContent = "Could not sign out. Refresh the page and try again.";
+    } finally {
+      oidcLogoutButton.disabled = false;
+    }
+  });
   document.querySelector("#clear-token-button").addEventListener("click", () => {
     state.token = "";
     writeToken("");
     tokenInput.value = "";
     tokenInput.removeAttribute("aria-invalid");
+    renderConnectionAuth();
     connectionDialog.close();
     loadWorkspace({preserveSelection: true});
   });
@@ -1378,6 +1460,12 @@
   connectionForm.addEventListener("submit", (event) => {
     event.preventDefault();
     state.token = tokenInput.value.trim();
+    if (!state.token) {
+      connectionError.textContent = "Enter a management token or continue with Authelia.";
+      tokenInput.setAttribute("aria-invalid", "true");
+      tokenInput.focus();
+      return;
+    }
     writeToken(state.token);
     connectionError.textContent = "";
     tokenInput.removeAttribute("aria-invalid");
@@ -1510,5 +1598,21 @@
 
   Object.assign(state, readRoute());
   searchInput.value = state.query;
-  loadWorkspace({preserveSelection: false});
+  (async () => {
+    const authError = new URLSearchParams(location.search).get("auth_error");
+    await refreshBrowserSession();
+    if (authError) {
+      const messages = {
+        cancelled: "Authelia sign-in was cancelled.",
+        expired: "The sign-in attempt expired. Start again to continue.",
+        invalid_flow: "The sign-in response could not be verified. Start again to continue.",
+        provider_unavailable: "Authelia is temporarily unavailable. Try again in a moment.",
+        not_authorized: "This Authelia account is not authorized for Werkt.",
+        session_failed: "Werkt could not create a secure session. Try again.",
+        not_configured: "Authelia sign-in is not configured on this Werkt server.",
+      };
+      openConnection(messages[authError] || "Authelia sign-in did not complete. Try again.");
+    }
+    loadWorkspace({preserveSelection: false});
+  })();
 })();

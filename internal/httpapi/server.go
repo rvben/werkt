@@ -47,6 +47,7 @@ type Server struct {
 	secrets          SecretManager
 	artifacts        ArtifactVerifier
 	managementToken  string
+	browserAuth      *BrowserAuth
 	server           *http.Server
 }
 
@@ -108,6 +109,10 @@ func WithArtifactVerifier(verifier ArtifactVerifier) Option {
 	return func(server *Server) { server.artifacts = verifier }
 }
 
+func WithBrowserAuth(auth *BrowserAuth) Option {
+	return func(server *Server) { server.browserAuth = auth }
+}
+
 func New(store Store, address, managementToken string, options ...Option) *Server {
 	value := &Server{store: store, managementToken: managementToken}
 	for _, option := range options {
@@ -121,6 +126,10 @@ func New(store Store, address, managementToken string, options ...Option) *Serve
 	mux.HandleFunc("GET /healthz", value.health)
 	mux.HandleFunc("GET /readyz", value.health)
 	mux.HandleFunc("GET /api/openapi.yaml", value.openAPI)
+	mux.HandleFunc("GET /api/v1/auth/session", value.browserSession)
+	mux.HandleFunc("GET /api/v1/auth/login", value.browserLogin)
+	mux.HandleFunc("GET /api/v1/auth/callback", value.browserCallback)
+	mux.HandleFunc("POST /api/v1/auth/logout", value.browserLogout)
 	mux.HandleFunc("POST /api/v1/hooks/{automation}/{trigger}", value.webhook)
 	mux.HandleFunc("POST /api/v1/email/{automation}/{trigger}", value.email)
 	mux.Handle("GET /api/v1/automations", value.requireManagementAuth(http.HandlerFunc(value.automations)))
@@ -919,20 +928,49 @@ func (s *Server) audit(response http.ResponseWriter, request *http.Request) {
 func (s *Server) requireManagementAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Cache-Control", "no-store")
+		provided, found := strings.CutPrefix(request.Header.Get("Authorization"), "Bearer ")
+		if found {
+			expectedHash := sha256.Sum256([]byte(s.managementToken))
+			providedHash := sha256.Sum256([]byte(provided))
+			if s.managementToken == "" || subtle.ConstantTimeCompare(expectedHash[:], providedHash[:]) != 1 {
+				response.Header().Set("WWW-Authenticate", `Bearer realm="werkt-management"`)
+				writeError(response, http.StatusUnauthorized, "management authentication required")
+				return
+			}
+			next.ServeHTTP(response, request)
+			return
+		}
+		if s.browserAuth != nil {
+			session, err := s.browserAuth.readSession(request)
+			if err == nil {
+				if !safeRequestMethod(request.Method) && !constantTimeEqual(request.Header.Get("X-Werkt-CSRF"), session.CSRF) {
+					writeError(response, http.StatusForbidden, "CSRF validation failed")
+					return
+				}
+				request = request.WithContext(context.WithValue(request.Context(), browserIdentityContextKey{}, session.Identity))
+				next.ServeHTTP(response, request)
+				return
+			}
+		}
 		if s.managementToken == "" {
 			next.ServeHTTP(response, request)
 			return
 		}
-		provided, found := strings.CutPrefix(request.Header.Get("Authorization"), "Bearer ")
-		expectedHash := sha256.Sum256([]byte(s.managementToken))
-		providedHash := sha256.Sum256([]byte(provided))
-		if !found || subtle.ConstantTimeCompare(expectedHash[:], providedHash[:]) != 1 {
-			response.Header().Set("WWW-Authenticate", `Bearer realm="werkt-management"`)
-			writeError(response, http.StatusUnauthorized, "management authentication required")
-			return
-		}
-		next.ServeHTTP(response, request)
+		response.Header().Set("WWW-Authenticate", `Bearer realm="werkt-management"`)
+		writeError(response, http.StatusUnauthorized, "management authentication required")
 	})
+}
+
+type browserIdentityContextKey struct{}
+
+func safeRequestMethod(method string) bool {
+	return method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions
+}
+
+func constantTimeEqual(left, right string) bool {
+	leftHash := sha256.Sum256([]byte(left))
+	rightHash := sha256.Sum256([]byte(right))
+	return subtle.ConstantTimeCompare(leftHash[:], rightHash[:]) == 1
 }
 
 func decodeJSON(response http.ResponseWriter, request *http.Request, maxBytes int64, destination any) error {
@@ -960,6 +998,10 @@ func requestLimit(request *http.Request, fallback int) (int, error) {
 }
 
 func requestActor(request *http.Request) string {
+	if identity, ok := request.Context().Value(browserIdentityContextKey{}).(browserIdentity); ok {
+		digest := sha256.Sum256([]byte(identity.Subject))
+		return "workspace:oidc:" + hex.EncodeToString(digest[:8])
+	}
 	actor := strings.TrimSpace(request.Header.Get("X-Werkt-Actor"))
 	actor = strings.Map(func(value rune) rune {
 		if unicode.IsControl(value) {

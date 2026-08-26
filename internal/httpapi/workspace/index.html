@@ -124,14 +124,29 @@
       </button>
       <span class="dialog-symbol" aria-hidden="true"><svg class="icon"><use href="#icon-key"></use></svg></span>
       <h2 id="connection-dialog-title">Connect to Werkt</h2>
-      <p>The workspace uses the same bearer-protected management API as external agents. The token stays in this browser tab and is cleared when the tab closes. If the workspace reports Unavailable, verify the token and retry without reloading the page.</p>
-      <label for="management-token">Management token</label>
-      <input id="management-token" name="token" type="password" autocomplete="current-password" spellcheck="false" aria-describedby="connection-error">
+      <p id="connection-description">Sign in with Authelia for a secure, attributed browser session.</p>
+      <section class="browser-auth" id="browser-auth">
+        <div id="signed-out-auth">
+          <button class="button button-primary auth-button" id="oidc-login-button" type="button">Continue with Authelia</button>
+          <p class="auth-note">Werkt never receives your Authelia password.</p>
+        </div>
+        <div class="signed-in-auth" id="signed-in-auth" hidden>
+          <span class="auth-kicker">Signed in</span>
+          <strong id="auth-identity">—</strong>
+          <button class="button button-quiet" id="oidc-logout-button" type="button">Sign out</button>
+        </div>
+      </section>
+      <details class="token-fallback" id="token-fallback">
+        <summary>Use an agent token instead</summary>
+        <p>For troubleshooting or agent access, enter the management bearer token. It stays in this tab and is cleared when the tab closes.</p>
+        <label for="management-token">Management token</label>
+        <input id="management-token" name="token" type="password" autocomplete="current-password" spellcheck="false" aria-describedby="connection-error">
+        <div class="dialog-actions token-actions">
+          <button class="button button-quiet" type="button" id="clear-token-button">Clear token</button>
+          <button class="button button-primary" type="submit">Connect with token</button>
+        </div>
+      </details>
       <p class="field-message" id="connection-error" role="alert"></p>
-      <div class="dialog-actions">
-        <button class="button button-quiet" type="button" id="clear-token-button">Clear token</button>
-        <button class="button button-primary" type="submit">Connect</button>
-      </div>
     </form>
   </dialog>
 
