@@ -2,6 +2,8 @@
 set -euo pipefail
 
 : "${WERKT_STAGING_URL:?set WERKT_STAGING_URL}"
+: "${WERKT_EXPECTED_ENVIRONMENT:?set WERKT_EXPECTED_ENVIRONMENT}"
+: "${WERKT_EXPECTED_INSTANCE:?set WERKT_EXPECTED_INSTANCE}"
 
 base_url=${WERKT_STAGING_URL%/}
 temporary_directory=$(mktemp -d)
@@ -24,6 +26,20 @@ fi
 workspace_status=$(request -o "$temporary_directory/workspace.html" -w '%{http_code}' "$base_url/app/")
 if [[ $workspace_status != 200 ]] || ! grep -Fq '<title>Werkt' "$temporary_directory/workspace.html"; then
   echo "workspace smoke check failed with HTTP $workspace_status" >&2
+  exit 1
+fi
+
+session_status=$(request -o "$temporary_directory/session.json" -w '%{http_code}' "$base_url/api/v1/auth/session")
+if [[ $session_status != 200 ]]; then
+  echo "browser session scope returned HTTP $session_status" >&2
+  exit 1
+fi
+if ! grep -Fq "\"environment\":\"$WERKT_EXPECTED_ENVIRONMENT\"" "$temporary_directory/session.json"; then
+  echo "browser session did not report expected environment $WERKT_EXPECTED_ENVIRONMENT" >&2
+  exit 1
+fi
+if ! grep -Fq "\"instance\":\"$WERKT_EXPECTED_INSTANCE\"" "$temporary_directory/session.json"; then
+  echo "browser session did not report expected instance $WERKT_EXPECTED_INSTANCE" >&2
   exit 1
 fi
 

@@ -277,8 +277,8 @@ The event envelope is stable across every trigger and runtime:
 | `WERKT_DATABASE_URL` | `postgres://automations:automations@localhost:54329/automations?sslmode=disable` |
 | `WERKT_DATA_DIR` | `./data` |
 | `WERKT_LISTEN_ADDR` | `127.0.0.1:8080` |
-| `WERKT_ENVIRONMENT` | `development`; operator-visible deployment environment |
-| `WERKT_INSTANCE` | listen address; operator-visible instance identity |
+| `WERKT_ENVIRONMENT` | deployment build target, otherwise `development`; operator-visible environment |
+| `WERKT_INSTANCE` | deployment build target, otherwise listen address; operator-visible instance identity |
 | `WERKT_MANAGEMENT_TOKEN` | empty; legacy full-access management token |
 | `WERKT_MANAGEMENT_READ_TOKEN` | empty; inventory, run, deployment, and audit reads |
 | `WERKT_MANAGEMENT_OPERATE_TOKEN` | empty; read plus pause/resume, rollback, and manual runs |

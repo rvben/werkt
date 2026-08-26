@@ -6,6 +6,10 @@ on:
 permissions:
   contents: read
 
+env:
+  WERKT_EXPECTED_ENVIRONMENT: staging
+  WERKT_EXPECTED_INSTANCE: staging-control
+
 concurrency:
   group: staging-deployment
   cancel-in-progress: false
@@ -48,7 +52,9 @@ jobs:
       - name: Build immutable release
         run: |
           mkdir -p dist
-          go build -trimpath -o dist/werkt ./cmd/werkt
+          go build -trimpath \
+            -ldflags "-X github.com/rvben/werkt/internal/config.TargetEnvironment=$WERKT_EXPECTED_ENVIRONMENT -X github.com/rvben/werkt/internal/config.TargetInstance=$WERKT_EXPECTED_INSTANCE" \
+            -o dist/werkt ./cmd/werkt
           git rev-parse HEAD > dist/commit
           cp scripts/staging-smoke.sh dist/staging-smoke.sh
           chmod 0755 dist/werkt dist/staging-smoke.sh
