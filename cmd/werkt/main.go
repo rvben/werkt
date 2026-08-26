@@ -454,8 +454,16 @@ func serve(arguments []string) error {
 	go service.NewScheduler(store, configuration.SchedulerPoll).Run(ctx)
 	go service.NewNtfyReconciler(store, secretResolver).Run(ctx)
 
-	if configuration.ManagementToken == "" {
-		slog.Warn("management API authentication is disabled; set WERKT_MANAGEMENT_TOKEN outside local development")
+	managementTokens := []string{
+		configuration.ManagementToken,
+		configuration.ManagementReadToken,
+		configuration.ManagementOperateToken,
+		configuration.ManagementDeployToken,
+		configuration.ManagementSecretsToken,
+		configuration.ManagementRetentionToken,
+	}
+	if strings.TrimSpace(strings.Join(managementTokens, "")) == "" {
+		slog.Warn("management API authentication is disabled; configure a management token outside local development")
 	}
 	if configuration.Executor == "process" {
 		slog.Warn("process executor runs deployed build and runtime commands on this host; use husker before accepting untrusted packages")
@@ -466,7 +474,21 @@ func serve(arguments []string) error {
 		Entries:         configuration.MaxPackageEntries,
 	})
 	retention := service.NewRetentionManager(store, configuration.DataDir)
-	apiOptions := []httpapi.Option{httpapi.WithDeploymentIntake(intake), httpapi.WithRetentionManager(retention), httpapi.WithArtifactVerifier(custodian)}
+	instance := configuration.Instance
+	if instance == "" {
+		instance = configuration.ListenAddress
+	}
+	apiOptions := []httpapi.Option{
+		httpapi.WithDeploymentIntake(intake),
+		httpapi.WithRetentionManager(retention),
+		httpapi.WithArtifactVerifier(custodian),
+		httpapi.WithOperatorScope(configuration.Environment, instance),
+		httpapi.WithScopedManagementToken(configuration.ManagementReadToken, httpapi.ScopeRead),
+		httpapi.WithScopedManagementToken(configuration.ManagementOperateToken, httpapi.ScopeRead, httpapi.ScopeOperate),
+		httpapi.WithScopedManagementToken(configuration.ManagementDeployToken, httpapi.ScopeRead, httpapi.ScopeDeploy),
+		httpapi.WithScopedManagementToken(configuration.ManagementSecretsToken, httpapi.ScopeRead, httpapi.ScopeSecrets),
+		httpapi.WithScopedManagementToken(configuration.ManagementRetentionToken, httpapi.ScopeRead, httpapi.ScopeRetention),
+	}
 	if vault != nil {
 		apiOptions = append(apiOptions, httpapi.WithSecretManager(vault))
 	}

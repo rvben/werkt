@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f8f8f7">
+  <title>Werkt management API</title>
+  <link rel="stylesheet" href="/app/workspace.css">
+</head>
+<body>
+  <a class="skip-link" href="#api-content">Skip to API guide</a>
+  <main class="api-guide" id="api-content">
+    <nav class="api-guide-nav" aria-label="Breadcrumb"><a href="/app/">Werkt workspace</a><span aria-hidden="true">/</span><span>Management API</span></nav>
+    <header class="api-guide-hero">
+      <h1>Operate Werkt without guessing.</h1>
+      <p><span class="mono">OpenAPI 3.1 · v1.</span> The same management contract powers agents, the CLI, and the workspace. Start with a least-privilege token, preserve idempotency keys, follow pagination links, and fetch individual runs only when you need logs or output.</p>
+      <div class="api-guide-actions"><a class="button button-primary" href="/api/openapi.yaml">Download OpenAPI YAML</a><a class="button button-quiet" href="/app/?view=runs">Open run history</a></div>
+    </header>
+    <section class="api-guide-grid" aria-label="API workflow">
+      <article><span class="api-guide-step">01</span><h2>Choose authority</h2><p>Use read, operate, deploy, secrets, or retention tokens. A missing scope returns a typed <span class="mono">insufficient_scope</span> problem.</p></article>
+      <article><span class="api-guide-step">02</span><h2>List summaries</h2><p>Run lists omit logs and output. Continue with <span class="mono">X-Werkt-Next-Cursor</span> or the relative <span class="mono">Link</span> header.</p></article>
+      <article><span class="api-guide-step">03</span><h2>Inspect exact state</h2><p>Fetch a run or deployment by ID for authoritative diagnostics. Poll nonterminal work using <span class="mono">Retry-After</span>.</p></article>
+      <article><span class="api-guide-step">04</span><h2>Verify the outcome</h2><p>Audit by automation, action, actor, or time window. Every problem includes a stable code and request ID.</p></article>
+    </section>
+    <section class="api-guide-example" aria-labelledby="api-example-title">
+      <div><h2 id="api-example-title">Find failed runs, then fetch logs</h2><p>Keep the list lightweight; open only the run you are diagnosing.</p></div>
+      <pre><code>curl -H "Authorization: Bearer $WERKT_MANAGEMENT_READ_TOKEN" \
+  'https://werkt.example/api/v1/runs?status=failed&amp;limit=25'
+
+curl -H "Authorization: Bearer $WERKT_MANAGEMENT_READ_TOKEN" \
+  'https://werkt.example/api/v1/runs/run_...'</code></pre>
+    </section>
+    <footer class="api-guide-footer"><p>Unsafe retries require a stable <span class="mono">Idempotency-Key</span>. Mutations should include <span class="mono">X-Werkt-Actor</span> unless the browser session supplies verified attribution.</p><a href="/api/openapi.yaml">Machine-readable contract →</a></footer>
+  </main>
+</body>
+</html>

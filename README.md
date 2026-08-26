@@ -277,7 +277,14 @@ The event envelope is stable across every trigger and runtime:
 | `WERKT_DATABASE_URL` | `postgres://automations:automations@localhost:54329/automations?sslmode=disable` |
 | `WERKT_DATA_DIR` | `./data` |
 | `WERKT_LISTEN_ADDR` | `127.0.0.1:8080` |
-| `WERKT_MANAGEMENT_TOKEN` | empty; disables management authentication for local development |
+| `WERKT_ENVIRONMENT` | `development`; operator-visible deployment environment |
+| `WERKT_INSTANCE` | listen address; operator-visible instance identity |
+| `WERKT_MANAGEMENT_TOKEN` | empty; legacy full-access management token |
+| `WERKT_MANAGEMENT_READ_TOKEN` | empty; inventory, run, deployment, and audit reads |
+| `WERKT_MANAGEMENT_OPERATE_TOKEN` | empty; read plus pause/resume, rollback, and manual runs |
+| `WERKT_MANAGEMENT_DEPLOY_TOKEN` | empty; read plus deployment create/cancel/retry |
+| `WERKT_MANAGEMENT_SECRETS_TOKEN` | empty; read plus secret lifecycle |
+| `WERKT_MANAGEMENT_RETENTION_TOKEN` | empty; read plus retention plan/apply |
 | `WERKT_SECRET_KEY` | required persistent base64-encoded 32-byte master key; domain-separated AES vault and Ed25519 provenance keys are derived from it |
 | `WERKT_OIDC_ISSUER` | empty; setting any OIDC value requires the complete OIDC configuration |
 | `WERKT_OIDC_CLIENT_ID` | empty |

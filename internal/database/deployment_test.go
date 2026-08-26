@@ -173,6 +173,14 @@ func TestDeploymentLifecycleIntegration(t *testing.T) {
 	if err != nil || len(deployments) != 2 {
 		t.Fatalf("deployments=%#v err=%v", deployments, err)
 	}
+	deploymentPage, err := store.ListDeploymentsPage(ctx, value.Metadata.Name, "", ListCursor{}, 1)
+	if err != nil || len(deploymentPage) != 1 {
+		t.Fatalf("deployment page=%#v err=%v", deploymentPage, err)
+	}
+	olderDeployments, err := store.ListDeploymentsPage(ctx, value.Metadata.Name, "", ListCursor{CreatedAt: deploymentPage[0].CreatedAt, ID: deploymentPage[0].ID}, 2)
+	if err != nil || len(olderDeployments) != 1 || olderDeployments[0].ID == deploymentPage[0].ID {
+		t.Fatalf("older deployment page=%#v err=%v", olderDeployments, err)
+	}
 	audit, err := store.ListAuditEvents(ctx, value.Metadata.Name, 20)
 	if err != nil {
 		t.Fatal(err)

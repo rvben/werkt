@@ -25,6 +25,19 @@ func (s *Server) workspaceRoot(response http.ResponseWriter, request *http.Reque
 	http.Redirect(response, request, "/app/", http.StatusTemporaryRedirect)
 }
 
+func (s *Server) apiGuide(response http.ResponseWriter, request *http.Request) {
+	contents, err := workspaceFiles.ReadFile("workspace/api.html")
+	if err != nil {
+		slog.Error("load API guide", "error", err)
+		writeError(response, http.StatusInternalServerError, "load API guide")
+		return
+	}
+	setWorkspaceHeaders(response)
+	response.Header().Set("Content-Type", "text/html; charset=utf-8")
+	response.Header().Set("Cache-Control", "no-cache")
+	http.ServeContent(response, request, "workspace/api.html", time.Time{}, strings.NewReader(string(contents)))
+}
+
 func (s *Server) workspace(response http.ResponseWriter, request *http.Request) {
 	assetName := strings.TrimPrefix(request.URL.Path, "/app/")
 	if assetName != "" && path.Base(assetName) != assetName {

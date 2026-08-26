@@ -53,9 +53,13 @@ func TestWorkspaceBrowserKeyboardFocusAndResponsiveModality(t *testing.T) {
 		"backgroundInert",
 		"diagnosisFocused",
 		"diagnosisModal",
+		"diagnosisRouted",
 		"helpShortcut",
+		"logsDirect",
 		"mobileSearchEscape",
+		"operatorScopeVisible",
 		"runShortcutReviews",
+		"runTargetScoped",
 		"tableHeadersRetained",
 	} {
 		if !results[contract] {
@@ -122,6 +126,8 @@ func workspaceBrowserFixture(response http.ResponseWriter, request *http.Request
 		writeBrowserJSON(response, `{"id":"run_test","automationId":"test-automation","revisionId":"rev_test","eventId":"evt_test","status":"failed","attempt":2,"maxAttempts":2,"createdAt":"2026-08-23T18:42:00Z","startedAt":"2026-08-23T18:42:00Z","finishedAt":"2026-08-23T18:42:01Z","error":"fixture failure","logs":"fixture log"}`)
 	case "/api/v1/deployments", "/api/v1/audit":
 		writeBrowserJSON(response, `[]`)
+	case "/api/v1/auth/session":
+		writeBrowserJSON(response, `{"configured":false,"authenticated":false,"scope":{"environment":"development","instance":"browser-fixture","actor":"workspace:local"}}`)
 	default:
 		http.NotFound(response, request)
 	}
@@ -144,11 +150,16 @@ const workspaceBrowserDriver = `
     try {
       await waitFor(() => document.querySelector("[data-run]"));
       results.tableHeadersRetained = getComputedStyle(document.querySelector(".data-table thead")).display !== "none";
-      document.querySelector("[data-run]").click();
+      document.querySelector("[data-run-logs]").click();
       await waitFor(() => document.querySelector("#diagnosis-pane").getAttribute("aria-modal") === "true");
+      await waitFor(() => document.querySelector('[data-diagnosis-tab="logs"]')?.getAttribute("aria-selected") === "true");
       results.diagnosisModal = document.querySelector("#diagnosis-pane").getAttribute("role") === "dialog";
       results.backgroundInert = document.querySelector("#workspace-main").hasAttribute("inert");
       results.diagnosisFocused = document.activeElement?.hasAttribute("data-close-diagnosis") === true;
+      results.logsDirect = document.querySelector('[data-diagnosis-tab="logs"]').getAttribute("aria-selected") === "true"
+        && document.querySelector("#diagnosis-panel-logs").textContent.includes("fixture log");
+      results.diagnosisRouted = new URL(location.href).searchParams.get("run") === "run_test" && new URL(location.href).searchParams.get("tab") === "logs";
+      results.operatorScopeVisible = document.querySelector("#operator-scope").textContent.includes("development") && document.querySelector("#operator-scope").textContent.includes("workspace:local");
       document.querySelector("[data-close-diagnosis]").click();
       document.querySelector("[data-mobile-back]").click();
       results.backCleared = !document.querySelector("#app-shell").classList.contains("has-selection") && location.hash === "";
@@ -157,6 +168,9 @@ const workspaceBrowserDriver = `
       document.dispatchEvent(new KeyboardEvent("keydown", {key: "r", bubbles: true}));
       await waitFor(() => document.querySelector("#run-dialog").open);
       results.runShortcutReviews = document.querySelector("#run-dialog").open;
+      results.runTargetScoped = document.querySelector("#run-target-environment").textContent === "development"
+        && document.querySelector("#run-target-instance").textContent.length > 0
+        && document.querySelector("#run-target-actor").textContent === "workspace:local";
       document.querySelector("#run-dialog").close();
       document.dispatchEvent(new KeyboardEvent("keydown", {key: "?", bubbles: true}));
       results.helpShortcut = document.querySelector("#help-dialog").open;

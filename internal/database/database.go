@@ -118,6 +118,19 @@ type AuditEvent struct {
 	CreatedAt    time.Time       `json:"createdAt"`
 }
 
+type ListCursor struct {
+	CreatedAt time.Time
+	ID        string
+}
+
+type AuditFilter struct {
+	AutomationID string
+	Action       string
+	Actor        string
+	Since        *time.Time
+	Until        *time.Time
+}
+
 type TriggerIngressPolicy struct {
 	Config json.RawMessage
 }
@@ -1224,6 +1237,33 @@ func (s *Store) ListDeploymentsFiltered(ctx context.Context, automationID, statu
 	return values, rows.Err()
 }
 
+func (s *Store) ListDeploymentsPage(ctx context.Context, automationID, status string, cursor ListCursor, limit int) ([]domain.Deployment, error) {
+	if limit <= 0 || limit > 501 {
+		limit = 101
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, status, automation_id, package_digest, content_hash,
+			COALESCE(revision_id, ''), COALESCE(retry_of, ''), actor, error, provenance,
+			created_at, updated_at, started_at, finished_at, cancel_requested_at
+		FROM deployments
+		WHERE ($1 = '' OR automation_id = $1) AND ($2 = '' OR status = $2)
+			AND ($3 = '' OR (created_at, id) < ($4, $3))
+		ORDER BY created_at DESC, id DESC LIMIT $5`, automationID, status, cursor.ID, cursor.CreatedAt, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := make([]domain.Deployment, 0)
+	for rows.Next() {
+		var value domain.Deployment
+		if err := scanDeployment(rows, &value); err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
 func (s *Store) GetDeployment(ctx context.Context, deploymentID string) (domain.Deployment, error) {
 	var value domain.Deployment
 	err := scanDeployment(s.pool.QueryRow(ctx, `
@@ -1654,6 +1694,33 @@ func (s *Store) ListRunsFiltered(ctx context.Context, automationID, status strin
 	return values, rows.Err()
 }
 
+func (s *Store) ListRunSummariesPage(ctx context.Context, automationID, status string, cursor ListCursor, limit int) ([]domain.RunSummary, error) {
+	if limit <= 0 || limit > 501 {
+		limit = 101
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, automation_id, revision_id, status, attempt, max_attempts,
+			created_at, started_at, finished_at
+		FROM runs
+		WHERE ($1 = '' OR automation_id = $1) AND ($2 = '' OR status = $2)
+			AND ($3 = '' OR (created_at, id) < ($4, $3))
+		ORDER BY created_at DESC, id DESC LIMIT $5`, automationID, status, cursor.ID, cursor.CreatedAt, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := make([]domain.RunSummary, 0)
+	for rows.Next() {
+		var item domain.RunSummary
+		if err := rows.Scan(&item.ID, &item.AutomationID, &item.RevisionID, &item.Status,
+			&item.Attempt, &item.MaxAttempts, &item.CreatedAt, &item.StartedAt, &item.FinishedAt); err != nil {
+			return nil, err
+		}
+		values = append(values, item)
+	}
+	return values, rows.Err()
+}
+
 func (s *Store) GetRun(ctx context.Context, runID string) (domain.Run, error) {
 	var item domain.Run
 	err := s.pool.QueryRow(ctx, `
@@ -1678,6 +1745,36 @@ func (s *Store) ListAuditEvents(ctx context.Context, automationID string, limit 
 		FROM audit_events
 		WHERE ($1 = '' OR automation_id = $1)
 		ORDER BY created_at DESC, id DESC LIMIT $2`, automationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := make([]AuditEvent, 0)
+	for rows.Next() {
+		var item AuditEvent
+		if err := rows.Scan(&item.ID, &item.Action, &item.AutomationID, &item.Actor, &item.Details, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		values = append(values, item)
+	}
+	return values, rows.Err()
+}
+
+func (s *Store) ListAuditEventsPage(ctx context.Context, filter AuditFilter, cursor ListCursor, limit int) ([]AuditEvent, error) {
+	if limit <= 0 || limit > 501 {
+		limit = 101
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, action, automation_id, actor, details, created_at
+		FROM audit_events
+		WHERE ($1 = '' OR automation_id = $1)
+			AND ($2 = '' OR action = $2)
+			AND ($3 = '' OR actor = $3)
+			AND ($4::timestamptz IS NULL OR created_at >= $4)
+			AND ($5::timestamptz IS NULL OR created_at <= $5)
+			AND ($6 = '' OR (created_at, id) < ($7, $6))
+		ORDER BY created_at DESC, id DESC LIMIT $8`, filter.AutomationID, filter.Action, filter.Actor,
+		filter.Since, filter.Until, cursor.ID, cursor.CreatedAt, limit)
 	if err != nil {
 		return nil, err
 	}

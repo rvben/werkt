@@ -166,6 +166,14 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 	if err != nil || len(runs) != 3 {
 		t.Fatalf("queued runs=%d err=%v", len(runs), err)
 	}
+	runPage, err := store.ListRunSummariesPage(ctx, value.Metadata.Name, domain.RunQueued, ListCursor{}, 2)
+	if err != nil || len(runPage) != 2 || runPage[0].ID == "" || runPage[0].RevisionID == "" {
+		t.Fatalf("run summary page=%#v err=%v", runPage, err)
+	}
+	olderRuns, err := store.ListRunSummariesPage(ctx, value.Metadata.Name, domain.RunQueued, ListCursor{CreatedAt: runPage[1].CreatedAt, ID: runPage[1].ID}, 2)
+	if err != nil || len(olderRuns) != 1 || olderRuns[0].ID == runPage[0].ID || olderRuns[0].ID == runPage[1].ID {
+		t.Fatalf("older run summary page=%#v err=%v", olderRuns, err)
+	}
 	audit, err := store.ListAuditEvents(ctx, value.Metadata.Name, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -177,6 +185,15 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 	for _, action := range []string{"automation.deployed", "automation.paused", "run.queued_manually", "automation.resumed"} {
 		if !actions[action] {
 			t.Errorf("audit action %q missing from %#v", action, actions)
+		}
+	}
+	filteredAudit, err := store.ListAuditEventsPage(ctx, AuditFilter{AutomationID: value.Metadata.Name, Action: "run.queued_manually", Actor: "agent:test"}, ListCursor{}, 10)
+	if err != nil || len(filteredAudit) < 1 {
+		t.Fatalf("filtered audit=%#v err=%v", filteredAudit, err)
+	}
+	for _, event := range filteredAudit {
+		if event.Action != "run.queued_manually" || event.Actor != "agent:test" {
+			t.Fatalf("unexpected filtered audit event=%#v", event)
 		}
 	}
 

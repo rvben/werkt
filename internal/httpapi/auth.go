@@ -284,15 +284,22 @@ func (a *BrowserAuth) readSession(request *http.Request) (browserSession, error)
 
 func (s *Server) browserSession(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Cache-Control", "no-store")
+	scope := map[string]string{
+		"environment": s.environment,
+		"instance":    s.instance,
+		"actor":       "workspace:local",
+	}
 	if s.browserAuth == nil {
-		writeJSON(response, http.StatusOK, map[string]any{"configured": false, "authenticated": false})
+		writeJSON(response, http.StatusOK, map[string]any{"configured": false, "authenticated": false, "scope": scope})
 		return
 	}
 	session, err := s.browserAuth.readSession(request)
 	if err != nil {
-		writeJSON(response, http.StatusOK, map[string]any{"configured": true, "authenticated": false})
+		scope["actor"] = "sign-in required"
+		writeJSON(response, http.StatusOK, map[string]any{"configured": true, "authenticated": false, "scope": scope})
 		return
 	}
+	scope["actor"] = browserActor(session.Identity)
 	writeJSON(response, http.StatusOK, map[string]any{
 		"configured":    true,
 		"authenticated": true,
@@ -303,6 +310,7 @@ func (s *Server) browserSession(response http.ResponseWriter, request *http.Requ
 		},
 		"csrfToken": session.CSRF,
 		"expiresAt": session.Expires,
+		"scope":     scope,
 	})
 }
 
@@ -406,7 +414,7 @@ func (s *Server) browserLogout(response http.ResponseWriter, request *http.Reque
 		return
 	}
 	if !constantTimeEqual(request.Header.Get("X-Werkt-CSRF"), session.CSRF) {
-		writeError(response, http.StatusForbidden, "CSRF validation failed")
+		writeProblem(response, http.StatusForbidden, "csrf_validation_failed", "CSRF validation failed", false, nil)
 		return
 	}
 	clearBrowserCookie(response, browserSessionCookie)

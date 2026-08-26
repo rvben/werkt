@@ -1,10 +1,11 @@
 openapi: 3.1.0
 info:
   title: Werkt API
-  version: 1.2.0
-  description: Agent-facing management API and trigger ingress for Werkt automations.
+  version: 1.3.0
+  description: Agent-facing management API and trigger ingress for Werkt automations. Management bearer tokens may be full-access or scoped to read, operate, deploy, secrets, or retention operations.
 servers:
-  - url: http://127.0.0.1:8080
+  - url: /
+    description: The Werkt instance that served this contract.
 paths:
   /healthz:
     get:
@@ -150,6 +151,7 @@ paths:
         - {$ref: "#/components/parameters/IdempotencyKey"}
         - {$ref: "#/components/parameters/ExpectedRevision"}
       requestBody:
+        required: true
         description: JSON event data, limited to 2 MiB.
         content:
           application/json:
@@ -235,9 +237,13 @@ paths:
           in: query
           schema: {type: string, enum: [queued, validating, building, checking, activating, succeeded, failed, cancelled]}
         - {$ref: "#/components/parameters/Limit"}
+        - {$ref: "#/components/parameters/Cursor"}
       responses:
         "200":
           description: Deployment jobs newest first.
+          headers:
+            X-Werkt-Next-Cursor: {$ref: "#/components/headers/NextCursor"}
+            Link: {$ref: "#/components/headers/NextLink"}
           content:
             application/json:
               schema:
@@ -257,6 +263,10 @@ paths:
       responses:
         "200":
           description: Current deployment lifecycle and diagnostics. Nonterminal responses include Retry-After.
+          headers:
+            Retry-After:
+              description: Suggested polling interval in seconds for a nonterminal deployment.
+              schema: {type: string}
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Deployment"}
@@ -439,14 +449,18 @@ paths:
           in: query
           schema: {type: string, enum: [queued, running, succeeded, failed]}
         - {$ref: "#/components/parameters/Limit"}
+        - {$ref: "#/components/parameters/Cursor"}
       responses:
         "200":
-          description: Runs newest first.
+          description: Log-free run summaries newest first. Fetch one run for logs, errors, event data, and structured output.
+          headers:
+            X-Werkt-Next-Cursor: {$ref: "#/components/headers/NextCursor"}
+            Link: {$ref: "#/components/headers/NextLink"}
           content:
             application/json:
               schema:
                 type: array
-                items: {$ref: "#/components/schemas/Run"}
+                items: {$ref: "#/components/schemas/RunSummary"}
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
   /api/v1/runs/{run}:
@@ -474,10 +488,26 @@ paths:
         - name: automation
           in: query
           schema: {type: string}
+        - name: action
+          in: query
+          schema: {type: string}
+        - name: actor
+          in: query
+          schema: {type: string}
+        - name: since
+          in: query
+          schema: {type: string, format: date-time}
+        - name: until
+          in: query
+          schema: {type: string, format: date-time}
         - {$ref: "#/components/parameters/Limit"}
+        - {$ref: "#/components/parameters/Cursor"}
       responses:
         "200":
           description: Audit events newest first.
+          headers:
+            X-Werkt-Next-Cursor: {$ref: "#/components/headers/NextCursor"}
+            Link: {$ref: "#/components/headers/NextLink"}
           content:
             application/json:
               schema:
@@ -545,6 +575,7 @@ components:
     BearerAuth:
       type: http
       scheme: bearer
+      description: Full-access WERKT_MANAGEMENT_TOKEN or a least-privilege scoped management token. A token without the required operation scope receives an insufficient_scope problem.
     BrowserSession:
       type: apiKey
       in: cookie
@@ -604,7 +635,7 @@ components:
       name: Idempotency-Key
       in: header
       required: true
-      schema: {type: string}
+      schema: {type: string, minLength: 1, maxLength: 255}
     ExpectedRevision:
       name: X-Werkt-Expected-Revision
       in: header
@@ -626,6 +657,18 @@ components:
       name: limit
       in: query
       schema: {type: integer, minimum: 1, maximum: 500, default: 100}
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque cursor from X-Werkt-Next-Cursor. Preserve the other filters when continuing a listing.
+      schema: {type: string}
+  headers:
+    NextCursor:
+      description: Opaque cursor for the next older page. Omitted when there is no next page.
+      schema: {type: string}
+    NextLink:
+      description: Relative URL for the next older page with rel=next. Omitted when there is no next page.
+      schema: {type: string}
   responses:
     Error:
       description: Request failed.
@@ -671,12 +714,24 @@ components:
             username: {type: string}
         csrfToken: {type: string}
         expiresAt: {type: string, format: date-time}
-      required: [configured, authenticated]
+        scope:
+          type: object
+          properties:
+            environment: {type: string}
+            instance: {type: string}
+            actor: {type: string}
+          required: [environment, instance, actor]
+      required: [configured, authenticated, scope]
     Error:
       type: object
       properties:
+        code: {type: string, description: Stable machine-readable problem code.}
+        message: {type: string, description: Human-readable problem summary.}
         error: {type: string}
-      required: [error]
+        retryable: {type: boolean}
+        requestId: {type: string}
+        context: {type: object, additionalProperties: true}
+      required: [code, message, error, retryable]
     AutomationSummary:
       type: object
       properties:
@@ -725,23 +780,29 @@ components:
                   createdAt: {type: string, format: date-time}
                 required: [id, contentHash, active, createdAt]
           required: [manifest, triggers, revisions]
-    Run:
+    RunSummary:
       type: object
       properties:
         id: {type: string}
         automationId: {type: string}
         revisionId: {type: string}
-        eventId: {type: string}
         status: {type: string, enum: [queued, running, succeeded, failed]}
         attempt: {type: integer}
         maxAttempts: {type: integer}
         createdAt: {type: string, format: date-time}
         startedAt: {type: string, format: date-time}
         finishedAt: {type: string, format: date-time}
-        logs: {type: string}
-        error: {type: string}
-        result: {}
-      required: [id, automationId, revisionId, eventId, status, attempt, maxAttempts, createdAt]
+      required: [id, automationId, revisionId, status, attempt, maxAttempts, createdAt]
+    Run:
+      allOf:
+        - {$ref: "#/components/schemas/RunSummary"}
+        - type: object
+          properties:
+            eventId: {type: string}
+            logs: {type: string}
+            error: {type: string}
+            result: {}
+          required: [eventId]
     Deployment:
       type: object
       properties:
