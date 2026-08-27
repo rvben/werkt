@@ -133,9 +133,16 @@ All remote actions in this repository are pinned to immutable commit SHAs, and
 CI rejects `pull_request_target` or use of the self-hosted label outside the
 protected staging workflow.
 
-Create a GitHub environment named `staging` with a required reviewer, then add:
+Create a GitHub environment named `staging`, restrict deployments to the `main`
+branch, and add:
 
 - environment variable `WERKT_STAGING_URL` containing the private TLS URL.
+
+Do not add a required reviewer to this staging environment. The workflow is
+manual, accepts only the current `main` commit, and verifies the exact target,
+artifact, health, and canary before it succeeds. A self-review prompt adds noise
+without adding an independent approval boundary; reserve required reviews for
+production deployments.
 
 Keep `WERKT_MANAGEMENT_TOKEN` only in `/etc/werkt/werkt.env`. The protected
 workflow performs its authenticated check through the root-owned
