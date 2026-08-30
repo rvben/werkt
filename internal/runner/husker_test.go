@@ -150,6 +150,8 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 			contents := []byte(`{"ok":true}`)
 			if strings.HasSuffix(fmt.Sprint(body["path"]), "/state.json") {
 				contents = []byte(`{"count":2}`)
+			} else if strings.HasSuffix(fmt.Sprint(body["path"]), "/control.json") {
+				contents = []byte(`{}`)
 			}
 			writeJSON(t, response, map[string]any{
 				"data": base64.StdEncoding.EncodeToString(contents),

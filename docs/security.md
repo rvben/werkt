@@ -86,6 +86,24 @@ the unsigned delivery header, so changing that header cannot bypass
 idempotency. Invalid signatures receive `401`; missing delivery identity or a
 non-JSON body receives `400`.
 
+Zoom webhooks use Zoom's native validation and signing contract:
+
+```yaml
+triggers:
+  - id: zoom-recordings
+    type: webhook
+    config:
+      provider: zoom
+      secret: media/zoom/webhook-secret-token
+```
+
+Werkt verifies `X-Zm-Signature` as HMAC-SHA256 over
+`v0:<X-Zm-Request-Timestamp>:<exact request body>` and accepts timestamps only
+within five minutes. It answers `endpoint.url_validation` directly with the
+required plain and encrypted tokens without queueing an automation run. Other
+JSON events use a digest of the signed body as replay identity and record the
+Zoom event name in metadata. No unsigned Zoom header can change idempotency.
+
 Any webhook provider may declare a positive `deliveryDelay` of at most 24 hours.
 Werkt persists and deduplicates the event immediately, but sets the run's
 availability in the future. Workers do not sleep or hold an executor while the

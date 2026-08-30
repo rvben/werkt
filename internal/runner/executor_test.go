@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rvben/werkt/internal/domain"
 	"github.com/rvben/werkt/internal/provenance"
@@ -88,5 +89,21 @@ func TestLogRedactionHappensBeforeTruncation(t *testing.T) {
 	}
 	if !strings.Contains(logs, "[logs truncated]") {
 		t.Fatal("expected log truncation marker")
+	}
+}
+
+func TestValidateRunControlAcceptsTypedApprovalAndRejectsUnsafeShapes(t *testing.T) {
+	now := time.Now().UTC()
+	valid := []byte(`{"approval":{"key":"publish-42","title":"Publish recording?","expiresAt":"` + now.Add(time.Hour).Format(time.RFC3339) + `","fields":[{"id":"title","label":"Title","type":"text","required":true}],"actions":[{"id":"approve","label":"Publish","style":"primary","requiresFields":true},{"id":"reject","label":"Skip","style":"neutral"}]}}`)
+	control, err := validateRunControl(valid, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if control.Approval == nil || control.Approval.Fields[0].Type != "text" || !control.Approval.Actions[0].RequiresFields {
+		t.Fatalf("control=%#v", control)
+	}
+	invalid := []byte(`{"approval":{"key":"publish-42","title":"Publish?","expiresAt":"` + now.Add(time.Hour).Format(time.RFC3339) + `","fields":[{"id":"visibility","label":"Visibility","type":"select","options":[]}],"actions":[{"id":"execute","label":"Do it"}]}}`)
+	if _, err := validateRunControl(invalid, now); err == nil {
+		t.Fatal("unsafe approval shape was accepted")
 	}
 }

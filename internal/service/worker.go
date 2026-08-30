@@ -64,7 +64,7 @@ func (w *Worker) runOnce(ctx context.Context) error {
 		slog.Warn("run failed", "run", run.ID, "automation", run.AutomationID, "error", executeErr)
 		return nil
 	}
-	if err := w.store.CompleteRun(ctx, *run, w.id, result.Logs, result.Output, result.State); err != nil {
+	if err := w.store.CompleteRun(ctx, *run, w.id, result.Logs, result.Output, result.State, result.Control); err != nil {
 		return err
 	}
 	slog.Info("run succeeded", "run", run.ID, "automation", run.AutomationID)

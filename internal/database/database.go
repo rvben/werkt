@@ -42,6 +42,10 @@ var (
 	ErrSecretInUse                   = errors.New("secret is in use")
 	ErrAutomationStateConflict       = errors.New("automation state changed after the run started")
 	ErrArtifactProvenanceRequired    = errors.New("valid artifact provenance is required")
+	ErrApprovalNotFound              = errors.New("approval not found")
+	ErrApprovalResolved              = errors.New("approval is already resolved")
+	ErrApprovalExpired               = errors.New("approval has expired")
+	ErrApprovalInvalidResponse       = errors.New("approval response is invalid")
 )
 
 //go:embed migrations/*.sql
@@ -696,7 +700,7 @@ func (s *Store) RenewRunLease(ctx context.Context, runID, workerID string, lease
 	return command.RowsAffected() == 1, nil
 }
 
-func (s *Store) CompleteRun(ctx context.Context, run domain.RunnableRun, workerID, logs string, result, state json.RawMessage) error {
+func (s *Store) CompleteRun(ctx context.Context, run domain.RunnableRun, workerID, logs string, result, state json.RawMessage, control domain.RunControl) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -735,7 +739,71 @@ func (s *Store) CompleteRun(ctx context.Context, run domain.RunnableRun, workerI
 			return ErrAutomationStateConflict
 		}
 	}
+	if control.Defer != nil {
+		if err := enqueueDeferredRun(ctx, tx, run, *control.Defer); err != nil {
+			return err
+		}
+	}
+	if control.Approval != nil {
+		approvalID := newID("approval")
+		fields, err := json.Marshal(control.Approval.Fields)
+		if err != nil {
+			return err
+		}
+		actions, err := json.Marshal(control.Approval.Actions)
+		if err != nil {
+			return err
+		}
+		command, err := tx.Exec(ctx, `
+			INSERT INTO approvals (id, automation_id, revision_id, requested_by_run_id,
+				approval_key, title, description, fields, actions, expires_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			ON CONFLICT (automation_id, approval_key) DO NOTHING`,
+			approvalID, run.AutomationID, run.RevisionID, run.ID,
+			control.Approval.Key, strings.TrimSpace(control.Approval.Title),
+			strings.TrimSpace(control.Approval.Description), fields, actions, control.Approval.ExpiresAt)
+		if err != nil {
+			return err
+		}
+		if command.RowsAffected() != 1 {
+			return errors.New("approval key was already used by this automation")
+		}
+		if err := insertAuditEvent(ctx, tx, "approval.requested", run.AutomationID, "run:"+run.ID, map[string]any{"approvalId": approvalID, "revisionId": run.RevisionID, "key": control.Approval.Key}); err != nil {
+			return err
+		}
+	}
 	return tx.Commit(ctx)
+}
+
+func enqueueDeferredRun(ctx context.Context, tx pgx.Tx, parent domain.RunnableRun, request domain.DeferredRunRequest) error {
+	now := time.Now().UTC()
+	eventID := newID("evt")
+	runID := newID("run")
+	externalID := parent.ID + ":" + request.Key
+	envelope := domain.EventEnvelope{
+		ID: eventID, OccurredAt: request.Until.UTC(), ReceivedAt: now,
+		Trigger:  domain.EventTrigger{Automation: parent.AutomationID, ID: "deferred", Type: "deferred"},
+		Data:     request.Data,
+		Metadata: map[string]any{"source": "deferred", "parentRunId": parent.ID, "continuationKey": request.Key},
+	}
+	envelopeJSON, err := json.Marshal(envelope)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO events (id, trigger_key, external_id, envelope, occurred_at, received_at)
+		VALUES ($1, $2, $3, $4, $5, $6)`, eventID, parent.AutomationID+":deferred", externalID, envelopeJSON, request.Until.UTC(), now); err != nil {
+		return err
+	}
+	policy := parent.Manifest.Execution.Concurrency
+	if policy == "" {
+		policy = "allow"
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO runs (id, automation_id, revision_id, event_id, status, max_attempts, concurrency_policy, available_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, runID, parent.AutomationID,
+		parent.RevisionID, eventID, domain.RunQueued, parent.Manifest.Execution.Retries+1, policy, request.Until.UTC())
+	return err
 }
 
 func validStateObject(value json.RawMessage) bool {

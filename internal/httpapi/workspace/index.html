@@ -15,6 +15,7 @@
   <svg class="icon-sprite" aria-hidden="true">
     <symbol id="icon-bolt" viewBox="0 0 24 24"><path d="M13 2 4.5 13H11l-1 9 8.5-12H12l1-8Z"/></symbol>
     <symbol id="icon-runs" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m10 8 6 4-6 4V8Z"/></symbol>
+    <symbol id="icon-approval" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m7.5 12 3 3 6-7"/></symbol>
     <symbol id="icon-package" viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"/><path d="m4.5 7.8 7.5 4.3 7.5-4.3M12 12.1V21"/></symbol>
     <symbol id="icon-audit" viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.6 2.8 8.3 7 10 4.2-1.7 7-5.4 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-5"/></symbol>
     <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></symbol>
@@ -75,13 +76,16 @@
       <button class="nav-item is-active" type="button" data-view="automations" aria-current="page" aria-keyshortcuts="Alt+1">
         <svg class="icon" aria-hidden="true"><use href="#icon-bolt"></use></svg><span>Automations</span>
       </button>
-      <button class="nav-item" type="button" data-view="runs" aria-keyshortcuts="Alt+2">
+      <button class="nav-item" type="button" data-view="approvals" aria-keyshortcuts="Alt+2">
+        <svg class="icon" aria-hidden="true"><use href="#icon-approval"></use></svg><span>Approvals</span><span class="nav-count" id="approval-nav-count" hidden>0</span>
+      </button>
+      <button class="nav-item" type="button" data-view="runs" aria-keyshortcuts="Alt+3">
         <svg class="icon" aria-hidden="true"><use href="#icon-runs"></use></svg><span>Runs</span>
       </button>
-      <button class="nav-item" type="button" data-view="deployments" aria-keyshortcuts="Alt+3">
+      <button class="nav-item" type="button" data-view="deployments" aria-keyshortcuts="Alt+4">
         <svg class="icon" aria-hidden="true"><use href="#icon-package"></use></svg><span>Deployments</span>
       </button>
-      <button class="nav-item" type="button" data-view="audit" aria-keyshortcuts="Alt+4">
+      <button class="nav-item" type="button" data-view="audit" aria-keyshortcuts="Alt+5">
         <svg class="icon" aria-hidden="true"><use href="#icon-audit"></use></svg><span>Audit</span>
       </button>
       <div class="nav-foot">
@@ -174,7 +178,7 @@
         <div><dt><kbd>⌘/Ctrl</kbd> <kbd>K</kbd></dt><dd>Search automations</dd></div>
         <div><dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move through the inventory</dd></div>
         <div><dt><kbd>Enter</kbd></dt><dd>Open the focused automation</dd></div>
-        <div><dt><kbd>Alt</kbd> <kbd>1–4</kbd></dt><dd>Open Automations, Runs, Deployments, or Audit</dd></div>
+        <div><dt><kbd>Alt</kbd> <kbd>1–5</kbd></dt><dd>Open Automations, Approvals, Runs, Deployments, or Audit</dd></div>
         <div><dt><kbd>R</kbd></dt><dd>Review a manual run for the selected automation</dd></div>
         <div><dt><kbd>L</kbd></dt><dd>Open logs for the diagnosed run</dd></div>
         <div><dt><kbd>⇧</kbd> <kbd>R</kbd></dt><dd>Refresh the workspace</dd></div>
@@ -234,6 +238,26 @@
         <button class="button button-quiet" id="action-dismiss" type="button" data-close-dialog="action">Keep current state</button>
         <button class="button button-danger" id="action-submit" type="submit">Confirm</button>
       </div>
+    </form>
+  </dialog>
+
+  <dialog class="approval-dialog" id="approval-dialog" aria-labelledby="approval-dialog-title" aria-describedby="approval-dialog-description approval-error">
+    <form method="dialog" id="approval-form">
+      <button class="icon-button dialog-close" type="button" data-close-dialog="approval" aria-label="Close approval review">
+        <svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg>
+      </button>
+      <span class="dialog-symbol" aria-hidden="true"><svg class="icon"><use href="#icon-approval"></use></svg></span>
+      <h2 id="approval-dialog-title">Review approval</h2>
+      <p id="approval-dialog-description"></p>
+      <dl class="approval-scope">
+        <dt>Automation</dt><dd class="mono" id="approval-scope-automation">Not loaded</dd>
+        <dt>Revision</dt><dd class="mono" id="approval-scope-revision">Not loaded</dd>
+        <dt>Requested</dt><dd class="tabular" id="approval-scope-requested">Not loaded</dd>
+        <dt>Expires</dt><dd class="tabular" id="approval-scope-expires">Not loaded</dd>
+      </dl>
+      <div id="approval-fields"></div>
+      <p class="field-message" id="approval-error" role="alert"></p>
+      <div class="dialog-actions approval-actions" id="approval-actions"></div>
     </form>
   </dialog>
 

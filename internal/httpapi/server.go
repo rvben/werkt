@@ -67,6 +67,9 @@ type Store interface {
 	EnqueueManualRun(context.Context, string, string, string, json.RawMessage, string) (string, bool, error)
 	ListRunSummariesPage(context.Context, string, string, database.ListCursor, int) ([]domain.RunSummary, error)
 	GetRun(context.Context, string) (domain.Run, error)
+	ListApprovalsPage(context.Context, string, string, database.ListCursor, int) ([]domain.Approval, error)
+	GetApproval(context.Context, string) (domain.Approval, error)
+	ResolveApproval(context.Context, string, string, string, string, map[string]any, string) (domain.Approval, bool, error)
 	ListAuditEventsPage(context.Context, database.AuditFilter, database.ListCursor, int) ([]database.AuditEvent, error)
 	ListDeploymentsPage(context.Context, string, string, database.ListCursor, int) ([]domain.Deployment, error)
 	GetDeployment(context.Context, string) (domain.Deployment, error)
@@ -181,6 +184,9 @@ func New(store Store, address, managementToken string, options ...Option) *Serve
 	mux.Handle("POST /api/v1/automations/{automation}/rollback", value.requireManagementAuth(ScopeOperate, http.HandlerFunc(value.rollbackAutomation)))
 	mux.Handle("GET /api/v1/runs", value.requireManagementAuth(ScopeRead, http.HandlerFunc(value.runs)))
 	mux.Handle("GET /api/v1/runs/{run}", value.requireManagementAuth(ScopeRead, http.HandlerFunc(value.run)))
+	mux.Handle("GET /api/v1/approvals", value.requireManagementAuth(ScopeRead, http.HandlerFunc(value.approvals)))
+	mux.Handle("GET /api/v1/approvals/{approval}", value.requireManagementAuth(ScopeRead, http.HandlerFunc(value.approval)))
+	mux.Handle("POST /api/v1/approvals/{approval}/actions", value.requireManagementAuth(ScopeOperate, http.HandlerFunc(value.resolveApproval)))
 	mux.Handle("GET /api/v1/audit", value.requireManagementAuth(ScopeRead, http.HandlerFunc(value.audit)))
 	mux.Handle("POST /api/v1/deployments", value.requireManagementAuth(ScopeDeploy, http.HandlerFunc(value.createDeployment)))
 	mux.Handle("GET /api/v1/deployments", value.requireManagementAuth(ScopeRead, http.HandlerFunc(value.deployments)))
@@ -680,7 +686,7 @@ func (s *Server) webhook(response http.ResponseWriter, request *http.Request) {
 		SignatureHeader string `json:"signatureHeader"`
 		Provider        string `json:"provider"`
 	}
-	if err := json.Unmarshal(policy.Config, &config); err != nil || config.Secret == "" || (config.Provider != "" && config.Provider != "werkt" && config.Provider != "github") {
+	if err := json.Unmarshal(policy.Config, &config); err != nil || config.Secret == "" || (config.Provider != "" && config.Provider != "werkt" && config.Provider != "github" && config.Provider != "zoom") {
 		slog.Error("webhook trigger has invalid credential configuration", "automation", request.PathValue("automation"), "trigger", request.PathValue("trigger"))
 		writeError(response, http.StatusServiceUnavailable, "trigger credential unavailable")
 		return
@@ -695,6 +701,10 @@ func (s *Server) webhook(response http.ResponseWriter, request *http.Request) {
 	}
 	if config.Provider == "github" {
 		s.githubWebhook(response, request, body, secret)
+		return
+	}
+	if config.Provider == "zoom" {
+		s.zoomWebhook(response, request, body, secret)
 		return
 	}
 	idempotencyKey := request.Header.Get("Idempotency-Key")
@@ -782,6 +792,75 @@ func (s *Server) githubWebhook(response http.ResponseWriter, request *http.Reque
 		"githubTargetId": request.Header.Get("X-GitHub-Hook-Installation-Target-ID"),
 		"contentType":    request.Header.Get("Content-Type"),
 		"userAgent":      request.UserAgent(),
+	}
+	runID, created, err := s.store.IngestEvent(
+		request.Context(), request.PathValue("automation"), request.PathValue("trigger"),
+		"webhook", externalID, time.Now().UTC(), json.RawMessage(body), metadata,
+	)
+	if err != nil {
+		writeError(response, http.StatusNotFound, err.Error())
+		return
+	}
+	status := http.StatusAccepted
+	if !created {
+		status = http.StatusOK
+	}
+	writeJSON(response, status, map[string]any{"runId": runID, "created": created})
+}
+
+func (s *Server) zoomWebhook(response http.ResponseWriter, request *http.Request, body, secret []byte) {
+	timestampValue := request.Header.Get("X-Zm-Request-Timestamp")
+	timestampSeconds, timestampErr := strconv.ParseInt(timestampValue, 10, 64)
+	timestamp := time.Unix(timestampSeconds, 0)
+	age := time.Since(timestamp)
+	if timestampErr != nil || age < -webhookSignatureTolerance || age > webhookSignatureTolerance {
+		writeError(response, http.StatusUnauthorized, "invalid or stale Zoom webhook timestamp")
+		return
+	}
+	provided, found := strings.CutPrefix(request.Header.Get("X-Zm-Signature"), "v0=")
+	providedDigest, decodeErr := hex.DecodeString(provided)
+	expectedDigest := hmac.New(sha256.New, secret)
+	_, _ = io.WriteString(expectedDigest, "v0:"+timestampValue+":")
+	_, _ = expectedDigest.Write(body)
+	if !found || decodeErr != nil || len(providedDigest) != sha256.Size || !hmac.Equal(expectedDigest.Sum(nil), providedDigest) {
+		writeError(response, http.StatusUnauthorized, "invalid Zoom webhook signature")
+		return
+	}
+	if len(body) == 0 || !json.Valid(body) {
+		writeError(response, http.StatusBadRequest, "Zoom webhook body must be JSON")
+		return
+	}
+	var event struct {
+		Event   string `json:"event"`
+		Payload struct {
+			PlainToken string `json:"plainToken"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(body, &event); err != nil || event.Event == "" {
+		writeError(response, http.StatusBadRequest, "Zoom webhook event is required")
+		return
+	}
+	if event.Event == "endpoint.url_validation" {
+		if event.Payload.PlainToken == "" {
+			writeError(response, http.StatusBadRequest, "Zoom validation plainToken is required")
+			return
+		}
+		encryptedToken := hmac.New(sha256.New, secret)
+		_, _ = io.WriteString(encryptedToken, event.Payload.PlainToken)
+		writeJSON(response, http.StatusOK, map[string]string{
+			"plainToken":     event.Payload.PlainToken,
+			"encryptedToken": hex.EncodeToString(encryptedToken.Sum(nil)),
+		})
+		return
+	}
+	bodyDigest := sha256.Sum256(body)
+	externalID := "zoom:" + hex.EncodeToString(bodyDigest[:])
+	metadata := map[string]any{
+		"source":      "webhook",
+		"provider":    "zoom",
+		"zoomEvent":   event.Event,
+		"contentType": request.Header.Get("Content-Type"),
+		"userAgent":   request.UserAgent(),
 	}
 	runID, created, err := s.store.IngestEvent(
 		request.Context(), request.PathValue("automation"), request.PathValue("trigger"),
@@ -892,6 +971,92 @@ func (s *Server) updateAutomation(response http.ResponseWriter, request *http.Re
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]any{"automation": value, "changed": changed})
+}
+
+func (s *Server) approvals(response http.ResponseWriter, request *http.Request) {
+	limit, err := requestLimit(request, 100)
+	if err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	status := request.URL.Query().Get("status")
+	if status != "" && status != "pending" && status != "approved" && status != "rejected" && status != "expired" {
+		writeError(response, http.StatusBadRequest, "status must be pending, approved, rejected, or expired")
+		return
+	}
+	cursor, err := requestCursor(request)
+	if err != nil {
+		writeProblem(response, http.StatusBadRequest, "invalid_cursor", err.Error(), false, nil)
+		return
+	}
+	values, err := s.store.ListApprovalsPage(request.Context(), request.URL.Query().Get("automation"), status, cursor, limit+1)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "list approvals")
+		return
+	}
+	if len(values) > limit {
+		values = values[:limit]
+		last := values[len(values)-1]
+		writeNextPageHeaders(response, request, database.ListCursor{CreatedAt: last.CreatedAt, ID: last.ID})
+	}
+	writeJSON(response, http.StatusOK, values)
+}
+
+func (s *Server) approval(response http.ResponseWriter, request *http.Request) {
+	value, err := s.store.GetApproval(request.Context(), request.PathValue("approval"))
+	if errors.Is(err, database.ErrApprovalNotFound) {
+		writeError(response, http.StatusNotFound, "approval not found")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "get approval")
+		return
+	}
+	writeJSON(response, http.StatusOK, value)
+}
+
+func (s *Server) resolveApproval(response http.ResponseWriter, request *http.Request) {
+	idempotencyKey := strings.TrimSpace(request.Header.Get("Idempotency-Key"))
+	if err := service.ValidateIdempotencyKey(idempotencyKey); err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	var body struct {
+		Action string         `json:"action"`
+		Fields map[string]any `json:"fields"`
+	}
+	if err := decodeJSON(response, request, maxWebhookBody, &body); err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	value, created, err := s.store.ResolveApproval(
+		request.Context(), request.PathValue("approval"), idempotencyKey,
+		request.Header.Get("X-Werkt-Expected-Revision"), body.Action, body.Fields, requestActor(request),
+	)
+	switch {
+	case errors.Is(err, database.ErrApprovalNotFound):
+		writeError(response, http.StatusNotFound, "approval not found")
+	case errors.Is(err, database.ErrApprovalResolved):
+		writeProblem(response, http.StatusConflict, "approval_resolved", "approval has already been resolved", false, map[string]any{"approvalId": request.PathValue("approval")})
+	case errors.Is(err, database.ErrApprovalExpired):
+		writeProblem(response, http.StatusConflict, "approval_expired", "approval has expired", false, map[string]any{"approvalId": request.PathValue("approval")})
+	case errors.Is(err, database.ErrAutomationRevisionChanged):
+		writeProblem(response, http.StatusConflict, "active_revision_changed", "active revision changed; refresh the approval and review its execution target", false, map[string]any{"approvalId": request.PathValue("approval")})
+	case errors.Is(err, database.ErrApprovalInvalidResponse):
+		writeError(response, http.StatusBadRequest, err.Error())
+	case err != nil:
+		slog.Error("resolve approval", "error", err)
+		writeError(response, http.StatusInternalServerError, "resolve approval")
+	default:
+		status := http.StatusAccepted
+		if !created {
+			status = http.StatusOK
+		}
+		if value.ActionRunID != "" {
+			response.Header().Set("Location", "/api/v1/runs/"+value.ActionRunID)
+		}
+		writeJSON(response, status, map[string]any{"approval": value, "created": created})
+	}
 }
 
 func (s *Server) manualRun(response http.ResponseWriter, request *http.Request) {

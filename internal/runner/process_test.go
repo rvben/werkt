@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rvben/werkt/internal/domain"
 	"github.com/rvben/werkt/internal/runner"
@@ -91,6 +92,47 @@ func TestProcessRunnerProvidesAndReturnsTransactionalState(t *testing.T) {
 	}
 	if string(result.State) != `{"count":2}` {
 		t.Fatalf("state = %s", result.State)
+	}
+}
+
+func TestProcessRunnerReturnsValidatedDeferredContinuation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is POSIX-specific")
+	}
+	directory := t.TempDir()
+	until := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	script := []byte("#!/bin/sh\nset -eu\ntest -n \"$WERKT_CONTROL_PATH\"\nprintf '%s' '{\"defer\":{\"key\":\"recording-42.poll\",\"until\":\"" + until + "\",\"data\":{\"jobId\":\"42\"}}}' > \"$WERKT_CONTROL_PATH\"\n")
+	if err := os.WriteFile(filepath.Join(directory, "run.sh"), script, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	value := domain.RunnableRun{
+		Run:          domain.Run{ID: "run_defer", AutomationID: "stateful", RevisionID: "rev_state"},
+		ArtifactPath: directory,
+		Manifest:     domain.Manifest{Runtime: domain.Runtime{Language: "shell", Command: []string{"./run.sh"}}, Execution: domain.Execution{Timeout: "5s"}},
+	}
+	result, err := runner.NewProcessRunner().Execute(context.Background(), value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Control.Defer == nil || result.Control.Defer.Key != "recording-42.poll" || string(result.Control.Defer.Data) != `{"jobId":"42"}` {
+		t.Fatalf("control = %#v", result.Control)
+	}
+}
+
+func TestProcessRunnerRejectsAmbiguousRunControl(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is POSIX-specific")
+	}
+	directory := t.TempDir()
+	until := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	script := []byte("#!/bin/sh\nset -eu\nprintf '%s' '{\"defer\":{\"key\":\"next\",\"until\":\"" + until + "\"},\"approval\":{\"key\":\"review\",\"title\":\"Review\",\"expiresAt\":\"" + until + "\",\"actions\":[{\"id\":\"approve\",\"label\":\"Approve\"}]}}' > \"$WERKT_CONTROL_PATH\"\n")
+	if err := os.WriteFile(filepath.Join(directory, "run.sh"), script, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	value := domain.RunnableRun{Run: domain.Run{ID: "run_bad_control"}, ArtifactPath: directory, Manifest: domain.Manifest{Runtime: domain.Runtime{Command: []string{"./run.sh"}}, Execution: domain.Execution{Timeout: "5s"}}}
+	_, err := runner.NewProcessRunner().Execute(context.Background(), value)
+	if err == nil || !strings.Contains(err.Error(), "cannot defer and request approval") {
+		t.Fatalf("Execute() error = %v", err)
 	}
 }
 

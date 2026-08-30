@@ -152,6 +152,22 @@ curl -H "Authorization: Bearer $WERKT_MANAGEMENT_TOKEN" \
 
 Manual runs use the active immutable revision and the manifest's retry and concurrency policies, even while the automation is paused.
 
+## Approvals
+
+`GET /api/v1/approvals` lists typed operator requests and accepts `automation`,
+`status`, `limit`, and opaque `cursor` filters. `GET /api/v1/approvals/{id}`
+returns the declared fields, allowed actions, expiry, requesting run, and exact
+immutable revision.
+
+`POST /api/v1/approvals/{id}/actions` requires `Idempotency-Key` and
+`X-Werkt-Expected-Revision`. The strict body is
+`{"action":"approve","fields":{...}}`. Werkt validates the response against
+the request, atomically records actor attribution and the decision, and queues
+an `approval` continuation pinned to the reviewed revision. A resolved or
+expired request, or an automation whose active revision changed during review,
+returns `409` without queueing work. An idempotent replay returns the original
+decision and run.
+
 ## Runs and audit history
 
 `GET /api/v1/runs` accepts `automation`, `status`, `limit`, and opaque `cursor` filters. `limit` must be from 1 to 500. Listings return log-free summaries; `GET /api/v1/runs/{id}` returns the full event identity, sanitized logs, error, and structured result. A next page is advertised with `X-Werkt-Next-Cursor` and a relative `Link`.

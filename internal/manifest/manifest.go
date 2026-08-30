@@ -100,8 +100,8 @@ func Validate(value domain.Manifest) error {
 			if _, exists := trigger.Config["provider"]; exists && !providerIsString {
 				problems = append(problems, path+".config.provider must be a string")
 			}
-			if provider != "" && provider != "werkt" && provider != "github" {
-				problems = append(problems, path+".config.provider must be werkt or github")
+			if provider != "" && provider != "werkt" && provider != "github" && provider != "zoom" {
+				problems = append(problems, path+".config.provider must be werkt, github, or zoom")
 			}
 			allowed := []string{"secret", "provider", "deliveryDelay"}
 			if provider == "" || provider == "werkt" {
@@ -112,7 +112,7 @@ func Validate(value domain.Manifest) error {
 			if !validSecretReference(secret) {
 				problems = append(problems, path+".config.secret must name a Werkt secret")
 			}
-			if raw, exists := trigger.Config["signatureHeader"]; exists && provider != "github" {
+			if raw, exists := trigger.Config["signatureHeader"]; exists && (provider == "" || provider == "werkt") {
 				signatureHeader, valid := raw.(string)
 				if !valid || signatureHeader == "" || !headerName.MatchString(signatureHeader) {
 					problems = append(problems, path+".config.signatureHeader is invalid")

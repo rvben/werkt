@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/rvben/werkt/internal/domain"
 )
@@ -133,6 +134,7 @@ func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) 
 	defer os.RemoveAll(runDirectory) //nolint:errcheck
 	eventPath := filepath.Join(runDirectory, "event.json")
 	resultPath := filepath.Join(runDirectory, "result.json")
+	controlPath := filepath.Join(runDirectory, "control.json")
 	statePath := ""
 	eventJSON, err := json.Marshal(run.Event)
 	if err != nil {
@@ -140,6 +142,9 @@ func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) 
 	}
 	if err := os.WriteFile(eventPath, eventJSON, 0o600); err != nil {
 		return Result{}, fmt.Errorf("write event: %w", err)
+	}
+	if err := os.WriteFile(controlPath, []byte("{}"), 0o600); err != nil {
+		return Result{}, fmt.Errorf("initialize run control: %w", err)
 	}
 	if run.Manifest.Execution.State.Enabled {
 		statePath = filepath.Join(runDirectory, "state.json")
@@ -157,7 +162,7 @@ func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) 
 
 	command := exec.CommandContext(ctx, run.Manifest.Runtime.Command[0], run.Manifest.Runtime.Command[1:]...)
 	command.Dir = run.ArtifactPath
-	command.Env = append(inheritedRuntimeEnvironment(), runtimeEnvironment(run, eventPath, resultPath, statePath, resolved.values)...)
+	command.Env = append(inheritedRuntimeEnvironment(), runtimeEnvironment(run, eventPath, resultPath, controlPath, statePath, resolved.values)...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
@@ -180,6 +185,14 @@ func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) 
 		return Result{Logs: logs}, errors.New("automation result is not valid JSON")
 	}
 	result := Result{Output: resultJSON, Logs: logs}
+	controlJSON, err := readBoundedFile(controlPath, MaxRunControlBytes)
+	if err != nil {
+		return Result{Logs: logs}, fmt.Errorf("read run control: %w", err)
+	}
+	result.Control, err = validateRunControl(controlJSON, time.Now().UTC())
+	if err != nil {
+		return Result{Logs: logs}, err
+	}
 	if statePath != "" {
 		stateJSON, err := readBoundedFile(statePath, MaxAutomationStateBytes)
 		if err != nil {
@@ -211,13 +224,14 @@ func readBoundedFile(path string, maxBytes int) ([]byte, error) {
 	return value, nil
 }
 
-func runtimeEnvironment(run domain.RunnableRun, eventPath, resultPath, statePath string, values map[string]string) []string {
+func runtimeEnvironment(run domain.RunnableRun, eventPath, resultPath, controlPath, statePath string, values map[string]string) []string {
 	reserved := map[string]string{
 		"WERKT_AUTOMATION_ID": run.AutomationID,
 		"WERKT_REVISION_ID":   run.RevisionID,
 		"WERKT_RUN_ID":        run.ID,
 		"WERKT_EVENT_PATH":    eventPath,
 		"WERKT_RESULT_PATH":   resultPath,
+		"WERKT_CONTROL_PATH":  controlPath,
 	}
 	if statePath != "" {
 		reserved["WERKT_STATE_PATH"] = statePath

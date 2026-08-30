@@ -40,6 +40,7 @@ Every executor starts `runtime.command` in the deployed artifact directory and p
 - `WERKT_RUN_ID`
 - `WERKT_EVENT_PATH`, containing the normalized event envelope
 - `WERKT_RESULT_PATH`, initialized to `{}` and expected to contain valid JSON at exit
+- `WERKT_CONTROL_PATH`, initialized to `{}` and accepting one durable continuation request
 
 When `execution.state.enabled` is true, Werkt also provides:
 
@@ -55,6 +56,29 @@ attempt from overwriting a newer transition. Stateful manifests must use
 transitions serialized instead of pretending they can be rolled back together.
 State is durable operational data, not a secret store: credentials still belong
 in the vault.
+
+After a successful attempt, an automation may write one control action of at
+most 64 KiB. A deferred continuation is pinned to the same immutable revision
+and becomes runnable at the declared RFC 3339 time, up to 30 days ahead:
+
+```json
+{"defer":{"key":"recording-42.poll","until":"2026-08-31T12:00:00Z","data":{"recordingId":"42"}}}
+```
+
+An approval instead creates a typed operator task. Fields may be `text`,
+`textarea`, `number`, `boolean`, or `select`; actions are `approve` or `reject`.
+The eventual decision queues a pinned `approval` event rather than mutating or
+re-running the requesting attempt:
+
+```json
+{"approval":{"key":"recording-42.publish","title":"Publish recording?","expiresAt":"2026-08-31T18:00:00Z","fields":[{"id":"title","label":"Title","type":"text","required":true}],"actions":[{"id":"approve","label":"Publish","style":"primary","requiresFields":true},{"id":"reject","label":"Skip","style":"neutral"}]}}
+```
+
+Control is read and persisted only after a zero exit, in the same database
+transaction as the run result and state commit. A failed attempt therefore
+cannot leave behind a timer or approval. Writing both actions, malformed data,
+past or overly distant times, duplicate fields, or undeclared action shapes
+fails the attempt instead of guessing intent.
 
 Standard output and error are redacted against the exact secrets resolved for that attempt, then bounded to 1 MiB and persisted as run logs. A non-zero exit fails the attempt. Exit code 124 is treated as a timeout. The runtime language is not part of this protocol.
 
