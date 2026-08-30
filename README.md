@@ -249,8 +249,15 @@ The runner sets these variables for every run:
 - `WERKT_RUN_ID`
 - `WERKT_EVENT_PATH`
 - `WERKT_RESULT_PATH`
+- `WERKT_CONTROL_PATH`
 
 The program reads the event envelope from `WERKT_EVENT_PATH`, writes a JSON result to `WERKT_RESULT_PATH`, logs to stdout/stderr, and exits non-zero on failure. If it produces no result file, the result defaults to `{}`.
+
+`WERKT_CONTROL_PATH` enables one durable, transactional continuation after a
+successful run: either a time-based `defer` or a typed operator `approval`.
+Continuations remain pinned to the requesting immutable revision. See
+[docs/execution.md](docs/execution.md) for the language-neutral shapes and
+[docs/management-api.md](docs/management-api.md) for approval resolution.
 
 The event envelope is stable across every trigger and runtime:
 

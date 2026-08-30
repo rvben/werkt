@@ -195,6 +195,97 @@ paths:
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
         "409": {$ref: "#/components/responses/Error"}
+  /api/v1/approvals:
+    get:
+      operationId: listApprovals
+      security: [{BearerAuth: []}]
+      parameters:
+        - name: automation
+          in: query
+          schema: {type: string}
+        - name: status
+          in: query
+          schema: {type: string, enum: [pending, approved, rejected, expired]}
+        - {$ref: "#/components/parameters/Limit"}
+        - {$ref: "#/components/parameters/Cursor"}
+      responses:
+        "200":
+          description: Approval requests newest first. Expired pending requests are marked expired before listing.
+          headers:
+            X-Werkt-Next-Cursor: {$ref: "#/components/headers/NextCursor"}
+            Link: {$ref: "#/components/headers/NextLink"}
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/Approval"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+  /api/v1/approvals/{approval}:
+    parameters:
+      - name: approval
+        in: path
+        required: true
+        schema: {type: string}
+    get:
+      operationId: getApproval
+      security: [{BearerAuth: []}]
+      responses:
+        "200":
+          description: Typed approval request and its exact immutable execution target.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Approval"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /api/v1/approvals/{approval}/actions:
+    parameters:
+      - name: approval
+        in: path
+        required: true
+        schema: {type: string}
+    post:
+      operationId: resolveApproval
+      security: [{BearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Actor"}
+        - {$ref: "#/components/parameters/IdempotencyKey"}
+        - name: X-Werkt-Expected-Revision
+          in: header
+          required: true
+          description: Immutable revision shown during review. A mismatch returns 409 without resolving the request.
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                action: {type: string, enum: [approve, reject]}
+                fields: {type: object, additionalProperties: true}
+              required: [action, fields]
+      responses:
+        "202":
+          description: Decision was recorded and its pinned continuation run was queued.
+          headers:
+            Location:
+              description: Relative URL of the queued continuation run.
+              schema: {type: string}
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  approval: {$ref: "#/components/schemas/Approval"}
+                  created: {type: boolean}
+                required: [approval, created]
+        "200": {description: Idempotent replay returned the existing decision and run.}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
   /api/v1/deployments:
     post:
       operationId: createDeployment
@@ -803,6 +894,53 @@ components:
             error: {type: string}
             result: {}
           required: [eventId]
+    ApprovalField:
+      type: object
+      additionalProperties: false
+      properties:
+        id: {type: string}
+        label: {type: string}
+        type: {type: string, enum: [text, textarea, number, boolean, select]}
+        required: {type: boolean}
+        value: {}
+        description: {type: string}
+        options:
+          type: array
+          items: {type: string}
+      required: [id, label, type]
+    ApprovalAction:
+      type: object
+      additionalProperties: false
+      properties:
+        id: {type: string, enum: [approve, reject]}
+        label: {type: string}
+        style: {type: string, enum: [primary, neutral, danger]}
+        requiresFields: {type: boolean}
+      required: [id, label]
+    Approval:
+      type: object
+      properties:
+        id: {type: string}
+        automationId: {type: string}
+        revisionId: {type: string}
+        requestedByRunId: {type: string}
+        key: {type: string}
+        status: {type: string, enum: [pending, approved, rejected, expired]}
+        title: {type: string}
+        description: {type: string}
+        fields:
+          type: array
+          items: {$ref: "#/components/schemas/ApprovalField"}
+        actions:
+          type: array
+          items: {$ref: "#/components/schemas/ApprovalAction"}
+        expiresAt: {type: string, format: date-time}
+        createdAt: {type: string, format: date-time}
+        resolvedAt: {type: string, format: date-time}
+        resolvedBy: {type: string}
+        response: {}
+        actionRunId: {type: string}
+      required: [id, automationId, revisionId, requestedByRunId, key, status, title, fields, actions, expiresAt, createdAt]
     Deployment:
       type: object
       properties:

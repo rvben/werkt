@@ -170,6 +170,64 @@ type Run struct {
 	Result       json.RawMessage `json:"result,omitempty"`
 }
 
+// RunControl is a bounded, language-neutral request for Werkt to continue an
+// automation after the current attempt and its state commit succeed.
+type RunControl struct {
+	Defer    *DeferredRunRequest `json:"defer,omitempty"`
+	Approval *ApprovalRequest    `json:"approval,omitempty"`
+}
+
+type DeferredRunRequest struct {
+	Key   string          `json:"key"`
+	Until time.Time       `json:"until"`
+	Data  json.RawMessage `json:"data,omitempty"`
+}
+
+type ApprovalRequest struct {
+	Key         string           `json:"key"`
+	Title       string           `json:"title"`
+	Description string           `json:"description,omitempty"`
+	ExpiresAt   time.Time        `json:"expiresAt"`
+	Fields      []ApprovalField  `json:"fields"`
+	Actions     []ApprovalAction `json:"actions"`
+}
+
+type ApprovalField struct {
+	ID          string   `json:"id"`
+	Label       string   `json:"label"`
+	Type        string   `json:"type"`
+	Required    bool     `json:"required,omitempty"`
+	Value       any      `json:"value,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Options     []string `json:"options,omitempty"`
+}
+
+type ApprovalAction struct {
+	ID             string `json:"id"`
+	Label          string `json:"label"`
+	Style          string `json:"style,omitempty"`
+	RequiresFields bool   `json:"requiresFields,omitempty"`
+}
+
+type Approval struct {
+	ID             string           `json:"id"`
+	AutomationID   string           `json:"automationId"`
+	RevisionID     string           `json:"revisionId"`
+	RequestedByRun string           `json:"requestedByRunId"`
+	Key            string           `json:"key"`
+	Status         string           `json:"status"`
+	Title          string           `json:"title"`
+	Description    string           `json:"description,omitempty"`
+	Fields         []ApprovalField  `json:"fields"`
+	Actions        []ApprovalAction `json:"actions"`
+	ExpiresAt      time.Time        `json:"expiresAt"`
+	CreatedAt      time.Time        `json:"createdAt"`
+	ResolvedAt     *time.Time       `json:"resolvedAt,omitempty"`
+	ResolvedBy     string           `json:"resolvedBy,omitempty"`
+	Response       json.RawMessage  `json:"response,omitempty"`
+	ActionRunID    string           `json:"actionRunId,omitempty"`
+}
+
 // RunSummary is the bounded, log-free representation returned by run-list
 // endpoints. Full logs, errors, event identity, and structured results remain
 // available from the run detail endpoint.

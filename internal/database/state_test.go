@@ -63,7 +63,7 @@ func TestTransactionalAutomationStateIntegration(t *testing.T) {
 	if first.StateVersion != 0 || string(first.State) != `{}` {
 		t.Fatalf("initial state version=%d value=%s", first.StateVersion, first.State)
 	}
-	if err := store.CompleteRun(ctx, *first, "worker-1", "", json.RawMessage(`{"ok":true}`), json.RawMessage(`{"processed":{"issue-1":true}}`)); err != nil {
+	if err := store.CompleteRun(ctx, *first, "worker-1", "", json.RawMessage(`{"ok":true}`), json.RawMessage(`{"processed":{"issue-1":true}}`), domain.RunControl{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -86,7 +86,7 @@ func TestTransactionalAutomationStateIntegration(t *testing.T) {
 	if _, err := store.pool.Exec(ctx, `UPDATE automation_state SET version = version + 1 WHERE automation_id = $1`, manifest.Metadata.Name); err != nil {
 		t.Fatal(err)
 	}
-	err = store.CompleteRun(ctx, *second, "worker-2", "", json.RawMessage(`{}`), json.RawMessage(`{"processed":{}}`))
+	err = store.CompleteRun(ctx, *second, "worker-2", "", json.RawMessage(`{}`), json.RawMessage(`{"processed":{}}`), domain.RunControl{})
 	if !errors.Is(err, ErrAutomationStateConflict) {
 		t.Fatalf("conflicting completion error=%v", err)
 	}

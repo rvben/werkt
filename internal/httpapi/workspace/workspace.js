@@ -55,14 +55,27 @@
   const actionScopeEnvironment = document.querySelector("#action-scope-environment");
   const actionScopeInstance = document.querySelector("#action-scope-instance");
   const actionScopeActor = document.querySelector("#action-scope-actor");
+  const approvalDialog = document.querySelector("#approval-dialog");
+  const approvalForm = document.querySelector("#approval-form");
+  const approvalTitle = document.querySelector("#approval-dialog-title");
+  const approvalDescription = document.querySelector("#approval-dialog-description");
+  const approvalScopeAutomation = document.querySelector("#approval-scope-automation");
+  const approvalScopeRevision = document.querySelector("#approval-scope-revision");
+  const approvalScopeRequested = document.querySelector("#approval-scope-requested");
+  const approvalScopeExpires = document.querySelector("#approval-scope-expires");
+  const approvalFields = document.querySelector("#approval-fields");
+  const approvalActions = document.querySelector("#approval-actions");
+  const approvalError = document.querySelector("#approval-error");
+  const approvalNavCount = document.querySelector("#approval-nav-count");
   const receiptRegion = document.querySelector("#receipt-region");
   const toastRegion = document.querySelector("#toast-region");
 
   const HISTORY_LIMIT = 100;
-  const views = new Set(["automations", "runs", "deployments", "audit"]);
+  const views = new Set(["automations", "approvals", "runs", "deployments", "audit"]);
   const enabledFilters = new Set(["all", "enabled", "disabled", "failed"]);
   const runStatuses = new Set(["all", "queued", "running", "succeeded", "failed"]);
   const deploymentStatuses = new Set(["all", "in-progress", "succeeded", "failed"]);
+  const approvalStatuses = new Set(["all", "pending", "approved", "rejected", "expired"]);
   let workspaceRequest = 0;
   let detailRequest = 0;
   let workspaceController = null;
@@ -75,8 +88,8 @@
   let deploymentPollController = null;
   let runPollRequest = 0;
   let runPollController = null;
-  const feedRequests = {runs: 0, deployments: 0, audit: 0};
-  const feedControllers = {runs: null, deployments: null, audit: null};
+  const feedRequests = {approvals: 0, runs: 0, deployments: 0, audit: 0};
+  const feedControllers = {approvals: null, runs: null, deployments: null, audit: null};
   const diagnosisModalQuery = window.matchMedia("(max-width: 74rem)");
 
   class APIError extends Error {
@@ -96,6 +109,7 @@
     token: readToken(),
     auth: {configured: false, authenticated: false, identity: null, csrfToken: "", scope: {environment: "development", instance: location.host, actor: "connecting"}},
     automations: [],
+    approvals: [],
     runs: [],
     deployments: [],
     audit: [],
@@ -112,13 +126,15 @@
     query: "",
     runStatusFilter: "all",
     deploymentStatusFilter: "all",
+    approvalStatusFilter: "pending",
     loading: true,
     mutating: false,
     pendingAction: null,
     pendingManualRun: null,
-    feedErrors: {runs: "", deployments: "", audit: ""},
-    feedLoading: {runs: true, deployments: true, audit: true},
-    feedNextCursor: {runs: "", deployments: "", audit: ""},
+    selectedApproval: null,
+    feedErrors: {approvals: "", runs: "", deployments: "", audit: ""},
+    feedLoading: {approvals: true, runs: true, deployments: true, audit: true},
+    feedNextCursor: {approvals: "", runs: "", deployments: "", audit: ""},
     detailRunsError: "",
   };
 
@@ -150,6 +166,7 @@
     const enabled = params.get("enabled") || "all";
     const runStatus = params.get("runStatus") || "all";
     const deploymentStatus = params.get("deploymentStatus") || "all";
+    const approvalStatus = params.get("approvalStatus") || "pending";
     let selectedAutomation = "";
     try {
       selectedAutomation = decodeURIComponent(location.hash.replace(/^#\/?/, ""));
@@ -161,6 +178,7 @@
       enabledFilter: enabledFilters.has(enabled) ? enabled : "all",
       runStatusFilter: runStatuses.has(runStatus) ? runStatus : "all",
       deploymentStatusFilter: deploymentStatuses.has(deploymentStatus) ? deploymentStatus : "all",
+      approvalStatusFilter: approvalStatuses.has(approvalStatus) ? approvalStatus : "pending",
       query: params.get("q") || "",
       selectedAutomation,
     };
@@ -174,6 +192,7 @@
     if (state.enabledFilter !== "all") params.set("enabled", state.enabledFilter);
     if (state.runStatusFilter !== "all") params.set("runStatus", state.runStatusFilter);
     if (state.deploymentStatusFilter !== "all") params.set("deploymentStatus", state.deploymentStatusFilter);
+    if (state.approvalStatusFilter !== "pending") params.set("approvalStatus", state.approvalStatusFilter);
     if (state.query) params.set("q", state.query);
     for (const key of ["run", "deployment", "audit", "tab"]) {
       if (existing.has(key)) params.set(key, existing.get(key));
@@ -233,7 +252,7 @@
   }
 
   function feedMessage(kind, error) {
-    const labels = {runs: "run history", deployments: "deployment history", audit: "audit history"};
+    const labels = {approvals: "approval inbox", runs: "run history", deployments: "deployment history", audit: "audit history"};
     const retained = state[kind]?.length ? " Previous data remains visible." : "";
     return `${labels[kind]} could not be refreshed.${retained} ${recoveryGuidance(error)}`;
   }
@@ -418,12 +437,13 @@
         })
         : Promise.resolve();
       const feeds = await Promise.allSettled([
+        api(`/api/v1/approvals?limit=${HISTORY_LIMIT}`, {signal, page: true}),
         api(`/api/v1/runs?limit=${HISTORY_LIMIT}`, {signal, page: true}),
         api(`/api/v1/deployments?limit=${HISTORY_LIMIT}`, {signal, page: true}),
         api(`/api/v1/audit?limit=${HISTORY_LIMIT}`, {signal, page: true}),
       ]);
       if (request !== workspaceRequest) return;
-      for (const [index, kind] of ["runs", "deployments", "audit"].entries()) {
+      for (const [index, kind] of ["approvals", "runs", "deployments", "audit"].entries()) {
         if (feedRequests[kind] !== workspaceFeedRequests[kind]) continue;
         const result = feeds[index];
         state.feedLoading[kind] = false;
@@ -513,6 +533,9 @@
     });
     shell.classList.toggle("is-global-view", state.view !== "automations");
     shell.classList.toggle("has-selection", state.view === "automations" && Boolean(state.selectedAutomation));
+    const pending = state.approvals.filter((approval) => approval.status === "pending").length;
+    approvalNavCount.textContent = pending;
+    approvalNavCount.hidden = pending === 0;
   }
 
   function automationHealth(automation) {
@@ -594,7 +617,8 @@
   }
 
   function renderCurrentView() {
-    if (state.view === "runs") renderGlobalRuns();
+    if (state.view === "approvals") renderGlobalApprovals();
+    else if (state.view === "runs") renderGlobalRuns();
     else if (state.view === "deployments") renderGlobalDeployments();
     else if (state.view === "audit") renderGlobalAudit();
     else if (!state.automations.length) renderEmptyWorkspace();
@@ -673,6 +697,8 @@
   function triggerConfiguration(trigger) {
     const config = trigger.config || {};
     if (trigger.type === "schedule") return `${config.cron || "No cron"} · ${config.timezone || "UTC"}`;
+    if (trigger.type === "webhook" && config.provider === "zoom") return "Zoom · native signature";
+    if (trigger.type === "webhook" && config.provider === "github") return "GitHub · native signature";
     if (trigger.type === "webhook") return `HMAC · ${config.signatureHeader || "X-Werkt-Signature"}`;
     if (trigger.type === "email") return "Bearer-authenticated RFC 5322";
     if (trigger.type === "ntfy") return `${config.server || "ntfy"}/${config.topic || "topic"}`;
@@ -691,6 +717,19 @@
 
   function revisionCountLabel(count) {
     return `${count} most recent immutable ${count === 1 ? "revision" : "revisions"}`;
+  }
+
+  function renderGlobalApprovals() {
+    const approvals = state.approvalStatusFilter === "all"
+      ? [...state.approvals].sort((left, right) => Number(right.status === "pending") - Number(left.status === "pending"))
+      : state.approvals.filter((approval) => approval.status === state.approvalStatusFilter);
+    const pending = state.approvals.filter((approval) => approval.status === "pending").length;
+    workspaceContent.innerHTML = `<section class="global-view approvals-view"><header class="global-view-header"><div><h1>Approvals</h1><p>${pending ? `${pending} ${pending === 1 ? "decision needs" : "decisions need"} an operator.` : "No decisions are waiting."} Every response resumes the immutable revision that requested it.</p></div><div class="global-toolbar"><label class="sr-only" for="approval-status-filter">Filter approvals by status</label><select class="select-control" id="approval-status-filter"><option value="all">All statuses</option>${["pending", "approved", "rejected", "expired"].map((status) => `<option value="${status}"${state.approvalStatusFilter === status ? " selected" : ""}>${capitalize(status)}</option>`).join("")}</select></div></header>${feedNotice("approvals")}${state.feedLoading.approvals && !approvals.length ? "" : renderApprovalsTable(approvals)}${feedFooter("approvals")}</section>`;
+  }
+
+  function renderApprovalsTable(approvals) {
+    if (!approvals.length) return `<div class="empty-state"><div class="empty-state-inner"><span class="empty-symbol">${icon("approval")}</span><h2>No approvals found</h2><p>${state.approvalStatusFilter === "pending" ? "New requests will appear here with their expiry, fields, and exact execution target." : "Choose another status to inspect past operator decisions."}</p></div></div>`;
+    return `<table class="data-table approvals-table"><thead><tr><th class="status-column">Status</th><th class="approval-title-column">Decision</th><th>Automation</th><th>Requested</th><th>Expires</th><th class="wide">Revision</th><th class="approval-action-column"><span class="sr-only">Action</span></th></tr></thead><tbody>${approvals.map((approval) => `<tr${approval.status === "pending" ? ' class="approval-pending"' : ""}><td data-label="Status"><span class="status-badge status-${escapeHTML(approval.status)}">${escapeHTML(capitalize(approval.status))}</span></td><td data-label="Decision"><strong>${escapeHTML(approval.title)}</strong></td><td data-label="Automation"><button class="table-button" type="button" data-automation="${escapeHTML(approval.automationId)}">${escapeHTML(approval.automationId)}</button></td><td data-label="Requested" class="tabular">${relativeTimeElement(approval.createdAt)}</td><td data-label="Expires" class="tabular" title="${escapeHTML(formatDate(approval.expiresAt))}">${relativeTimeElement(approval.expiresAt)}</td><td data-label="Revision" class="mono" title="${escapeHTML(approval.revisionId)}">${escapeHTML(shortID(approval.revisionId, 20))}</td><td data-label="Action" class="approval-action-column">${approval.status === "pending" ? `<button class="button button-primary button-compact" type="button" data-approval="${escapeHTML(approval.id)}">Review</button>` : approval.actionRunId ? `<button class="button button-quiet button-compact" type="button" data-run="${escapeHTML(approval.actionRunId)}">View run</button>` : '<span class="muted-value">Closed</span>'}</td></tr>`).join("")}</tbody></table>`;
   }
 
   function renderGlobalRuns() {
@@ -1110,6 +1149,95 @@
     }
   }
 
+  async function openApproval(approvalID) {
+    if (state.mutating || approvalDialog.open) return;
+    approvalError.textContent = "";
+    try {
+      const approval = await api(`/api/v1/approvals/${encodeURIComponent(approvalID)}`);
+      if (approval.status !== "pending") {
+        showToast(`This approval is already ${approval.status}. Refresh the inbox to see its outcome.`, true);
+        await refreshFeed("approvals");
+        return;
+      }
+      state.selectedApproval = {...approval, idempotencyKey: `workspace-approval-${approval.id}-${Date.now()}`};
+      approvalTitle.textContent = approval.title;
+      approvalDescription.textContent = approval.description || "Review the declared fields and exact revision before choosing an action.";
+      approvalScopeAutomation.textContent = approval.automationId;
+      approvalScopeRevision.textContent = approval.revisionId;
+      approvalScopeRequested.textContent = formatDate(approval.createdAt);
+      approvalScopeExpires.textContent = `${formatDate(approval.expiresAt)} · ${relativeTime(approval.expiresAt)}`;
+      approvalFields.innerHTML = approval.fields.map(renderApprovalField).join("");
+      approvalActions.innerHTML = `<button class="button button-quiet" type="button" data-close-dialog="approval">Cancel</button>${approval.actions.map((action) => `<button class="button ${action.style === "primary" ? "button-primary" : action.style === "danger" ? "button-danger" : "button-quiet"}" type="button" data-resolve-approval="${escapeHTML(action.id)}">${escapeHTML(action.label)}</button>`).join("")}`;
+      approvalDialog.showModal();
+      approvalDialog.querySelector("input, textarea, select, [data-resolve-approval]")?.focus();
+    } catch (error) {
+      if (!(error instanceof AuthenticationRequired)) showToast(`Approval could not be loaded. ${recoveryGuidance(error)}`, true);
+    }
+  }
+
+  function renderApprovalField(field) {
+    const controlID = `approval-field-${field.id}`;
+    const descriptionID = `approval-field-${field.id}-description`;
+    const describedBy = field.description ? ` aria-describedby="${escapeHTML(descriptionID)}"` : "";
+    let control = "";
+    if (field.type === "textarea") control = `<textarea id="${escapeHTML(controlID)}" rows="5" data-approval-field="${escapeHTML(field.id)}"${describedBy}>${escapeHTML(field.value || "")}</textarea>`;
+    else if (field.type === "select") control = `<select id="${escapeHTML(controlID)}" data-approval-field="${escapeHTML(field.id)}"${describedBy}><option value="">Choose an option</option>${(field.options || []).map((option) => `<option value="${escapeHTML(option)}"${field.value === option ? " selected" : ""}>${escapeHTML(option)}</option>`).join("")}</select>`;
+    else if (field.type === "boolean") control = `<label class="approval-checkbox"><input id="${escapeHTML(controlID)}" type="checkbox" data-approval-field="${escapeHTML(field.id)}"${field.value ? " checked" : ""}><span>${escapeHTML(field.label)}${field.required ? ' <span class="required-mark">Required</span>' : ""}</span></label>`;
+    else control = `<input id="${escapeHTML(controlID)}" type="${field.type === "number" ? "number" : "text"}" data-approval-field="${escapeHTML(field.id)}" value="${escapeHTML(field.value ?? "")}"${describedBy}>`;
+    const visibleLabel = field.type === "boolean" ? "" : `<label for="${escapeHTML(controlID)}">${escapeHTML(field.label)}${field.required ? ' <span class="required-mark">Required</span>' : ""}</label>`;
+    return `<div class="approval-field" data-field-required="${field.required ? "true" : "false"}">${visibleLabel}${control}${field.description ? `<p id="${escapeHTML(descriptionID)}" class="field-help">${escapeHTML(field.description)}</p>` : ""}</div>`;
+  }
+
+  function approvalFieldValues() {
+    const values = {};
+    approvalFields.querySelectorAll("[data-approval-field]").forEach((control) => {
+      if (control.type === "checkbox") values[control.dataset.approvalField] = control.checked;
+      else if (control.type === "number" && control.value !== "") values[control.dataset.approvalField] = Number(control.value);
+      else if (control.value !== "") values[control.dataset.approvalField] = control.value;
+    });
+    return values;
+  }
+
+  async function resolveApproval(actionID) {
+    const approval = state.selectedApproval;
+    if (!approval || state.mutating) return;
+    const action = approval.actions.find((item) => item.id === actionID);
+    if (!action) return;
+    const controls = [...approvalFields.querySelectorAll("[data-approval-field]")];
+    controls.forEach((control) => {
+      const wrapper = control.closest("[data-field-required]");
+      control.required = Boolean(action.requiresFields && wrapper?.dataset.fieldRequired === "true");
+    });
+    if (!approvalForm.reportValidity()) return;
+    approvalError.textContent = "";
+    state.mutating = true;
+    approvalActions.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+    try {
+      const response = await api(`/api/v1/approvals/${encodeURIComponent(approval.id)}/actions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": approval.idempotencyKey,
+          "X-Werkt-Expected-Revision": approval.revisionId,
+        },
+        body: JSON.stringify({action: actionID, fields: approvalFieldValues()}),
+      });
+      approvalDialog.close();
+      state.selectedApproval = null;
+      showReceipt(
+        actionID === "approve" ? "Approval accepted" : "Approval rejected",
+        `${approval.automationId} will resume ${approval.revisionId} in run ${response.approval.actionRunId}.`,
+        {audit: true},
+      );
+      await refreshFeed("approvals");
+    } catch (error) {
+      if (!(error instanceof AuthenticationRequired)) approvalError.textContent = recoveryGuidance(error);
+    } finally {
+      state.mutating = false;
+      approvalActions.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+    }
+  }
+
   function openAction(action) {
     state.pendingAction = action;
     actionError.textContent = "";
@@ -1222,6 +1350,7 @@
 
   async function refreshFeed(kind) {
     const paths = {
+      approvals: `/api/v1/approvals?limit=${HISTORY_LIMIT}`,
       runs: `/api/v1/runs?limit=${HISTORY_LIMIT}`,
       deployments: `/api/v1/deployments?limit=${HISTORY_LIMIT}`,
       audit: `/api/v1/audit?limit=${HISTORY_LIMIT}`,
@@ -1251,6 +1380,7 @@
     const cursor = state.feedNextCursor[kind];
     if (!cursor || state.feedLoading[kind]) return;
     const paths = {
+      approvals: "/api/v1/approvals",
       runs: "/api/v1/runs",
       deployments: "/api/v1/deployments",
       audit: "/api/v1/audit",
@@ -1473,7 +1603,7 @@
   }
 
   function openHelp(topic = "") {
-    if (helpDialog.open || connectionDialog.open || runDialog.open || actionDialog.open) return;
+    if (helpDialog.open || connectionDialog.open || runDialog.open || actionDialog.open || approvalDialog.open) return;
     helpDialog.showModal();
     const heading = typeof topic === "string" && topic ? helpDialog.querySelector(`#${CSS.escape(topic)}`) : null;
     (heading || helpDialog.querySelector("button"))?.focus();
@@ -1514,6 +1644,10 @@
     if (deploymentButton) { openDeployment(deploymentButton.dataset.deployment); return; }
     const auditButton = event.target.closest("[data-audit]");
     if (auditButton) { openAudit(auditButton.dataset.audit); return; }
+    const approvalButton = event.target.closest("[data-approval]");
+    if (approvalButton) { openApproval(approvalButton.dataset.approval); return; }
+    const approvalAction = event.target.closest("[data-resolve-approval]");
+    if (approvalAction) { resolveApproval(approvalAction.dataset.resolveApproval); return; }
     const cancelDeploymentButton = event.target.closest("[data-cancel-deployment]");
     if (cancelDeploymentButton) { openAction({kind: "cancel", deploymentId: cancelDeploymentButton.dataset.cancelDeployment}); return; }
     const retryDeploymentButton = event.target.closest("[data-retry-deployment]");
@@ -1550,6 +1684,7 @@
     if (closeDialog) {
       if (closeDialog.dataset.closeDialog === "connection") connectionDialog.close();
       else if (closeDialog.dataset.closeDialog === "run") runDialog.close();
+      else if (closeDialog.dataset.closeDialog === "approval") approvalDialog.close();
       else {
         actionDialog.close();
         state.pendingAction = null;
@@ -1640,6 +1775,11 @@
       writeRoute();
       renderGlobalDeployments();
     }
+    if (event.target.id === "approval-status-filter") {
+      state.approvalStatusFilter = event.target.value;
+      writeRoute();
+      renderGlobalApprovals();
+    }
   });
 
   connectionForm.addEventListener("submit", (event) => {
@@ -1680,9 +1820,15 @@
     executeAction();
   });
 
+  approvalForm.addEventListener("submit", (event) => event.preventDefault());
+  approvalDialog.addEventListener("close", () => {
+    if (!state.mutating) state.selectedApproval = null;
+    approvalError.textContent = "";
+  });
+
   document.addEventListener("keydown", (event) => {
     const typing = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement || event.target?.isContentEditable;
-    const nativeDialogOpen = connectionDialog.open || runDialog.open || actionDialog.open || helpDialog.open;
+    const nativeDialogOpen = connectionDialog.open || runDialog.open || actionDialog.open || approvalDialog.open || helpDialog.open;
     if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k" && !nativeDialogOpen) {
       event.preventDefault();
       setMobileSearch(true);
@@ -1708,7 +1854,7 @@
       openManualRun();
       return;
     }
-    if (event.altKey && !event.metaKey && !event.ctrlKey && ["1", "2", "3", "4"].includes(event.key) && !nativeDialogOpen && diagnosisPane.hidden) {
+    if (event.altKey && !event.metaKey && !event.ctrlKey && ["1", "2", "3", "4", "5"].includes(event.key) && !nativeDialogOpen && diagnosisPane.hidden) {
       event.preventDefault();
       document.querySelectorAll("[data-view]")[Number(event.key) - 1]?.click();
       return;

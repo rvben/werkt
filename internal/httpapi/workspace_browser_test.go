@@ -58,6 +58,8 @@ func TestWorkspaceBrowserKeyboardFocusAndResponsiveModality(t *testing.T) {
 		"logsDirect",
 		"mobileSearchEscape",
 		"operatorScopeVisible",
+		"approvalFieldTyped",
+		"approvalTargetVisible",
 		"runShortcutReviews",
 		"runTargetScoped",
 		"tableHeadersRetained",
@@ -124,6 +126,10 @@ func workspaceBrowserFixture(response http.ResponseWriter, request *http.Request
 		writeBrowserJSON(response, `[{"id":"run_test","automationId":"test-automation","revisionId":"rev_test","eventId":"evt_test","status":"failed","attempt":2,"maxAttempts":2,"createdAt":"2026-08-23T18:42:00Z","startedAt":"2026-08-23T18:42:00Z","finishedAt":"2026-08-23T18:42:01Z","error":"fixture failure","logs":"fixture log"}]`)
 	case "/api/v1/runs/run_test":
 		writeBrowserJSON(response, `{"id":"run_test","automationId":"test-automation","revisionId":"rev_test","eventId":"evt_test","status":"failed","attempt":2,"maxAttempts":2,"createdAt":"2026-08-23T18:42:00Z","startedAt":"2026-08-23T18:42:00Z","finishedAt":"2026-08-23T18:42:01Z","error":"fixture failure","logs":"fixture log"}`)
+	case "/api/v1/approvals":
+		writeBrowserJSON(response, `[{"id":"apr_test","automationId":"test-automation","revisionId":"rev_test","requestedByRunId":"run_test","key":"publish","status":"pending","title":"Publish recording?","description":"Confirm the final title.","fields":[{"id":"title","label":"Title","type":"text","required":true,"value":"Sunday service"}],"actions":[{"id":"approve","label":"Publish","style":"primary","requiresFields":true},{"id":"reject","label":"Skip","style":"neutral"}],"expiresAt":"2026-08-31T18:42:00Z","createdAt":"2026-08-30T18:42:00Z"}]`)
+	case "/api/v1/approvals/apr_test":
+		writeBrowserJSON(response, `{"id":"apr_test","automationId":"test-automation","revisionId":"rev_test","requestedByRunId":"run_test","key":"publish","status":"pending","title":"Publish recording?","description":"Confirm the final title.","fields":[{"id":"title","label":"Title","type":"text","required":true,"value":"Sunday service"}],"actions":[{"id":"approve","label":"Publish","style":"primary","requiresFields":true},{"id":"reject","label":"Skip","style":"neutral"}],"expiresAt":"2026-08-31T18:42:00Z","createdAt":"2026-08-30T18:42:00Z"}`)
 	case "/api/v1/deployments", "/api/v1/audit":
 		writeBrowserJSON(response, `[]`)
 	case "/api/v1/auth/session":
@@ -161,6 +167,16 @@ const workspaceBrowserDriver = `
       results.diagnosisRouted = new URL(location.href).searchParams.get("run") === "run_test" && new URL(location.href).searchParams.get("tab") === "logs";
       results.operatorScopeVisible = document.querySelector("#operator-scope").textContent.includes("development") && document.querySelector("#operator-scope").textContent.includes("workspace:local");
       document.querySelector("[data-close-diagnosis]").click();
+      document.querySelector('[data-view="approvals"]').click();
+      await waitFor(() => document.querySelector("[data-approval]"));
+      document.querySelector("[data-approval]").click();
+      await waitFor(() => document.querySelector("#approval-dialog").open);
+      results.approvalTargetVisible = document.querySelector("#approval-scope-revision").textContent === "rev_test"
+        && document.querySelector("#approval-scope-automation").textContent === "test-automation";
+      results.approvalFieldTyped = document.querySelector('[data-approval-field="title"]') instanceof HTMLInputElement
+        && document.querySelector('[data-resolve-approval="approve"]').textContent === "Publish";
+      document.querySelector("#approval-dialog").close();
+      document.querySelector('[data-view="automations"]').click();
       document.querySelector("[data-mobile-back]").click();
       results.backCleared = !document.querySelector("#app-shell").classList.contains("has-selection") && location.hash === "";
       document.querySelector("[data-automation]").click();

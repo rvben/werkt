@@ -80,6 +80,14 @@ type fakeStore struct {
 	runSummaries       []domain.RunSummary
 	listRunCursor      database.ListCursor
 	listRunLimit       int
+	approvals          []domain.Approval
+	resolvedApproval   domain.Approval
+	approvalCreated    bool
+	approvalErr        error
+	approvalAction     string
+	approvalFields     map[string]any
+	approvalExpected   string
+	approvalKey        string
 }
 
 type fakeArtifactVerifier struct {
@@ -223,6 +231,30 @@ func (s *fakeStore) GetRun(_ context.Context, runID string) (domain.Run, error) 
 		return domain.Run{}, database.ErrRunNotFound
 	}
 	return domain.Run{ID: runID, Status: domain.RunSucceeded}, nil
+}
+
+func (s *fakeStore) ListApprovalsPage(context.Context, string, string, database.ListCursor, int) ([]domain.Approval, error) {
+	return s.approvals, nil
+}
+
+func (s *fakeStore) GetApproval(_ context.Context, approvalID string) (domain.Approval, error) {
+	if approvalID == "missing" {
+		return domain.Approval{}, database.ErrApprovalNotFound
+	}
+	for _, value := range s.approvals {
+		if value.ID == approvalID {
+			return value, nil
+		}
+	}
+	return s.resolvedApproval, s.approvalErr
+}
+
+func (s *fakeStore) ResolveApproval(_ context.Context, _ string, key, expected, action string, fields map[string]any, _ string) (domain.Approval, bool, error) {
+	s.approvalKey = key
+	s.approvalExpected = expected
+	s.approvalAction = action
+	s.approvalFields = fields
+	return s.resolvedApproval, s.approvalCreated, s.approvalErr
 }
 
 func (s *fakeStore) ListAuditEventsPage(context.Context, database.AuditFilter, database.ListCursor, int) ([]database.AuditEvent, error) {
@@ -425,7 +457,7 @@ func TestWorkspaceClientKeepsOperationalStateAuthoritative(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, marker := range []string{`data-enabled-filter="failed"`, `aria-pressed="true"`, `id="inventory-results"`} {
+	for _, marker := range []string{`data-enabled-filter="failed"`, `aria-pressed="true"`, `id="inventory-results"`, `data-view="approvals"`, `id="approval-dialog"`} {
 		if !strings.Contains(string(markup), marker) {
 			t.Errorf("workspace markup omitted inventory-state contract %q", marker)
 		}
@@ -646,6 +678,67 @@ func TestGitHubWebhookVerifiesProviderSignatureAndUsesSignedBodyForIdempotency(t
 	}
 }
 
+func TestZoomWebhookAnswersValidationChallengeWithoutQueuingRun(t *testing.T) {
+	const webhookSecret = "zoom-webhook-secret-at-least-32-bytes"
+	store := &fakeStore{ingressConfig: json.RawMessage(`{"provider":"zoom","secret":"tests/zoom-webhook"}`)}
+	server := New(store, ":0", "", WithSecretManager(testSecretManager(map[string]string{"tests/zoom-webhook": webhookSecret})))
+	body := []byte(`{"event":"endpoint.url_validation","payload":{"plainToken":"zoom-plain-token"}}`)
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/example/zoom-recordings", strings.NewReader(string(body)))
+	request.Header.Set("X-Zm-Request-Timestamp", timestamp)
+	request.Header.Set("X-Zm-Signature", zoomWebhookSignature(webhookSecret, timestamp, body))
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || store.ingested {
+		t.Fatalf("status=%d ingested=%v body=%s", response.Code, store.ingested, response.Body.String())
+	}
+	var result map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result["plainToken"] != "zoom-plain-token" {
+		t.Fatalf("plainToken=%q", result["plainToken"])
+	}
+	digest := hmac.New(sha256.New, []byte(webhookSecret))
+	_, _ = digest.Write([]byte("zoom-plain-token"))
+	if result["encryptedToken"] != hex.EncodeToString(digest.Sum(nil)) {
+		t.Fatalf("encryptedToken=%q", result["encryptedToken"])
+	}
+}
+
+func TestZoomWebhookVerifiesProviderSignatureAndUsesBodyForIdempotency(t *testing.T) {
+	const webhookSecret = "zoom-webhook-secret-at-least-32-bytes"
+	store := &fakeStore{ingressConfig: json.RawMessage(`{"provider":"zoom","secret":"tests/zoom-webhook"}`)}
+	server := New(store, ":0", "", WithSecretManager(testSecretManager(map[string]string{"tests/zoom-webhook": webhookSecret})))
+	body := []byte(`{"event":"recording.completed","payload":{"object":{"uuid":"recording-42"}}}`)
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/example/zoom-recordings", strings.NewReader(string(body)))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Zm-Request-Timestamp", timestamp)
+	request.Header.Set("X-Zm-Signature", zoomWebhookSignature(webhookSecret, timestamp, body))
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || !store.ingested {
+		t.Fatalf("status=%d ingested=%v body=%s", response.Code, store.ingested, response.Body.String())
+	}
+	if !strings.HasPrefix(store.ingestedExternalID, "zoom:") || store.ingestedMetadata["provider"] != "zoom" || store.ingestedMetadata["zoomEvent"] != "recording.completed" {
+		t.Fatalf("externalID=%q metadata=%#v", store.ingestedExternalID, store.ingestedMetadata)
+	}
+	if string(store.ingestedData) != string(body) {
+		t.Fatalf("data=%s", store.ingestedData)
+	}
+
+	store.ingested = false
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/hooks/example/zoom-recordings", strings.NewReader(string(body)))
+	request.Header.Set("X-Zm-Request-Timestamp", timestamp)
+	request.Header.Set("X-Zm-Signature", "v0=00")
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || store.ingested {
+		t.Fatalf("invalid signature status=%d ingested=%v", response.Code, store.ingested)
+	}
+}
+
 func TestAuthenticatedEmailIngress(t *testing.T) {
 	const emailToken = "test-email-token-at-least-32-bytes-long"
 	store := &fakeStore{}
@@ -681,6 +774,44 @@ func TestAutomationInventoryAcceptsAuthenticatedFilters(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), `"latestRun":{"id":"run-latest","status":"failed"`) {
 		t.Fatalf("inventory omitted latest run summary: %s", response.Body.String())
+	}
+}
+
+func TestApprovalEndpointsExposeTypedRequestAndQueueReviewedAction(t *testing.T) {
+	now := time.Now().UTC()
+	approval := domain.Approval{
+		ID: "apr_example", AutomationID: "sermon-onliner", RevisionID: "rev-reviewed",
+		Status: "pending", Title: "Publish recording?", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+		Fields:  []domain.ApprovalField{{ID: "title", Label: "Title", Type: "text", Required: true}},
+		Actions: []domain.ApprovalAction{{ID: "approve", Label: "Publish", Style: "primary", RequiresFields: true}, {ID: "reject", Label: "Skip", Style: "neutral"}},
+	}
+	store := &fakeStore{approvals: []domain.Approval{approval}}
+	server := New(store, ":0", "management-secret")
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/approvals?status=pending", nil)
+	request.Header.Set("Authorization", "Bearer management-secret")
+	response := httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"type":"text"`) {
+		t.Fatalf("list status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	resolved := approval
+	resolved.Status = "approved"
+	resolved.ActionRunID = "run_approval"
+	store.resolvedApproval = resolved
+	store.approvalCreated = true
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/approvals/apr_example/actions", strings.NewReader(`{"action":"approve","fields":{"title":"Sunday service"}}`))
+	request.Header.Set("Authorization", "Bearer management-secret")
+	request.Header.Set("Idempotency-Key", "approval-apr_example-approve")
+	request.Header.Set("X-Werkt-Expected-Revision", "rev-reviewed")
+	response = httptest.NewRecorder()
+	server.server.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || response.Header().Get("Location") != "/api/v1/runs/run_approval" {
+		t.Fatalf("resolve status=%d location=%q body=%s", response.Code, response.Header().Get("Location"), response.Body.String())
+	}
+	if store.approvalKey != "approval-apr_example-approve" || store.approvalExpected != "rev-reviewed" || store.approvalAction != "approve" || store.approvalFields["title"] != "Sunday service" {
+		t.Fatalf("key=%q expected=%q action=%q fields=%#v", store.approvalKey, store.approvalExpected, store.approvalAction, store.approvalFields)
 	}
 }
 
@@ -962,7 +1093,8 @@ func TestOpenAPIContractIsPublicAndDocumentsManagementRoutes(t *testing.T) {
 	for _, path := range []string{
 		"/api/v1/automations", "/api/v1/automations/{automation}",
 		"/api/v1/automations/{automation}/runs", "/api/v1/automations/{automation}/rollback",
-		"/api/v1/runs", "/api/v1/audit", "/api/v1/deployments",
+		"/api/v1/runs", "/api/v1/approvals", "/api/v1/approvals/{approval}",
+		"/api/v1/approvals/{approval}/actions", "/api/v1/audit", "/api/v1/deployments",
 		"/api/v1/deployments/{deployment}", "/api/v1/deployments/{deployment}/cancel",
 		"/api/v1/deployments/{deployment}/retry",
 		"/api/v1/retention/plans", "/api/v1/retention/plans/{plan}",
@@ -985,4 +1117,11 @@ func githubWebhookSignature(secret string, body []byte) string {
 	digest := hmac.New(sha256.New, []byte(secret))
 	_, _ = digest.Write(body)
 	return "sha256=" + hex.EncodeToString(digest.Sum(nil))
+}
+
+func zoomWebhookSignature(secret, timestamp string, body []byte) string {
+	digest := hmac.New(sha256.New, []byte(secret))
+	_, _ = digest.Write([]byte("v0:" + timestamp + ":"))
+	_, _ = digest.Write(body)
+	return "v0=" + hex.EncodeToString(digest.Sum(nil))
 }

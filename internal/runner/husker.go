@@ -165,6 +165,7 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 	workspacePath := guestRoot + "/work"
 	eventPath := guestRoot + "/event.json"
 	resultPath := guestRoot + "/result.json"
+	controlPath := guestRoot + "/control.json"
 	statePath := ""
 	runtimeTimeout := run.Manifest.Execution.TimeoutDuration()
 	lifetime := r.provisionTimeout + runtimeTimeout + r.cleanupTimeout + guestCommandGrace
@@ -207,6 +208,9 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 	if err := r.uploadFile(provisionContext, vmName, resultPath, []byte("{}"), 0o600); err != nil {
 		return Result{}, fmt.Errorf("initialize result: %w", err)
 	}
+	if err := r.uploadFile(provisionContext, vmName, controlPath, []byte("{}"), 0o600); err != nil {
+		return Result{}, fmt.Errorf("initialize run control: %w", err)
+	}
 	if run.Manifest.Execution.State.Enabled {
 		statePath = guestRoot + "/state.json"
 		state := run.State
@@ -233,6 +237,7 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 			run,
 			eventPath,
 			resultPath,
+			controlPath,
 			statePath,
 			resolved.values,
 		),
@@ -261,6 +266,14 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 		return Result{Logs: logs}, errors.New("automation result is not valid JSON")
 	}
 	result := Result{Output: resultJSON, Logs: logs}
+	controlJSON, err := r.readFileLimited(executionContext, vmName, controlPath, MaxRunControlBytes)
+	if err != nil {
+		return Result{Logs: logs}, fmt.Errorf("read run control: %w", err)
+	}
+	result.Control, err = validateRunControl(controlJSON, time.Now().UTC())
+	if err != nil {
+		return Result{Logs: logs}, err
+	}
 	if statePath != "" {
 		stateJSON, err := r.readFileLimited(executionContext, vmName, statePath, MaxAutomationStateBytes)
 		if err != nil {
@@ -625,12 +638,13 @@ func durationSeconds(value time.Duration) uint64 {
 	return uint64((value + time.Second - 1) / time.Second)
 }
 
-func runtimeEnvironmentMap(run domain.RunnableRun, eventPath, resultPath, statePath string, values map[string]string) map[string]string {
+func runtimeEnvironmentMap(run domain.RunnableRun, eventPath, resultPath, controlPath, statePath string, values map[string]string) map[string]string {
 	values["WERKT_AUTOMATION_ID"] = run.AutomationID
 	values["WERKT_REVISION_ID"] = run.RevisionID
 	values["WERKT_RUN_ID"] = run.ID
 	values["WERKT_EVENT_PATH"] = eventPath
 	values["WERKT_RESULT_PATH"] = resultPath
+	values["WERKT_CONTROL_PATH"] = controlPath
 	if statePath != "" {
 		values["WERKT_STATE_PATH"] = statePath
 		values["WERKT_STATE_VERSION"] = fmt.Sprintf("%d", run.StateVersion)

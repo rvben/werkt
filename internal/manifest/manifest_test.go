@@ -261,13 +261,18 @@ func TestValidateAcceptsGitHubWebhookProviderAndRejectsCustomHeaders(t *testing.
 		t.Fatalf("Validate() error = %v", err)
 	}
 	delete(value.Triggers[0].Config, "signatureHeader")
+	value.Triggers[0].Config["provider"] = "zoom"
+	if err := manifest.Validate(value); err != nil {
+		t.Fatalf("Zoom Validate() error = %v", err)
+	}
+	value.Triggers[0].Config["provider"] = "github"
 	value.Triggers[0].Config["deliveryDelay"] = "25h"
 	if err := manifest.Validate(value); err == nil || !strings.Contains(err.Error(), "at most 24h") {
 		t.Fatalf("Validate() error = %v", err)
 	}
 	value.Triggers[0].Config["deliveryDelay"] = "5m"
 	value.Triggers[0].Config["provider"] = "unknown"
-	if err := manifest.Validate(value); err == nil || !strings.Contains(err.Error(), "werkt or github") {
+	if err := manifest.Validate(value); err == nil || !strings.Contains(err.Error(), "werkt, github, or zoom") {
 		t.Fatalf("Validate() error = %v", err)
 	}
 }

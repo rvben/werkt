@@ -303,6 +303,7 @@ a { color: inherit; }
 }
 
 .nav-item .icon { width: 1.25rem; height: 1.25rem; }
+.nav-count { position: absolute; top: 0.35rem; right: 0.35rem; min-width: 1.15rem; padding: 0.08rem 0.3rem; border-radius: var(--radius-pill); background: var(--error); color: var(--surface); font-size: 0.625rem; font-variant-numeric: tabular-nums; line-height: 1rem; }
 .nav-item:hover { background: var(--surface-raised); color: var(--ink); }
 .nav-item.is-active { background: var(--surface-selected); color: var(--primary-ink); }
 .nav-item.is-active::after { content: ""; position: absolute; bottom: 0.35rem; width: 1rem; height: 0.125rem; border-radius: var(--radius-pill); background: var(--primary); }
@@ -406,10 +407,11 @@ a { color: inherit; }
 
 .status-badge { display: inline-flex; align-items: center; gap: 0.35rem; min-height: 1.5rem; padding: 0.16rem 0.48rem; border-radius: var(--radius-sm); font-size: 0.6875rem; font-weight: 750; white-space: nowrap; }
 .status-badge::before { content: ""; width: 0.38rem; height: 0.38rem; border-radius: 50%; background: currentColor; }
-.status-succeeded, .status-active { background: var(--success-bg); color: var(--success); }
-.status-failed { background: var(--error-bg); color: var(--error); }
+.status-succeeded, .status-active, .status-approved { background: var(--success-bg); color: var(--success); }
+.status-failed, .status-rejected { background: var(--error-bg); color: var(--error); }
 .status-running { background: var(--info-bg); color: var(--info); }
-.status-queued, .status-paused, .status-cancelled { background: var(--surface-raised); color: var(--muted); }
+.status-queued, .status-paused, .status-cancelled, .status-expired { background: var(--surface-raised); color: var(--muted); }
+.status-pending { background: var(--warning-bg); color: var(--warning); }
 
 .detail-body { max-width: 76rem; padding: var(--space-5) var(--space-6) var(--space-7); }
 .facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-block: 1px solid var(--line); }
@@ -434,6 +436,10 @@ a { color: inherit; }
 .data-table .status-column { width: 7rem; }
 .data-table .action-column { width: 3rem; text-align: right; }
 .data-table .run-actions-column { width: 6.5rem; text-align: right; }
+.approvals-table .approval-title-column { width: 23%; }
+.approvals-table .approval-action-column { width: 6.5rem; text-align: right; }
+.approvals-table .approval-pending { background: var(--warning-bg); }
+.approvals-table strong { color: var(--ink); font-weight: 720; }
 .run-actions-column .button { white-space: nowrap; }
 .table-button { width: 100%; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .table-button:hover .mono { color: var(--primary-ink); text-decoration: underline; text-underline-offset: 0.15em; }
@@ -532,10 +538,11 @@ dialog form { position: relative; padding: var(--space-6); }
 dialog h2 { margin: 0 0 var(--space-2); font-size: 1.25rem; letter-spacing: -0.025em; }
 dialog p { margin: 0 0 var(--space-5); color: var(--muted); font-size: 0.875rem; text-wrap: pretty; }
 dialog label { display: block; margin: var(--space-4) 0 var(--space-2); color: var(--ink); font-size: 0.8125rem; font-weight: 700; }
-dialog input, dialog textarea { width: 100%; padding: 0.65rem 0.75rem; border: 1px solid var(--control-line); border-radius: var(--radius-md); outline: 0; background: var(--canvas); color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.8125rem; }
+dialog input, dialog textarea, dialog select { width: 100%; padding: 0.65rem 0.75rem; border: 1px solid var(--control-line); border-radius: var(--radius-md); outline: 0; background: var(--canvas); color: var(--ink); font-size: 0.8125rem; }
+dialog input, dialog textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 dialog textarea { resize: vertical; line-height: 1.55; }
-dialog input:focus, dialog textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--focus); background: var(--surface); }
-dialog input[aria-invalid="true"], dialog textarea[aria-invalid="true"] { border-color: var(--error); }
+dialog input:focus, dialog textarea:focus, dialog select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--focus); background: var(--surface); }
+dialog input[aria-invalid="true"], dialog textarea[aria-invalid="true"], dialog select[aria-invalid="true"] { border-color: var(--error); }
 .field-message { min-height: 1.25rem; margin: var(--space-2) 0 0; color: var(--error); font-size: 0.75rem; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-5); }
 .browser-auth { margin-top: var(--space-5); padding-block: var(--space-4); border-block: 1px solid var(--line); }
@@ -555,6 +562,17 @@ dialog input[aria-invalid="true"], dialog textarea[aria-invalid="true"] { border
 .run-target dt, .action-scope dt { color: var(--muted); }
 .run-target dd, .action-scope dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--ink); }
 .action-scope { margin-bottom: var(--space-4); }
+.approval-dialog { width: calc(100vw - 2rem); max-width: 38rem; min-width: 0; overflow-x: hidden; }
+.approval-scope { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: var(--space-2) var(--space-3); margin: var(--space-4) 0; padding: var(--space-3) 0; border-block: 1px solid var(--line); font-size: 0.75rem; }
+.approval-scope dt { color: var(--muted); }
+.approval-scope dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--ink); }
+.approval-field + .approval-field { margin-top: var(--space-4); }
+.approval-field > label:not(.approval-checkbox) { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); }
+.required-mark { color: var(--muted); font-size: 0.6875rem; font-weight: 600; }
+.field-help { margin: var(--space-2) 0 0; color: var(--muted); font-size: 0.75rem; }
+.approval-checkbox { display: flex; align-items: flex-start; gap: var(--space-2); cursor: pointer; }
+.approval-checkbox input { width: 1.1rem; height: 1.1rem; margin: 0.12rem 0 0; accent-color: var(--primary); }
+.approval-actions { padding-top: var(--space-4); border-top: 1px solid var(--line); }
 .feed-footer { display: flex; justify-content: center; padding: var(--space-5) 0 var(--space-2); }
 .help-dialog { width: min(42rem, calc(100vw - 2rem)); max-width: min(42rem, calc(100vw - 2rem)); }
 .help-guides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); margin-top: var(--space-5); }
@@ -674,6 +692,7 @@ dialog input[aria-invalid="true"], dialog textarea[aria-invalid="true"] { border
   .data-table td[data-label]::before { content: attr(data-label); display: inline-block; min-width: 5rem; margin-right: var(--space-2); color: var(--muted); font-size: 0.6875rem; font-weight: 700; }
   .data-table .action-column { position: absolute; top: var(--space-3); right: 0; width: auto; }
   .data-table .run-actions-column { width: 100%; padding-top: var(--space-2); text-align: left; }
+  .data-table .approval-action-column { width: 100%; padding-top: var(--space-2); text-align: left; }
   .data-table .run-actions-column::before { vertical-align: middle; }
   .revision-row { grid-template-columns: 1fr; gap: var(--space-1); }
   .global-view-header { display: block; margin-bottom: var(--space-5); }
@@ -687,6 +706,9 @@ dialog input[aria-invalid="true"], dialog textarea[aria-invalid="true"] { border
   .help-guides { grid-template-columns: 1fr; }
   .shortcut-list > div { grid-template-columns: minmax(7rem, 0.8fr) minmax(0, 1.2fr); }
   dialog form { padding: var(--space-5); }
+  .approval-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .approval-actions .button { width: 100%; min-width: 0; }
+  .approval-actions .button:first-child { grid-column: 1 / -1; grid-row: 2; }
 }
 
 @media (pointer: coarse) {

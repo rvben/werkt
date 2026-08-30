@@ -1,15 +1,19 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rvben/werkt/internal/domain"
 )
@@ -44,12 +48,155 @@ func (e *verifyingExecutor) Execute(ctx context.Context, run domain.RunnableRun)
 }
 
 type Result struct {
-	Output json.RawMessage
-	Logs   string
-	State  json.RawMessage
+	Output  json.RawMessage
+	Logs    string
+	State   json.RawMessage
+	Control domain.RunControl
 }
 
 const MaxAutomationStateBytes = 64 * 1024
+const MaxRunControlBytes = 64 * 1024
+const maxContinuationDelay = 30 * 24 * time.Hour
+
+var controlIdentifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$`)
+
+func validateRunControl(value []byte, now time.Time) (domain.RunControl, error) {
+	if len(value) > MaxRunControlBytes {
+		return domain.RunControl{}, fmt.Errorf("run control exceeds %d bytes", MaxRunControlBytes)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	decoder.DisallowUnknownFields()
+	var control domain.RunControl
+	if err := decoder.Decode(&control); err != nil {
+		return domain.RunControl{}, fmt.Errorf("run control must be a valid JSON object: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return domain.RunControl{}, errors.New("run control must contain one JSON object")
+	}
+	if control.Defer != nil && control.Approval != nil {
+		return domain.RunControl{}, errors.New("run control cannot defer and request approval together")
+	}
+	if control.Defer != nil {
+		if !controlIdentifier.MatchString(control.Defer.Key) {
+			return domain.RunControl{}, errors.New("defer.key is invalid")
+		}
+		if control.Defer.Until.Before(now) || control.Defer.Until.After(now.Add(maxContinuationDelay)) {
+			return domain.RunControl{}, errors.New("defer.until must be in the next 30 days")
+		}
+		if len(control.Defer.Data) == 0 {
+			control.Defer.Data = json.RawMessage(`{}`)
+		} else if !json.Valid(control.Defer.Data) {
+			return domain.RunControl{}, errors.New("defer.data must be valid JSON")
+		}
+	}
+	if control.Approval != nil {
+		if err := validateApprovalRequest(*control.Approval, now); err != nil {
+			return domain.RunControl{}, err
+		}
+	}
+	return control, nil
+}
+
+func validateApprovalRequest(value domain.ApprovalRequest, now time.Time) error {
+	if !controlIdentifier.MatchString(value.Key) {
+		return errors.New("approval.key is invalid")
+	}
+	if title := strings.TrimSpace(value.Title); title == "" || len([]rune(title)) > 120 {
+		return errors.New("approval.title must contain at most 120 characters")
+	}
+	if len([]rune(value.Description)) > 1000 {
+		return errors.New("approval.description must contain at most 1000 characters")
+	}
+	if value.ExpiresAt.Before(now) || value.ExpiresAt.After(now.Add(maxContinuationDelay)) {
+		return errors.New("approval.expiresAt must be in the next 30 days")
+	}
+	if len(value.Fields) > 16 || len(value.Actions) == 0 || len(value.Actions) > 4 {
+		return errors.New("approval accepts at most 16 fields and requires one to four actions")
+	}
+	fields := make(map[string]struct{}, len(value.Fields))
+	for _, field := range value.Fields {
+		if !controlIdentifier.MatchString(field.ID) {
+			return errors.New("approval field id is invalid")
+		}
+		if _, exists := fields[field.ID]; exists {
+			return errors.New("approval field ids must be unique")
+		}
+		fields[field.ID] = struct{}{}
+		if strings.TrimSpace(field.Label) == "" || len([]rune(field.Label)) > 80 || len([]rune(field.Description)) > 300 {
+			return errors.New("approval field label or description is invalid")
+		}
+		switch field.Type {
+		case "text", "textarea", "number", "boolean":
+			if len(field.Options) > 0 {
+				return errors.New("approval field options require type select")
+			}
+		case "select":
+			if len(field.Options) == 0 || len(field.Options) > 32 {
+				return errors.New("approval select fields require one to 32 options")
+			}
+			seenOptions := make(map[string]struct{}, len(field.Options))
+			for _, option := range field.Options {
+				if strings.TrimSpace(option) == "" || len([]rune(option)) > 100 {
+					return errors.New("approval select options must contain at most 100 characters")
+				}
+				if _, exists := seenOptions[option]; exists {
+					return errors.New("approval select options must be unique")
+				}
+				seenOptions[option] = struct{}{}
+			}
+		default:
+			return errors.New("approval field type must be text, textarea, number, boolean, or select")
+		}
+		if field.Value != nil {
+			switch field.Type {
+			case "text", "textarea":
+				text, ok := field.Value.(string)
+				if !ok || len([]rune(text)) > 4000 {
+					return errors.New("approval text defaults must contain at most 4000 characters")
+				}
+			case "number":
+				if _, ok := field.Value.(float64); !ok {
+					return errors.New("approval number defaults must be numbers")
+				}
+			case "boolean":
+				if _, ok := field.Value.(bool); !ok {
+					return errors.New("approval boolean defaults must be booleans")
+				}
+			case "select":
+				selected, ok := field.Value.(string)
+				if !ok || !contains(field.Options, selected) {
+					return errors.New("approval select defaults must use a declared option")
+				}
+			}
+		}
+	}
+	actions := make(map[string]struct{}, len(value.Actions))
+	for _, action := range value.Actions {
+		if !controlIdentifier.MatchString(action.ID) || strings.TrimSpace(action.Label) == "" || len([]rune(action.Label)) > 80 {
+			return errors.New("approval action id or label is invalid")
+		}
+		if _, exists := actions[action.ID]; exists {
+			return errors.New("approval action ids must be unique")
+		}
+		actions[action.ID] = struct{}{}
+		if action.ID != "approve" && action.ID != "reject" {
+			return errors.New("approval action id must be approve or reject")
+		}
+		if action.Style != "" && action.Style != "primary" && action.Style != "neutral" && action.Style != "danger" {
+			return errors.New("approval action style must be primary, neutral, or danger")
+		}
+	}
+	return nil
+}
+
+func contains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
 
 func validateAutomationState(value []byte) (json.RawMessage, error) {
 	if len(value) > MaxAutomationStateBytes {
