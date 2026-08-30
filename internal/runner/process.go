@@ -35,13 +35,13 @@ func (r *ProcessRunner) Build(ctx context.Context, directory string, value domai
 		return errors.New("runtime.egress requires the husker executor; the process executor cannot enforce network policy")
 	}
 	if len(value.Runtime.Build) > 0 {
-		if err := runPromotionCommand(ctx, directory, value.Runtime.Environment, "build", "build", value.Runtime.Build, reporter); err != nil {
+		if err := runPromotionCommand(ctx, directory, promotionEnvironment(value.Runtime), "build", "build", value.Runtime.Build, reporter); err != nil {
 			return fmt.Errorf("build automation: %w", err)
 		}
 	}
 	for _, check := range value.Deployment.Checks {
 		checkContext, cancel := context.WithTimeout(ctx, check.TimeoutDuration())
-		err := runPromotionCommand(checkContext, directory, value.Runtime.Environment, "check:"+check.ID, "check", check.Command, reporter)
+		err := runPromotionCommand(checkContext, directory, promotionEnvironment(value.Runtime), "check:"+check.ID, "check", check.Command, reporter)
 		cancel()
 		if err != nil {
 			if errors.Is(checkContext.Err(), context.DeadlineExceeded) {

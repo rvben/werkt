@@ -17,6 +17,7 @@ This is an executable MVP, not yet a production sandbox.
 - Bearer-authenticated RFC 5322 email ingestion
 - ntfy subscriptions using its streaming JSON API
 - A language-neutral execution contract with local-process and Husker backends
+- An artifact-embedded Python authoring SDK with durable workflow primitives and reusable connectors
 - Bearer-protected management API for external agents and operators
 - Responsive management workspace at `/app/`, backed only by that public API
 - Filtered inventory, deployment progress, automation detail, pause/resume, manual runs, and audit history
@@ -228,7 +229,16 @@ execution:
   concurrency: forbid
 ```
 
-`runtime.language` is descriptive. The actual runtime contract is `runtime.command`, so any executable language works. `deployment.checks` uses the same language-neutral command-array contract: checks run in order after the optional build, each with a stable ID and timeout. Husker deployments require `runtime.image` and any explicit `runtime.buildImage` to use `name@sha256:<digest>` OCI references. When `runtime.build` is present, `runtime.buildImage` can select a separate pinned toolchain image; otherwise the pinned runtime image is reused. The local process executor ignores both image fields but still signs and verifies the produced artifact.
+`runtime.language` selects a managed language integration when one exists; Python
+packages receive Werkt's embedded authoring SDK. The actual process contract is
+still `runtime.command`, so any executable language works. `deployment.checks`
+uses the same language-neutral command-array contract: checks run in order after
+the optional build, each with a stable ID and timeout. Husker deployments require
+`runtime.image` and any explicit `runtime.buildImage` to use
+`name@sha256:<digest>` OCI references. When `runtime.build` is present,
+`runtime.buildImage` can select a separate pinned toolchain image; otherwise the
+pinned runtime image is reused. The local process executor ignores both image
+fields but still signs and verifies the produced artifact.
 
 Werkt derives a domain-separated Ed25519 artifact-signing key from the persistent 32-byte `WERKT_SECRET_KEY`; the encryption and signing keys are never reused directly. The attestation binds the artifact tree (including executable modes), source content hash, automation identity, and effective images. Its digest, signature, public key, and signing-key fingerprint are stored with the revision, returned by the management API, and shown in the workspace. Artifact metadata lives under the reserved `.werkt` directory and is excluded from automation execution.
 
@@ -253,8 +263,9 @@ The runner sets these variables for every run:
 
 The program reads the event envelope from `WERKT_EVENT_PATH`, writes a JSON result to `WERKT_RESULT_PATH`, logs to stdout/stderr, and exits non-zero on failure. If it produces no result file, the result defaults to `{}`.
 
-`WERKT_CONTROL_PATH` enables one durable, transactional continuation after a
-successful run: either a time-based `defer` or a typed operator `approval`.
+`WERKT_CONTROL_PATH` enables durable, transactional continuation after a
+successful run: a time-based `defer`, a typed operator `approval`, or both when
+an approval needs a state-aware expiry continuation.
 Continuations remain pinned to the requesting immutable revision. See
 [docs/execution.md](docs/execution.md) for the language-neutral shapes and
 [docs/management-api.md](docs/management-api.md) for approval resolution.
@@ -275,6 +286,13 @@ The event envelope is stable across every trigger and runtime:
   "metadata": {}
 }
 ```
+
+Python automations can use the injected `werkt` package instead of handling
+protocol files directly. It includes typed events and context, transactional
+job helpers, combined approval/expiry control, reusable service connectors, and
+a socket-free connector test harness. The SDK is embedded in the immutable
+artifact and its digest is part of the revision identity. See
+[docs/python-sdk.md](docs/python-sdk.md) for the authoring model and examples.
 
 ## Configuration
 

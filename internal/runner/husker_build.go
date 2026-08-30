@@ -107,13 +107,13 @@ func (r *HuskerRunner) Build(parent context.Context, directory string, value dom
 	buildContext, cancelBuild := context.WithTimeout(parent, commandBudget+r.provisionTimeout+guestCommandGrace)
 	defer cancelBuild()
 	if len(value.Runtime.Build) > 0 {
-		if err := r.runPromotionCommand(buildContext, vmName, workspacePath, value.Runtime.Environment,
+		if err := r.runPromotionCommand(buildContext, vmName, workspacePath, promotionEnvironment(value.Runtime),
 			"build", "build", value.Runtime.Build, r.buildTimeout, reporter); err != nil {
 			return fmt.Errorf("build automation in husker VM: %w", err)
 		}
 	}
 	for _, check := range value.Deployment.Checks {
-		if err := r.runPromotionCommand(buildContext, vmName, workspacePath, value.Runtime.Environment,
+		if err := r.runPromotionCommand(buildContext, vmName, workspacePath, promotionEnvironment(value.Runtime),
 			"check:"+check.ID, "check", check.Command, check.TimeoutDuration(), reporter); err != nil {
 			return fmt.Errorf("check %s in husker VM: %w", check.ID, err)
 		}

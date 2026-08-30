@@ -107,3 +107,15 @@ func TestValidateRunControlAcceptsTypedApprovalAndRejectsUnsafeShapes(t *testing
 		t.Fatal("unsafe approval shape was accepted")
 	}
 }
+
+func TestValidateRunControlAcceptsApprovalWithExpiryContinuation(t *testing.T) {
+	now := time.Now().UTC()
+	value := []byte(`{"defer":{"key":"recording-42.approval-expiry","until":"` + now.Add(7*24*time.Hour).Format(time.RFC3339) + `","data":{"jobId":"recording-42","step":"approval-expiry"}},"approval":{"key":"recording-42.publish","title":"Publish recording?","expiresAt":"` + now.Add(7*24*time.Hour).Format(time.RFC3339) + `","fields":[],"actions":[{"id":"approve","label":"Publish"}]}}`)
+	control, err := validateRunControl(value, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if control.Defer == nil || control.Approval == nil {
+		t.Fatalf("control=%#v", control)
+	}
+}

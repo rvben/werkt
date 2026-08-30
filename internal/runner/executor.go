@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/rvben/werkt/internal/domain"
+	pythonsdk "github.com/rvben/werkt/sdk/python"
 )
 
 // Executor is the isolation boundary between Werkt's orchestration plane and
@@ -72,9 +73,6 @@ func validateRunControl(value []byte, now time.Time) (domain.RunControl, error) 
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return domain.RunControl{}, errors.New("run control must contain one JSON object")
-	}
-	if control.Defer != nil && control.Approval != nil {
-		return domain.RunControl{}, errors.New("run control cannot defer and request approval together")
 	}
 	if control.Defer != nil {
 		if !controlIdentifier.MatchString(control.Defer.Key) {
@@ -221,10 +219,7 @@ type resolvedEnvironment struct {
 }
 
 func resolveRuntimeEnvironment(ctx context.Context, resolver SecretResolver, runtime domain.Runtime) (resolvedEnvironment, error) {
-	values := make(map[string]string, len(runtime.Environment)+len(runtime.Secrets))
-	for key, value := range runtime.Environment {
-		values[key] = value
-	}
+	values := promotionEnvironment(runtime)
 	if len(runtime.Secrets) == 0 {
 		return resolvedEnvironment{values: values}, nil
 	}
@@ -264,6 +259,17 @@ func resolveRuntimeEnvironment(ctx context.Context, resolver SecretResolver, run
 		values[target] = value
 	}
 	return resolvedEnvironment{values: values, secrets: secretValues}, nil
+}
+
+func promotionEnvironment(runtime domain.Runtime) map[string]string {
+	values := make(map[string]string, len(runtime.Environment)+1)
+	for key, value := range runtime.Environment {
+		values[key] = value
+	}
+	if runtime.Language == "python" {
+		values["PYTHONPATH"] = pythonsdk.ArtifactDirectory
+	}
+	return values
 }
 
 type logRedactor struct {

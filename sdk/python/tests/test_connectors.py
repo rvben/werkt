@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+import json
+import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from werkt.connectors import BUILTIN_CONNECTORS, ConnectorError, GoogleServiceAccount, HTTPClient, HTTPResponse, Ntfy, OAuth2ClientCredentials, Zoom
+from werkt.connectors.testing import ScriptedTransport
+
+
+def response(value, status: int = 200) -> HTTPResponse:
+    return HTTPResponse(status, {"Content-Type": "application/json"}, json.dumps(value).encode())
+
+
+class ConnectorContractTest(unittest.TestCase):
+    def test_builtin_connector_specs_have_unique_ids_and_explicit_credentials(self) -> None:
+        self.assertEqual(set(BUILTIN_CONNECTORS), {"zoom", "openai", "google-sheets", "ntfy"})
+        self.assertTrue(BUILTIN_CONNECTORS["zoom"].credentials[2].secret)
+        self.assertIn("sheets.googleapis.com", BUILTIN_CONNECTORS["google-sheets"].hosts)
+
+    def test_oauth_client_credentials_caches_token_and_never_uses_query_credentials(self) -> None:
+        transport = ScriptedTransport([response({"access_token": "token", "expires_in": 3600})])
+        oauth = OAuth2ClientCredentials(HTTPClient(transport), "https://auth.example/token", "client", "secret")
+        self.assertEqual(oauth.token(), "token")
+        self.assertEqual(oauth.token(), "token")
+        self.assertEqual(len(transport.requests), 1)
+        request = transport.requests[0]
+        self.assertNotIn("secret", request.url)
+        self.assertTrue(request.headers["Authorization"].startswith("Basic "))
+        transport.assert_finished()
+
+    def test_google_service_account_caches_tokens_per_scope_set(self) -> None:
+        transport = ScriptedTransport([
+            response({"access_token": "sheets-token", "expires_in": 3600}),
+            response({"access_token": "drive-token", "expires_in": 3600}),
+        ])
+        account = GoogleServiceAccount("service@example.test", "mock-signing-material", HTTPClient(transport))
+        signed = SimpleNamespace(returncode=0, stdout=b"signature")
+        with patch("werkt.connectors.google_sheets.subprocess.run", return_value=signed):
+            self.assertEqual(account.token(["scope:sheets"]), "sheets-token")
+            self.assertEqual(account.token(["scope:sheets"]), "sheets-token")
+            self.assertEqual(account.token(["scope:drive"]), "drive-token")
+        self.assertEqual(len(transport.requests), 2)
+        transport.assert_finished()
+
+    def test_zoom_normalizes_recording_api_and_rejects_unlisted_download_host(self) -> None:
+        transport = ScriptedTransport([
+            response({"access_token": "zoom-token", "expires_in": 3600}),
+            response({"uuid": "/uuid", "recording_files": []}),
+        ])
+        zoom = Zoom("account", "client", "secret", allowed_download_hosts={"us02web.zoom.us"}, client=HTTPClient(transport))
+        self.assertEqual(zoom.recording("/uuid")["uuid"], "/uuid")
+        self.assertIn("%252Fuuid", transport.requests[1].url)
+        with self.assertRaises(ConnectorError):
+            zoom.authenticated_download_url("https://attacker.example/recording")
+
+    def test_ntfy_supports_basic_auth_without_embedding_it_in_url_or_body(self) -> None:
+        transport = ScriptedTransport([HTTPResponse(200, {}, b"")])
+        ntfy = Ntfy("https://ntfy.example/topic", credential="user:password", client=HTTPClient(transport))
+        ntfy.publish("body", title="Title", tags="test")
+        request = transport.requests[0]
+        self.assertEqual(request.body, b"body")
+        self.assertNotIn("password", request.url)
+        self.assertTrue(request.headers["Authorization"].startswith("Basic "))
+
+    def test_http_client_fails_closed_on_unexpected_status(self) -> None:
+        client = HTTPClient(ScriptedTransport([response({"error": "no"}, status=503)]))
+        with self.assertRaisesRegex(ConnectorError, "HTTP 503"):
+            client.json("GET", "https://api.example/value")
+
+
+if __name__ == "__main__":
+    unittest.main()
