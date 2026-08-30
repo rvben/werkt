@@ -6,7 +6,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from werkt import Context, Event, execute
+from datetime import UTC, datetime
+
+from werkt import Context, DurableWorkflow, Event, StaleContinuation, execute
 
 
 class SDKTest(unittest.TestCase):
@@ -42,7 +44,7 @@ class SDKTest(unittest.TestCase):
                 def handler(event: Event, context: Context) -> dict[str, str]:
                     return {"name": event.data["name"], "runId": context.run_id}
 
-                execute(handler)
+                result = execute(handler)
             finally:
                 os.environ.clear()
                 os.environ.update(previous)
@@ -51,6 +53,7 @@ class SDKTest(unittest.TestCase):
                 json.loads(result_path.read_text()),
                 {"name": "Ada", "runId": "run_test"},
             )
+            self.assertEqual(result, {"name": "Ada", "runId": "run_test"})
 
     def test_context_writes_typed_approval_control(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -64,6 +67,34 @@ class SDKTest(unittest.TestCase):
                 actions=[{"id": "approve", "label": "Publish", "requiresFields": True}],
             )
             self.assertEqual(json.loads(control_path.read_text())["approval"]["key"], "publish-42")
+
+    def test_context_accumulates_approval_and_expiry_continuation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            control_path = Path(directory) / "control.json"
+            context = Context("publish", "rev_test", "run_test", control_path)
+            context.request_approval(
+                key="publish-42", title="Publish?", expires_at="2026-09-06T12:00:00Z",
+                fields=[], actions=[{"id": "approve", "label": "Publish"}],
+            )
+            context.defer(key="publish-42.expiry", until="2026-09-06T12:00:00Z", data={"step": "expiry"})
+            value = json.loads(control_path.read_text())
+            self.assertEqual(value["approval"]["key"], "publish-42")
+            self.assertEqual(value["defer"]["data"]["step"], "expiry")
+
+    def test_durable_workflow_deduplicates_and_rejects_stale_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            context = Context("example", "rev", "run", Path(directory) / "control.json", state={})
+            workflow = DurableWorkflow(context, limit=2)
+            now = datetime(2026, 8, 30, 12, tzinfo=UTC)
+            job, created = workflow.start("recording-1", "polling", now, attempts=0)
+            duplicate, created_again = workflow.start("recording-1", "polling", now)
+            self.assertTrue(created)
+            self.assertFalse(created_again)
+            self.assertEqual(job.value, duplicate.value)
+            job.require("polling").transition("ready", now)
+            workflow.commit()
+            with self.assertRaises(StaleContinuation):
+                job.require("polling")
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ import (
 	"github.com/rvben/werkt/internal/domain"
 	"github.com/rvben/werkt/internal/manifest"
 	"github.com/rvben/werkt/internal/provenance"
+	pythonsdk "github.com/rvben/werkt/sdk/python"
 )
 
 type Deployer struct {
@@ -86,6 +87,9 @@ func (d *Deployer) Prepare(ctx context.Context, sourceDirectory string) (Prepare
 	if err != nil {
 		return PreparedDeployment{}, err
 	}
+	if value.Runtime.Language == "python" {
+		contentHash = pythonsdk.RevisionHash(contentHash)
+	}
 	return PreparedDeployment{SourceDirectory: absoluteSource, Manifest: value, ContentHash: contentHash}, nil
 }
 
@@ -116,6 +120,11 @@ func (d *Deployer) BuildArtifact(ctx context.Context, prepared PreparedDeploymen
 		}()
 		if err := copyDirectory(prepared.SourceDirectory, temporary); err != nil {
 			return BuiltDeployment{}, err
+		}
+		if prepared.Manifest.Runtime.Language == "python" {
+			if err := pythonsdk.Install(temporary); err != nil {
+				return BuiltDeployment{}, fmt.Errorf("install Python SDK: %w", err)
+			}
 		}
 		if requiresPromotion {
 			if d.builder == nil {
@@ -168,6 +177,11 @@ func (d *Deployer) BuildArtifact(ctx context.Context, prepared PreparedDeploymen
 			defer os.RemoveAll(temporary) //nolint:errcheck
 			if err := copyDirectory(prepared.SourceDirectory, temporary); err != nil {
 				return BuiltDeployment{}, err
+			}
+			if prepared.Manifest.Runtime.Language == "python" {
+				if err := pythonsdk.Install(temporary); err != nil {
+					return BuiltDeployment{}, fmt.Errorf("install Python SDK: %w", err)
+				}
 			}
 			if err := d.builder.Build(ctx, temporary, prepared.Manifest, reporter); err != nil {
 				return BuiltDeployment{}, err

@@ -119,7 +119,7 @@ func TestProcessRunnerReturnsValidatedDeferredContinuation(t *testing.T) {
 	}
 }
 
-func TestProcessRunnerRejectsAmbiguousRunControl(t *testing.T) {
+func TestProcessRunnerAcceptsApprovalWithExpiryContinuation(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture is POSIX-specific")
 	}
@@ -130,9 +130,12 @@ func TestProcessRunnerRejectsAmbiguousRunControl(t *testing.T) {
 		t.Fatal(err)
 	}
 	value := domain.RunnableRun{Run: domain.Run{ID: "run_bad_control"}, ArtifactPath: directory, Manifest: domain.Manifest{Runtime: domain.Runtime{Command: []string{"./run.sh"}}, Execution: domain.Execution{Timeout: "5s"}}}
-	_, err := runner.NewProcessRunner().Execute(context.Background(), value)
-	if err == nil || !strings.Contains(err.Error(), "cannot defer and request approval") {
-		t.Fatalf("Execute() error = %v", err)
+	result, err := runner.NewProcessRunner().Execute(context.Background(), value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Control.Defer == nil || result.Control.Approval == nil {
+		t.Fatalf("control = %#v", result.Control)
 	}
 }
 
@@ -207,11 +210,12 @@ func TestProcessRunnerRunsPromotionChecksInOrderAndReportsDiagnostics(t *testing
 	directory := t.TempDir()
 	value := domain.Manifest{
 		Runtime: domain.Runtime{
+			Language:    "python",
 			Build:       []string{"/bin/sh", "-c", `printf build >> order; echo built`},
-			Environment: map[string]string{"CHECK_VALUE": "expected"},
+			Environment: map[string]string{"CHECK_VALUE": "expected", "PYTHONPATH": "unsafe-override"},
 		},
 		Deployment: domain.DeploymentPolicy{Checks: []domain.DeploymentCheck{
-			{ID: "unit", Command: []string{"/bin/sh", "-c", `test "$CHECK_VALUE" = expected; printf unit >> order; echo checked`}},
+			{ID: "unit", Command: []string{"/bin/sh", "-c", `test "$CHECK_VALUE" = expected; test "$PYTHONPATH" = .werkt-sdk/python; printf unit >> order; echo checked`}},
 		}},
 	}
 	var updates []domain.DeploymentStepUpdate

@@ -12,6 +12,7 @@ import (
 
 	"github.com/rvben/werkt/internal/domain"
 	"github.com/rvben/werkt/internal/provenance"
+	pythonsdk "github.com/rvben/werkt/sdk/python"
 )
 
 type recordingBuilder struct {
@@ -39,7 +40,7 @@ func TestBuildArtifactAttestsPublishedTreeAndRefusesTamperedReuse(t *testing.T) 
 		ContentHash:     strings.Repeat("a", 64),
 		Manifest: domain.Manifest{
 			Metadata: domain.Metadata{Name: "attested-example"},
-			Runtime:  domain.Runtime{Build: []string{"build"}, Command: []string{"run"}},
+			Runtime:  domain.Runtime{Language: "python", Build: []string{"build"}, Command: []string{"run"}},
 		},
 	}
 	built, err := deployer.BuildArtifact(context.Background(), prepared, nil)
@@ -54,6 +55,9 @@ func TestBuildArtifactAttestsPublishedTreeAndRefusesTamperedReuse(t *testing.T) 
 	}
 	if _, err := os.Stat(filepath.Join(built.ArtifactPath, provenance.MetadataDirectory, "provenance.json")); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(built.ArtifactPath, filepath.FromSlash(pythonsdk.ArtifactDirectory), "werkt", "runtime.py")); err != nil {
+		t.Fatalf("embedded Python SDK missing: %v", err)
 	}
 
 	if err := os.WriteFile(filepath.Join(built.ArtifactPath, "main.py"), []byte("tampered\n"), 0o640); err != nil {

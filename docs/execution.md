@@ -57,15 +57,23 @@ transitions serialized instead of pretending they can be rolled back together.
 State is durable operational data, not a secret store: credentials still belong
 in the vault.
 
-After a successful attempt, an automation may write one control action of at
-most 64 KiB. A deferred continuation is pinned to the same immutable revision
+For `runtime.language: python`, Werkt injects its dependency-free authoring SDK
+under the reserved `.werkt-sdk/python` artifact path and sets `PYTHONPATH` for
+deployment build commands, checks, and run attempts. The SDK digest is folded
+into the revision's content hash. Packages therefore cannot shadow the managed
+SDK path, and SDK changes create new immutable revisions instead of altering
+existing artifacts. The underlying files and environment variables remain the
+portable contract for other languages.
+
+After a successful attempt, an automation may write run control of at most 64
+KiB. A deferred continuation is pinned to the same immutable revision
 and becomes runnable at the declared RFC 3339 time, up to 30 days ahead:
 
 ```json
 {"defer":{"key":"recording-42.poll","until":"2026-08-31T12:00:00Z","data":{"recordingId":"42"}}}
 ```
 
-An approval instead creates a typed operator task. Fields may be `text`,
+An approval creates a typed operator task. Fields may be `text`,
 `textarea`, `number`, `boolean`, or `select`; actions are `approve` or `reject`.
 The eventual decision queues a pinned `approval` event rather than mutating or
 re-running the requesting attempt:
@@ -74,11 +82,16 @@ re-running the requesting attempt:
 {"approval":{"key":"recording-42.publish","title":"Publish recording?","expiresAt":"2026-08-31T18:00:00Z","fields":[{"id":"title","label":"Title","type":"text","required":true}],"actions":[{"id":"approve","label":"Publish","style":"primary","requiresFields":true},{"id":"reject","label":"Skip","style":"neutral"}]}}
 ```
 
+An automation may request both an approval and one deferred continuation in the
+same control object. This is intended for a durable expiry or escalation step:
+the approval and timer are inserted atomically, and the deferred run must treat
+an already-resolved approval as a stale no-op.
+
 Control is read and persisted only after a zero exit, in the same database
 transaction as the run result and state commit. A failed attempt therefore
-cannot leave behind a timer or approval. Writing both actions, malformed data,
-past or overly distant times, duplicate fields, or undeclared action shapes
-fails the attempt instead of guessing intent.
+cannot leave behind a timer or approval. Malformed data, past or overly distant
+times, duplicate fields, or undeclared action shapes fail the attempt instead
+of guessing intent.
 
 Standard output and error are redacted against the exact secrets resolved for that attempt, then bounded to 1 MiB and persisted as run logs. A non-zero exit fails the attempt. Exit code 124 is treated as a timeout. The runtime language is not part of this protocol.
 
