@@ -19,7 +19,7 @@ import (
 
 const (
 	toolEnvironmentVersion = 1
-	toolCatalogRevision    = "2026-09-01.2"
+	toolCatalogRevision    = "2026-09-01.3"
 	toolPreparerRevision   = "werkt-mise-v1"
 )
 
@@ -45,19 +45,28 @@ type toolCatalogEntry struct {
 
 var toolCatalog = map[string]toolCatalogEntry{
 	"ffmpeg": {
-		Backend:      "aqua:Tyrrrz/FFmpegBin",
+		Backend:      "http:ffmpeg",
 		Capabilities: []string{"audio-encode:libmp3lame", "ffmpeg", "ffprobe"},
 		SmokeCommand: []string{"ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono", "-t", "0.01", "-c:a", "libmp3lame", "-f", "null", "-"},
-		Egress:       verifiedGitHubReleaseEgress(),
+		Egress: []domain.EgressRule{
+			{Host: "github.com", Port: 443},
+			{Host: "release-assets.githubusercontent.com", Port: 443},
+		},
 		Artifacts: map[string]map[string]domain.ToolArtifact{
-			"8.1.2": {
+			"8.1.2-50-g1a748fe2cd": {
 				"linux-amd64": {
-					URL:    "https://github.com/Tyrrrz/FFmpegBin/releases/download/8.1.2/ffmpeg-linux-x64.zip",
-					Digest: "sha256:66d14e6fdd3ca71e26e674afced0b3a44e63d4d892fcbec1cbce3b2a6d5032b8",
+					URL:             "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-31-13-27/ffmpeg-n8.1.2-50-g1a748fe2cd-linux64-gpl-8.1.tar.xz",
+					Digest:          "sha256:c733b4b2951e5957e15505f788b2c65a7a41b6da4b289e295852cc38079b4d2b",
+					SizeBytes:       125758156,
+					Format:          "tar.xz",
+					StripComponents: 1,
 				},
 				"linux-arm64": {
-					URL:    "https://github.com/Tyrrrz/FFmpegBin/releases/download/8.1.2/ffmpeg-linux-arm64.zip",
-					Digest: "sha256:acceaf328440388b321ef79b07663496a9b2607a412c2ce1704d32a8f83defce",
+					URL:             "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-31-13-27/ffmpeg-n8.1.2-50-g1a748fe2cd-linuxarm64-gpl-8.1.tar.xz",
+					Digest:          "sha256:ae5da4f51b9052390f414005f8ab26c1eed1268f327cce7cb79aa076b29bd66e",
+					SizeBytes:       107695184,
+					Format:          "tar.xz",
+					StripComponents: 1,
 				},
 			},
 		},
@@ -143,7 +152,8 @@ func resolveToolEnvironment(requested map[string]string, config toolEnvironmentC
 				return domain.ResolvedToolEnvironment{}, fmt.Errorf("runtime.tools.%s version %s is not in catalog %s", name, version, toolCatalogRevision)
 			}
 			artifact, ok := platforms[config.Platform]
-			if !ok || !validSHA256Digest(artifact.Digest) || !strings.HasPrefix(artifact.URL, "https://") {
+			if !ok || !validSHA256Digest(artifact.Digest) || !strings.HasPrefix(artifact.URL, "https://") ||
+				artifact.SizeBytes <= 0 || artifact.Format == "" || artifact.StripComponents < 0 {
 				return domain.ResolvedToolEnvironment{}, fmt.Errorf("runtime.tools.%s version %s has no verified artifact for %s", name, version, config.Platform)
 			}
 			resolved.Artifact = &artifact

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -92,6 +93,10 @@ func (r *HuskerRunner) ensureToolImage(parent context.Context, environment *doma
 	if err := r.uploadFile(ctx, vmName, guestMiseUploadPath, miseBinary, 0o755); err != nil {
 		return fmt.Errorf("upload verified mise binary: %w", err)
 	}
+	miseConfig, err := renderMiseConfig(environment.Tools)
+	if err != nil {
+		return err
+	}
 	setupEnvironment := miseEnvironment()
 	for _, command := range []execRequest{
 		{Command: "/bin/mkdir", Args: []string{"-p", "/opt/werkt/bin", guestMiseDataDir, "/var/cache/werkt-mise", "/var/lib/werkt-mise", "/etc/werkt/mise"}, Timeout: 30},
@@ -101,6 +106,9 @@ func (r *HuskerRunner) ensureToolImage(parent context.Context, environment *doma
 		if err != nil || response.ExitCode != 0 {
 			return fmt.Errorf("install mise in tool image: %w%s", errors.Join(err, exitCodeError(response)), errorLogs(formatLogs(response.Stdout, response.Stderr)))
 		}
+	}
+	if err := r.uploadFile(ctx, vmName, "/etc/werkt/mise/config.toml", miseConfig, 0o644); err != nil {
+		return fmt.Errorf("upload pinned mise configuration: %w", err)
 	}
 	architecture := map[string]string{"linux-amd64": "x86_64", "linux-arm64": "aarch64"}[environment.Platform]
 	platformResponse, err := r.exec(ctx, vmName, execRequest{Command: "/bin/uname", Args: []string{"-m"}, Timeout: 30})
@@ -123,18 +131,9 @@ func (r *HuskerRunner) ensureToolImage(parent context.Context, environment *doma
 	if !strings.Contains(versionResponse.Stdout, environment.Installer.Version) {
 		return fmt.Errorf("mise version mismatch: expected %s, got %q", environment.Installer.Version, strings.TrimSpace(versionResponse.Stdout))
 	}
-	specs := make([]string, 0, len(environment.Tools))
-	for _, tool := range environment.Tools {
-		specs = append(specs, tool.Backend+"@"+tool.Version)
-	}
-	for _, args := range [][]string{
-		append([]string{"install"}, specs...),
-		append([]string{"use", "--global", "--pin"}, specs...),
-	} {
-		response, err := r.exec(ctx, vmName, execRequest{Command: guestMisePath, Args: args, Environment: setupEnvironment, Timeout: durationSeconds(timeout)})
-		if err != nil || response.ExitCode != 0 {
-			return fmt.Errorf("prepare tools with mise: %w%s", errors.Join(err, exitCodeError(response)), errorLogs(formatLogs(response.Stdout, response.Stderr)))
-		}
+	response, err := r.exec(ctx, vmName, execRequest{Command: guestMisePath, Args: []string{"install"}, Environment: setupEnvironment, Timeout: durationSeconds(timeout)})
+	if err != nil || response.ExitCode != 0 {
+		return fmt.Errorf("prepare tools with mise: %w%s", errors.Join(err, exitCodeError(response)), errorLogs(formatLogs(response.Stdout, response.Stderr)))
 	}
 	if hasPinnedToolArtifacts(environment.Tools) {
 		platform := map[string]string{"linux-amd64": "linux-x64", "linux-arm64": "linux-arm64"}[environment.Platform]
@@ -180,6 +179,28 @@ func (r *HuskerRunner) ensureToolImage(parent context.Context, environment *doma
 	}
 	environment.ImageDigest = committed.ContentDigest
 	return nil
+}
+
+func renderMiseConfig(tools []domain.ResolvedTool) ([]byte, error) {
+	var config strings.Builder
+	config.WriteString("[tools]\n")
+	for _, tool := range tools {
+		if tool.Backend == "" || tool.Version == "" {
+			return nil, fmt.Errorf("render mise config for incomplete runtime.tools.%s", tool.Name)
+		}
+		config.WriteString(strconv.Quote(tool.Backend))
+		if tool.Artifact == nil {
+			config.WriteString(" = ")
+			config.WriteString(strconv.Quote(tool.Version))
+			config.WriteByte('\n')
+			continue
+		}
+		artifact := tool.Artifact
+		fmt.Fprintf(&config, " = { version = %s, url = %s, checksum = %s, size = %s, format = %s, strip_components = %d }\n",
+			strconv.Quote(tool.Version), strconv.Quote(artifact.URL), strconv.Quote(artifact.Digest),
+			strconv.Quote(strconv.FormatInt(artifact.SizeBytes, 10)), strconv.Quote(artifact.Format), artifact.StripComponents)
+	}
+	return []byte(config.String()), nil
 }
 
 func hasPinnedToolArtifacts(tools []domain.ResolvedTool) bool {

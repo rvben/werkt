@@ -105,8 +105,11 @@ type ResolvedTool struct {
 // ToolArtifact pins a catalog tool to the exact archive bytes mise must
 // verify before the prepared image can be committed.
 type ToolArtifact struct {
-	URL    string `json:"url"`
-	Digest string `json:"digest"`
+	URL             string `json:"url"`
+	Digest          string `json:"digest"`
+	SizeBytes       int64  `json:"sizeBytes"`
+	Format          string `json:"format"`
+	StripComponents int    `json:"stripComponents"`
 }
 
 // EgressRule names one exact destination available to an automation at
