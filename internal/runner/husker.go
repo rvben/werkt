@@ -29,7 +29,11 @@ import (
 const (
 	defaultProvisionTimeout  = 2 * time.Minute
 	defaultCleanupTimeout    = 30 * time.Second
-	defaultUploadChunkSize   = 512 * 1024
+	// Husker permits 1 MiB decoded writes and 120 sensitive writes/minute.
+	// Using the full bounded write avoids exhausting that limit while staging a
+	// checksum-pinned installer such as mise; base64 still fits below Husker's
+	// 2 MiB HTTP request ceiling.
+	defaultUploadChunkSize   = 1024 * 1024
 	defaultDownloadChunkSize = 512 * 1024
 	defaultBuildTimeout      = 15 * time.Minute
 	guestCommandGrace        = 30 * time.Second

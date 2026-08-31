@@ -24,6 +24,16 @@ import (
 
 type testSecretResolver map[string]string
 
+func TestHuskerRunnerUsesTheLargestBoundedUploadChunkByDefault(t *testing.T) {
+	runner, err := NewHuskerRunner(HuskerConfig{URL: "http://127.0.0.1:7777"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runner.uploadChunkSize != 1024*1024 {
+		t.Fatalf("default upload chunk = %d, want 1 MiB", runner.uploadChunkSize)
+	}
+}
+
 func (r testSecretResolver) Resolve(_ context.Context, names []string) (map[string]string, error) {
 	values := make(map[string]string, len(names))
 	for _, name := range names {
