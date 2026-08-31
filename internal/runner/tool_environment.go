@@ -19,7 +19,7 @@ import (
 
 const (
 	toolEnvironmentVersion = 1
-	toolCatalogRevision    = "2026-08-31.2"
+	toolCatalogRevision    = "2026-08-31.3"
 	toolPreparerRevision   = "werkt-mise-v1"
 )
 
@@ -48,6 +48,7 @@ var toolCatalog = map[string]toolCatalogEntry{
 		Capabilities: []string{"pip", "python", "python3"},
 		SmokeCommand: []string{"python3", "--version"},
 		Egress: []domain.EgressRule{
+			{Host: "api.github.com", Port: 443},
 			{Host: "github.com", Port: 443},
 			{Host: "mise-versions.jdx.dev", Port: 443},
 			{Host: "objects.githubusercontent.com", Port: 443},

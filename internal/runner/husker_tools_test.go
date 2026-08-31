@@ -129,8 +129,17 @@ func TestPrepareManifestBuildsVerifiedPythonEnvironmentWithoutOCIImport(t *testi
 	if prepared.Runtime.ResolvedTools == nil || prepared.Runtime.ResolvedTools.ImageDigest != derivedDigest {
 		t.Fatalf("resolved environment = %#v", prepared.Runtime.ResolvedTools)
 	}
-	if created.RootFSPath != "minimal-base" || created.Network != "filtered" || len(created.Egress) != 4 {
+	if created.RootFSPath != "minimal-base" || created.Network != "filtered" || len(created.Egress) != 5 {
 		t.Fatalf("preparation VM = %#v", created)
+	}
+	attestationEgress := false
+	for _, rule := range created.Egress {
+		if rule.Host == "api.github.com" && rule.Port == 443 && rule.Protocol == "tcp" {
+			attestationEgress = true
+		}
+	}
+	if !attestationEgress {
+		t.Fatalf("preparation VM does not permit GitHub attestation verification: %#v", created.Egress)
 	}
 	if committed != prepared.Runtime.ResolvedTools.Image || !deleted {
 		t.Fatalf("committed=%q deleted=%v resolved=%#v", committed, deleted, prepared.Runtime.ResolvedTools)
