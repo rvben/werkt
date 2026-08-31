@@ -95,10 +95,18 @@ type ToolInstaller struct {
 }
 
 type ResolvedTool struct {
-	Name         string   `json:"name"`
-	Version      string   `json:"version"`
-	Backend      string   `json:"backend"`
-	Capabilities []string `json:"capabilities"`
+	Name         string        `json:"name"`
+	Version      string        `json:"version"`
+	Backend      string        `json:"backend"`
+	Capabilities []string      `json:"capabilities"`
+	Artifact     *ToolArtifact `json:"artifact,omitempty"`
+}
+
+// ToolArtifact pins a catalog tool to the exact archive bytes mise must
+// verify before the prepared image can be committed.
+type ToolArtifact struct {
+	URL    string `json:"url"`
+	Digest string `json:"digest"`
 }
 
 // EgressRule names one exact destination available to an automation at

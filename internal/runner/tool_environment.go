@@ -19,7 +19,7 @@ import (
 
 const (
 	toolEnvironmentVersion = 1
-	toolCatalogRevision    = "2026-09-01.1"
+	toolCatalogRevision    = "2026-09-01.2"
 	toolPreparerRevision   = "werkt-mise-v1"
 )
 
@@ -40,22 +40,45 @@ type toolCatalogEntry struct {
 	Capabilities []string
 	SmokeCommand []string
 	Egress       []domain.EgressRule
+	Artifacts    map[string]map[string]domain.ToolArtifact
 }
 
 var toolCatalog = map[string]toolCatalogEntry{
+	"ffmpeg": {
+		Backend:      "aqua:Tyrrrz/FFmpegBin",
+		Capabilities: []string{"audio-encode:libmp3lame", "ffmpeg", "ffprobe"},
+		SmokeCommand: []string{"ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono", "-t", "0.01", "-c:a", "libmp3lame", "-f", "null", "-"},
+		Egress:       verifiedGitHubReleaseEgress(),
+		Artifacts: map[string]map[string]domain.ToolArtifact{
+			"8.1.2": {
+				"linux-amd64": {
+					URL:    "https://github.com/Tyrrrz/FFmpegBin/releases/download/8.1.2/ffmpeg-linux-x64.zip",
+					Digest: "sha256:66d14e6fdd3ca71e26e674afced0b3a44e63d4d892fcbec1cbce3b2a6d5032b8",
+				},
+				"linux-arm64": {
+					URL:    "https://github.com/Tyrrrz/FFmpegBin/releases/download/8.1.2/ffmpeg-linux-arm64.zip",
+					Digest: "sha256:acceaf328440388b321ef79b07663496a9b2607a412c2ce1704d32a8f83defce",
+				},
+			},
+		},
+	},
 	"python": {
 		Backend:      "python",
 		Capabilities: []string{"pip", "python", "python3"},
 		SmokeCommand: []string{"python3", "--version"},
-		Egress: []domain.EgressRule{
-			{Host: "api.github.com", Port: 443},
-			{Host: "github.com", Port: 443},
-			{Host: "mise-versions.jdx.dev", Port: 443},
-			{Host: "objects.githubusercontent.com", Port: 443},
-			{Host: "release-assets.githubusercontent.com", Port: 443},
-			{Host: "tuf-repo-cdn.sigstore.dev", Port: 443},
-		},
+		Egress:       verifiedGitHubReleaseEgress(),
 	},
+}
+
+func verifiedGitHubReleaseEgress() []domain.EgressRule {
+	return []domain.EgressRule{
+		{Host: "api.github.com", Port: 443},
+		{Host: "github.com", Port: 443},
+		{Host: "mise-versions.jdx.dev", Port: 443},
+		{Host: "objects.githubusercontent.com", Port: 443},
+		{Host: "release-assets.githubusercontent.com", Port: 443},
+		{Host: "tuf-repo-cdn.sigstore.dev", Port: 443},
+	}
 }
 
 type toolEnvironmentIdentity struct {
@@ -113,7 +136,19 @@ func resolveToolEnvironment(requested map[string]string, config toolEnvironmentC
 		}
 		capabilities := append([]string(nil), entry.Capabilities...)
 		sort.Strings(capabilities)
-		tools = append(tools, domain.ResolvedTool{Name: name, Version: version, Backend: entry.Backend, Capabilities: capabilities})
+		resolved := domain.ResolvedTool{Name: name, Version: version, Backend: entry.Backend, Capabilities: capabilities}
+		if entry.Artifacts != nil {
+			platforms, ok := entry.Artifacts[version]
+			if !ok {
+				return domain.ResolvedToolEnvironment{}, fmt.Errorf("runtime.tools.%s version %s is not in catalog %s", name, version, toolCatalogRevision)
+			}
+			artifact, ok := platforms[config.Platform]
+			if !ok || !validSHA256Digest(artifact.Digest) || !strings.HasPrefix(artifact.URL, "https://") {
+				return domain.ResolvedToolEnvironment{}, fmt.Errorf("runtime.tools.%s version %s has no verified artifact for %s", name, version, config.Platform)
+			}
+			resolved.Artifact = &artifact
+		}
+		tools = append(tools, resolved)
 		for _, capability := range capabilities {
 			capabilitySet[capability] = struct{}{}
 		}

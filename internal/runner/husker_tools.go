@@ -136,6 +136,23 @@ func (r *HuskerRunner) ensureToolImage(parent context.Context, environment *doma
 			return fmt.Errorf("prepare tools with mise: %w%s", errors.Join(err, exitCodeError(response)), errorLogs(formatLogs(response.Stdout, response.Stderr)))
 		}
 	}
+	if hasPinnedToolArtifacts(environment.Tools) {
+		platform := map[string]string{"linux-amd64": "linux-x64", "linux-arm64": "linux-arm64"}[environment.Platform]
+		response, err := r.exec(ctx, vmName, execRequest{
+			Command: guestMisePath, Args: []string{"lock", "--global", "--platform", platform},
+			Environment: setupEnvironment, Timeout: durationSeconds(timeout),
+		})
+		if err != nil || response.ExitCode != 0 {
+			return fmt.Errorf("lock prepared tool artifacts: %w%s", errors.Join(err, exitCodeError(response)), errorLogs(formatLogs(response.Stdout, response.Stderr)))
+		}
+		lock, err := r.exec(ctx, vmName, execRequest{Command: "/bin/cat", Args: []string{"/etc/werkt/mise/mise.lock"}, Timeout: 30})
+		if err != nil || lock.ExitCode != 0 {
+			return fmt.Errorf("read prepared tool lock: %w%s", errors.Join(err, exitCodeError(lock)), errorLogs(formatLogs(lock.Stdout, lock.Stderr)))
+		}
+		if err := verifyPinnedToolArtifacts(lock.Stdout, environment.Tools); err != nil {
+			return err
+		}
+	}
 	for _, tool := range environment.Tools {
 		entry := toolCatalog[tool.Name]
 		args := []string{"exec", tool.Backend + "@" + tool.Version, "--"}
@@ -162,6 +179,28 @@ func (r *HuskerRunner) ensureToolImage(parent context.Context, environment *doma
 		return err
 	}
 	environment.ImageDigest = committed.ContentDigest
+	return nil
+}
+
+func hasPinnedToolArtifacts(tools []domain.ResolvedTool) bool {
+	for _, tool := range tools {
+		if tool.Artifact != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func verifyPinnedToolArtifacts(lock string, tools []domain.ResolvedTool) error {
+	for _, tool := range tools {
+		if tool.Artifact == nil {
+			continue
+		}
+		if !strings.Contains(lock, `url = "`+tool.Artifact.URL+`"`) ||
+			!strings.Contains(lock, `checksum = "`+tool.Artifact.Digest+`"`) {
+			return fmt.Errorf("mise lock does not bind runtime.tools.%s@%s to catalog artifact %s", tool.Name, tool.Version, tool.Artifact.Digest)
+		}
+	}
 	return nil
 }
 

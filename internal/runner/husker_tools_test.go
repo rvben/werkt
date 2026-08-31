@@ -42,6 +42,32 @@ func TestResolveToolEnvironmentIsCanonicalAndRejectsCatalogEscape(t *testing.T) 
 	if _, err := resolveToolEnvironment(map[string]string{"python": "latest"}, config); err == nil || !strings.Contains(err.Error(), "exact version") {
 		t.Fatalf("mutable version error = %v", err)
 	}
+	withFFmpeg, err := resolveToolEnvironment(map[string]string{"ffmpeg": "8.1.2", "python": "3.13.7"}, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withFFmpeg.Tools) != 2 || withFFmpeg.Tools[0].Name != "ffmpeg" || withFFmpeg.Tools[0].Artifact == nil ||
+		withFFmpeg.Tools[0].Artifact.Digest != "sha256:acceaf328440388b321ef79b07663496a9b2607a412c2ce1704d32a8f83defce" {
+		t.Fatalf("resolved FFmpeg artifact = %#v", withFFmpeg.Tools)
+	}
+	if len(withFFmpeg.PreparationEgress) != 6 {
+		t.Fatalf("deduplicated preparation egress = %#v", withFFmpeg.PreparationEgress)
+	}
+	if _, err := resolveToolEnvironment(map[string]string{"ffmpeg": "8.1.1"}, config); err == nil || !strings.Contains(err.Error(), "not in catalog") {
+		t.Fatalf("uncataloged FFmpeg version error = %v", err)
+	}
+}
+
+func TestVerifyPinnedToolArtifactsRequiresCatalogURLAndDigest(t *testing.T) {
+	artifact := &domain.ToolArtifact{URL: "https://github.com/example/tool/releases/download/1.2.3/tool.zip", Digest: testDigest("tool archive")}
+	tools := []domain.ResolvedTool{{Name: "tool", Version: "1.2.3", Artifact: artifact}}
+	lock := "url = \"" + artifact.URL + "\"\nchecksum = \"" + artifact.Digest + "\"\n"
+	if err := verifyPinnedToolArtifacts(lock, tools); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyPinnedToolArtifacts(strings.Replace(lock, artifact.Digest, testDigest("replacement"), 1), tools); err == nil {
+		t.Fatal("replacement artifact digest was accepted")
+	}
 }
 
 func TestPrepareManifestBuildsVerifiedPythonEnvironmentWithoutOCIImport(t *testing.T) {
