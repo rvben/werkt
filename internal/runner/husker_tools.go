@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ const (
 	guestMiseUploadPath = "/tmp/werkt-mise"
 	guestMisePath       = "/opt/werkt/bin/mise"
 	guestMiseDataDir    = "/opt/werkt/mise"
+	guestRuntimeBinDir  = "/opt/werkt/runtime/bin"
 )
 
 // PrepareManifest resolves and materializes runtime.tools before a revision is
@@ -99,7 +101,7 @@ func (r *HuskerRunner) ensureToolImage(parent context.Context, environment *doma
 	}
 	setupEnvironment := miseEnvironment()
 	for _, command := range []execRequest{
-		{Command: "/bin/mkdir", Args: []string{"-p", "/opt/werkt/bin", guestMiseDataDir, "/var/cache/werkt-mise", "/var/lib/werkt-mise", "/etc/werkt/mise"}, Timeout: 30},
+		{Command: "/bin/mkdir", Args: []string{"-p", "/opt/werkt/bin", guestMiseDataDir, guestRuntimeBinDir, "/var/cache/werkt-mise", "/var/lib/werkt-mise", "/etc/werkt/mise"}, Timeout: 30},
 		{Command: "/bin/cp", Args: []string{guestMiseUploadPath, guestMisePath}, Timeout: 30},
 	} {
 		response, err := r.exec(ctx, vmName, command)
@@ -131,23 +133,28 @@ func (r *HuskerRunner) ensureToolImage(parent context.Context, environment *doma
 	if !strings.Contains(versionResponse.Stdout, environment.Installer.Version) {
 		return fmt.Errorf("mise version mismatch: expected %s, got %q", environment.Installer.Version, strings.TrimSpace(versionResponse.Stdout))
 	}
-	for _, phase := range []struct {
-		name string
-		args []string
-	}{
-		{name: "install tools", args: []string{"install"}},
-		{name: "generate tool shims", args: []string{"reshim"}},
-	} {
-		response, err := r.exec(ctx, vmName, execRequest{Command: guestMisePath, Args: phase.args, Environment: setupEnvironment, Timeout: durationSeconds(timeout)})
-		if err != nil || response.ExitCode != 0 {
-			return fmt.Errorf("%s with mise: %w%s", phase.name, errors.Join(err, exitCodeError(response)), errorLogs(formatLogs(response.Stdout, response.Stderr)))
-		}
+	response, err := r.exec(ctx, vmName, execRequest{Command: guestMisePath, Args: []string{"install"}, Environment: setupEnvironment, Timeout: durationSeconds(timeout)})
+	if err != nil || response.ExitCode != 0 {
+		return fmt.Errorf("install tools with mise: %w%s", errors.Join(err, exitCodeError(response)), errorLogs(formatLogs(response.Stdout, response.Stderr)))
 	}
 	for _, tool := range environment.Tools {
 		entry := toolCatalog[tool.Name]
-		args := []string{"exec", tool.Backend + "@" + tool.Version, "--"}
-		args = append(args, entry.SmokeCommand...)
-		response, err := r.exec(ctx, vmName, execRequest{Command: guestMisePath, Args: args, Environment: setupEnvironment, Timeout: 60})
+		for _, executable := range tool.Executables {
+			which, err := r.exec(ctx, vmName, execRequest{Command: guestMisePath, Args: []string{"which", executable}, Environment: setupEnvironment, Timeout: 30})
+			resolvedPath := strings.TrimSpace(which.Stdout)
+			if err != nil || which.ExitCode != 0 {
+				return fmt.Errorf("resolve prepared %s executable %s: %w%s", tool.Name, executable, errors.Join(err, exitCodeError(which)), errorLogs(formatLogs(which.Stdout, which.Stderr)))
+			}
+			if !path.IsAbs(resolvedPath) || path.Clean(resolvedPath) != resolvedPath || !strings.HasPrefix(resolvedPath, guestMiseDataDir+"/installs/") {
+				return fmt.Errorf("resolve prepared %s executable %s: mise returned unsafe path %q", tool.Name, executable, resolvedPath)
+			}
+			linked, err := r.exec(ctx, vmName, execRequest{Command: "/bin/ln", Args: []string{"-s", resolvedPath, path.Join(guestRuntimeBinDir, executable)}, Timeout: 30})
+			if err != nil || linked.ExitCode != 0 {
+				return fmt.Errorf("publish prepared %s executable %s: %w%s", tool.Name, executable, errors.Join(err, exitCodeError(linked)), errorLogs(formatLogs(linked.Stdout, linked.Stderr)))
+			}
+		}
+		command := path.Join(guestRuntimeBinDir, entry.SmokeCommand[0])
+		response, err := r.exec(ctx, vmName, execRequest{Command: command, Args: entry.SmokeCommand[1:], Environment: setupEnvironment, Timeout: 60})
 		if err != nil || response.ExitCode != 0 {
 			return fmt.Errorf("verify prepared %s tool: %w%s", tool.Name, errors.Join(err, exitCodeError(response)), errorLogs(formatLogs(response.Stdout, response.Stderr)))
 		}
@@ -235,7 +242,11 @@ func toolRuntimeEnvironment(environment *domain.ResolvedToolEnvironment) map[str
 		return nil
 	}
 	values := miseEnvironment()
-	values["PATH"] = strings.Join([]string{guestMiseDataDir + "/shims", "/opt/werkt/bin", "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"}, ":")
+	toolPath := guestRuntimeBinDir
+	if environment.Version == 1 {
+		toolPath = guestMiseDataDir + "/shims"
+	}
+	values["PATH"] = strings.Join([]string{toolPath, "/opt/werkt/bin", "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"}, ":")
 	return values
 }
 

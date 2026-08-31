@@ -98,6 +98,7 @@ type ResolvedTool struct {
 	Name         string        `json:"name"`
 	Version      string        `json:"version"`
 	Backend      string        `json:"backend"`
+	Executables  []string      `json:"executables,omitempty"`
 	Capabilities []string      `json:"capabilities"`
 	Artifact     *ToolArtifact `json:"artifact,omitempty"`
 }

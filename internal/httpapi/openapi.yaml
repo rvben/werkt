@@ -983,7 +983,7 @@ components:
       type: object
       additionalProperties: false
       properties:
-        version: {type: integer, const: 1}
+        version: {type: integer, enum: [1, 2]}
         identityDigest: {type: string, pattern: "^sha256:[a-f0-9]{64}$"}
         image: {type: string}
         imageDigest: {type: string, pattern: "^sha256:[a-f0-9]{64}$"}
@@ -1016,8 +1016,20 @@ components:
         name: {type: string}
         version: {type: string}
         backend: {type: string}
+        executables: {type: array, items: {type: string}}
         capabilities: {type: array, items: {type: string}}
+        artifact: {$ref: "#/components/schemas/ToolArtifact"}
       required: [name, version, backend, capabilities]
+    ToolArtifact:
+      type: object
+      additionalProperties: false
+      properties:
+        url: {type: string, format: uri}
+        digest: {type: string, pattern: "^sha256:[a-f0-9]{64}$"}
+        sizeBytes: {type: integer, minimum: 1}
+        format: {type: string}
+        stripComponents: {type: integer, minimum: 0}
+      required: [url, digest, sizeBytes, format, stripComponents]
     ToolPreparationEgress:
       type: object
       additionalProperties: false

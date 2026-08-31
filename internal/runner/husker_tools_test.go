@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"strings"
 	"sync"
 	"testing"
@@ -47,7 +48,8 @@ func TestResolveToolEnvironmentIsCanonicalAndRejectsCatalogEscape(t *testing.T) 
 		t.Fatal(err)
 	}
 	if len(withFFmpeg.Tools) != 2 || withFFmpeg.Tools[0].Name != "ffmpeg" || withFFmpeg.Tools[0].Artifact == nil ||
-		withFFmpeg.Tools[0].Artifact.Digest != "sha256:ae5da4f51b9052390f414005f8ab26c1eed1268f327cce7cb79aa076b29bd66e" {
+		withFFmpeg.Tools[0].Artifact.Digest != "sha256:ae5da4f51b9052390f414005f8ab26c1eed1268f327cce7cb79aa076b29bd66e" ||
+		len(withFFmpeg.Tools[0].Executables) != 2 || withFFmpeg.Tools[0].Executables[0] != "ffmpeg" {
 		t.Fatalf("resolved FFmpeg artifact = %#v", withFFmpeg.Tools)
 	}
 	if len(withFFmpeg.PreparationEgress) != 6 {
@@ -95,7 +97,7 @@ func TestPrepareManifestBuildsVerifiedPythonEnvironmentWithoutOCIImport(t *testi
 	var created createVMRequest
 	var committed string
 	deleted := false
-	reshimmed := false
+	linked := make(map[string]string)
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -129,8 +131,11 @@ func TestPrepareManifestBuildsVerifiedPythonEnvironmentWithoutOCIImport(t *testi
 			if command.Command == guestMisePath && len(command.Args) == 1 && command.Args[0] == "--version" {
 				result.Stdout = "2026.8.1 linux-arm64\n"
 			}
-			if command.Command == guestMisePath && len(command.Args) == 1 && command.Args[0] == "reshim" {
-				reshimmed = true
+			if command.Command == guestMisePath && len(command.Args) == 2 && command.Args[0] == "which" {
+				result.Stdout = guestMiseDataDir + "/installs/python/3.13.7/bin/" + command.Args[1] + "\n"
+			}
+			if command.Command == "/bin/ln" && len(command.Args) == 3 {
+				linked[path.Base(command.Args[2])] = command.Args[1]
 			}
 			writeJSON(t, response, result)
 		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/stop"):
@@ -187,12 +192,12 @@ func TestPrepareManifestBuildsVerifiedPythonEnvironmentWithoutOCIImport(t *testi
 	if !attestationAPI || !attestationTrustRoot {
 		t.Fatalf("preparation VM does not permit GitHub attestation verification: %#v", created.Egress)
 	}
-	if committed != prepared.Runtime.ResolvedTools.Image || !reshimmed || !deleted {
-		t.Fatalf("committed=%q reshimmed=%v deleted=%v resolved=%#v", committed, reshimmed, deleted, prepared.Runtime.ResolvedTools)
+	if committed != prepared.Runtime.ResolvedTools.Image || len(linked) != 3 || !deleted {
+		t.Fatalf("committed=%q linked=%#v deleted=%v resolved=%#v", committed, linked, deleted, prepared.Runtime.ResolvedTools)
 	}
 }
 
-func TestExecuteUsesPreparedPythonImageAndMiseShims(t *testing.T) {
+func TestExecuteUsesPreparedPythonImageAndPublishedToolBin(t *testing.T) {
 	directory := t.TempDir()
 	if err := os.WriteFile(directory+"/main.py", []byte("print('hello')\n"), 0o640); err != nil {
 		t.Fatal(err)
@@ -231,7 +236,7 @@ func TestExecuteUsesPreparedPythonImageAndMiseShims(t *testing.T) {
 			}
 			if command.Command == "python3" {
 				runtimeCommandSeen = true
-				if !strings.HasPrefix(command.Environment["PATH"], guestMiseDataDir+"/shims:") {
+				if !strings.HasPrefix(command.Environment["PATH"], guestRuntimeBinDir+":") {
 					t.Errorf("runtime PATH = %q", command.Environment["PATH"])
 				}
 			}
@@ -271,6 +276,17 @@ func TestExecuteUsesPreparedPythonImageAndMiseShims(t *testing.T) {
 	}
 	if createdRootFS != environment.Image || !runtimeCommandSeen {
 		t.Fatalf("rootfs=%q runtimeCommandSeen=%v", createdRootFS, runtimeCommandSeen)
+	}
+}
+
+func TestToolRuntimeEnvironmentPreservesLegacyMiseShimPath(t *testing.T) {
+	legacy := toolRuntimeEnvironment(&domain.ResolvedToolEnvironment{Version: 1})
+	if !strings.HasPrefix(legacy["PATH"], guestMiseDataDir+"/shims:") {
+		t.Fatalf("legacy PATH = %q", legacy["PATH"])
+	}
+	current := toolRuntimeEnvironment(&domain.ResolvedToolEnvironment{Version: 2})
+	if !strings.HasPrefix(current["PATH"], guestRuntimeBinDir+":") {
+		t.Fatalf("current PATH = %q", current["PATH"])
 	}
 }
 
