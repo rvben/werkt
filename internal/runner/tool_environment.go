@@ -19,7 +19,7 @@ import (
 
 const (
 	toolEnvironmentVersion = 1
-	toolCatalogRevision    = "2026-08-31.3"
+	toolCatalogRevision    = "2026-09-01.1"
 	toolPreparerRevision   = "werkt-mise-v1"
 )
 
@@ -53,6 +53,7 @@ var toolCatalog = map[string]toolCatalogEntry{
 			{Host: "mise-versions.jdx.dev", Port: 443},
 			{Host: "objects.githubusercontent.com", Port: 443},
 			{Host: "release-assets.githubusercontent.com", Port: 443},
+			{Host: "tuf-repo-cdn.sigstore.dev", Port: 443},
 		},
 	},
 }

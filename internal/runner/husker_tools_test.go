@@ -129,16 +129,20 @@ func TestPrepareManifestBuildsVerifiedPythonEnvironmentWithoutOCIImport(t *testi
 	if prepared.Runtime.ResolvedTools == nil || prepared.Runtime.ResolvedTools.ImageDigest != derivedDigest {
 		t.Fatalf("resolved environment = %#v", prepared.Runtime.ResolvedTools)
 	}
-	if created.RootFSPath != "minimal-base" || created.Network != "filtered" || len(created.Egress) != 5 {
+	if created.RootFSPath != "minimal-base" || created.Network != "filtered" || len(created.Egress) != 6 {
 		t.Fatalf("preparation VM = %#v", created)
 	}
-	attestationEgress := false
+	attestationAPI := false
+	attestationTrustRoot := false
 	for _, rule := range created.Egress {
 		if rule.Host == "api.github.com" && rule.Port == 443 && rule.Protocol == "tcp" {
-			attestationEgress = true
+			attestationAPI = true
+		}
+		if rule.Host == "tuf-repo-cdn.sigstore.dev" && rule.Port == 443 && rule.Protocol == "tcp" {
+			attestationTrustRoot = true
 		}
 	}
-	if !attestationEgress {
+	if !attestationAPI || !attestationTrustRoot {
 		t.Fatalf("preparation VM does not permit GitHub attestation verification: %#v", created.Egress)
 	}
 	if committed != prepared.Runtime.ResolvedTools.Image || !deleted {
