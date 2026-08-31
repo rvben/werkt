@@ -21,7 +21,7 @@ import (
 const (
 	toolEnvironmentVersion = 2
 	toolCatalogRevision    = "2026-09-01.5"
-	toolPreparerRevision   = "werkt-mise-v5"
+	toolPreparerRevision   = "werkt-mise-v6"
 )
 
 var exactResolvedToolVersion = regexp.MustCompile(`^[0-9][0-9A-Za-z]*(?:[._-][0-9A-Za-z]+)*(?:\+[0-9A-Za-z.-]+)?$`)

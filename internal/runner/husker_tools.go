@@ -144,7 +144,8 @@ func (r *HuskerRunner) ensureToolImage(parent context.Context, environment *doma
 		if err != nil || where.ExitCode != 0 {
 			return fmt.Errorf("resolve prepared %s install root: %w%s", tool.Name, errors.Join(err, exitCodeError(where)), errorLogs(formatLogs(where.Stdout, where.Stderr)))
 		}
-		if !path.IsAbs(installRoot) || path.Clean(installRoot) != installRoot || !strings.HasPrefix(installRoot, guestMiseDataDir+"/installs/") {
+		if !path.IsAbs(installRoot) || path.Clean(installRoot) != installRoot || strings.ContainsAny(installRoot, "\x00\r\n") ||
+			!strings.HasPrefix(installRoot, guestMiseDataDir+"/installs/") {
 			return fmt.Errorf("resolve prepared %s install root: mise returned unsafe path %q", tool.Name, installRoot)
 		}
 		for _, executable := range tool.Executables {
@@ -153,9 +154,8 @@ func (r *HuskerRunner) ensureToolImage(parent context.Context, environment *doma
 			if err != nil || checked.ExitCode != 0 {
 				return fmt.Errorf("verify prepared %s executable %s: %w%s", tool.Name, executable.Name, errors.Join(err, exitCodeError(checked)), errorLogs(formatLogs(checked.Stdout, checked.Stderr)))
 			}
-			linked, err := r.exec(ctx, vmName, execRequest{Command: "/bin/ln", Args: []string{"-s", resolvedPath, path.Join(guestRuntimeBinDir, executable.Name)}, Timeout: 30})
-			if err != nil || linked.ExitCode != 0 {
-				return fmt.Errorf("publish prepared %s executable %s: %w%s", tool.Name, executable.Name, errors.Join(err, exitCodeError(linked)), errorLogs(formatLogs(linked.Stdout, linked.Stderr)))
+			if err := r.uploadFile(ctx, vmName, path.Join(guestRuntimeBinDir, executable.Name), renderExecutableWrapper(resolvedPath), 0o755); err != nil {
+				return fmt.Errorf("publish prepared %s executable %s: %w", tool.Name, executable.Name, err)
 			}
 		}
 		command := path.Join(guestRuntimeBinDir, entry.SmokeCommand[0])
@@ -182,6 +182,11 @@ func (r *HuskerRunner) ensureToolImage(parent context.Context, environment *doma
 	}
 	environment.ImageDigest = committed.ContentDigest
 	return nil
+}
+
+func renderExecutableWrapper(target string) []byte {
+	quoted := "'" + strings.ReplaceAll(target, "'", `'"'"'`) + "'"
+	return []byte("#!/bin/sh\nexec " + quoted + " \"$@\"\n")
 }
 
 func renderMiseConfig(tools []domain.ResolvedTool) ([]byte, error) {

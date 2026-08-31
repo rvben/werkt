@@ -119,6 +119,17 @@ func TestPrepareManifestBuildsVerifiedPythonEnvironmentWithoutOCIImport(t *testi
 		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/ready"):
 			writeJSON(t, response, readyResponse{Ready: true})
 		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/files/write"):
+			var body writeFileRequest
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Errorf("decode file write: %v", err)
+			}
+			if strings.HasPrefix(body.Path, guestRuntimeBinDir+"/") {
+				contents, err := base64.StdEncoding.DecodeString(body.Data)
+				if err != nil {
+					t.Errorf("decode wrapper: %v", err)
+				}
+				linked[path.Base(body.Path)] = string(contents)
+			}
 			response.WriteHeader(http.StatusOK)
 		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/exec"):
 			var command execRequest
@@ -134,9 +145,6 @@ func TestPrepareManifestBuildsVerifiedPythonEnvironmentWithoutOCIImport(t *testi
 			}
 			if command.Command == guestMisePath && len(command.Args) == 2 && command.Args[0] == "where" {
 				result.Stdout = guestMiseDataDir + "/installs/python/3.13.7\n"
-			}
-			if command.Command == "/bin/ln" && len(command.Args) == 3 {
-				linked[path.Base(command.Args[2])] = command.Args[1]
 			}
 			writeJSON(t, response, result)
 		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/stop"):
@@ -195,6 +203,14 @@ func TestPrepareManifestBuildsVerifiedPythonEnvironmentWithoutOCIImport(t *testi
 	}
 	if committed != prepared.Runtime.ResolvedTools.Image || len(linked) != 3 || !deleted {
 		t.Fatalf("committed=%q linked=%#v deleted=%v resolved=%#v", committed, linked, deleted, prepared.Runtime.ResolvedTools)
+	}
+}
+
+func TestRenderExecutableWrapperQuotesTheResolvedPath(t *testing.T) {
+	got := string(renderExecutableWrapper("/opt/werkt/mise/installs/example/it's/bin/tool"))
+	want := "#!/bin/sh\nexec '/opt/werkt/mise/installs/example/it'\"'\"'s/bin/tool' \"$@\"\n"
+	if got != want {
+		t.Fatalf("wrapper = %q, want %q", got, want)
 	}
 }
 
