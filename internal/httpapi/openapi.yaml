@@ -967,17 +967,65 @@ components:
       type: object
       additionalProperties: false
       properties:
-        version: {type: integer, const: 1}
+        version: {type: integer, enum: [1, 2]}
         artifactDigest: {type: string, pattern: "^sha256:[a-f0-9]{64}$"}
         contentHash: {type: string, pattern: "^[a-f0-9]{64}$"}
         automationId: {type: string}
         runtimeImage: {type: string}
         buildImage: {type: string}
+        toolEnvironment: {$ref: "#/components/schemas/ResolvedToolEnvironment"}
         algorithm: {type: string, const: ed25519}
         signingKeyId: {type: string, pattern: "^sha256:[a-f0-9]{64}$"}
         publicKey: {type: string}
         signature: {type: string}
       required: [version, artifactDigest, contentHash, automationId, algorithm, signingKeyId, publicKey, signature]
+    ResolvedToolEnvironment:
+      type: object
+      additionalProperties: false
+      properties:
+        version: {type: integer, const: 1}
+        identityDigest: {type: string, pattern: "^sha256:[a-f0-9]{64}$"}
+        image: {type: string}
+        imageDigest: {type: string, pattern: "^sha256:[a-f0-9]{64}$"}
+        catalogRevision: {type: string}
+        preparerRevision: {type: string}
+        platform: {type: string, enum: [linux-amd64, linux-arm64]}
+        baseImage: {type: string}
+        baseImageDigest: {type: string, pattern: "^sha256:[a-f0-9]{64}$"}
+        installer: {$ref: "#/components/schemas/ToolInstaller"}
+        tools:
+          type: array
+          items: {$ref: "#/components/schemas/ResolvedTool"}
+        capabilities: {type: array, items: {type: string}}
+        preparationEgress:
+          type: array
+          items: {$ref: "#/components/schemas/ToolPreparationEgress"}
+      required: [version, identityDigest, image, imageDigest, catalogRevision, preparerRevision, platform, baseImage, baseImageDigest, installer, tools, capabilities, preparationEgress]
+    ToolInstaller:
+      type: object
+      additionalProperties: false
+      properties:
+        name: {type: string, const: mise}
+        version: {type: string}
+        digest: {type: string, pattern: "^sha256:[a-f0-9]{64}$"}
+      required: [name, version, digest]
+    ResolvedTool:
+      type: object
+      additionalProperties: false
+      properties:
+        name: {type: string}
+        version: {type: string}
+        backend: {type: string}
+        capabilities: {type: array, items: {type: string}}
+      required: [name, version, backend, capabilities]
+    ToolPreparationEgress:
+      type: object
+      additionalProperties: false
+      properties:
+        host: {type: string}
+        port: {type: integer, minimum: 1, maximum: 65535}
+        protocol: {type: string, enum: [tcp, udp]}
+      required: [host, port]
     DeploymentStep:
       type: object
       properties:

@@ -25,6 +25,7 @@ const Filename = "automation.yaml"
 var identifier = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var secretName = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._/-][a-z0-9]+)*$`)
+var exactToolVersion = regexp.MustCompile(`^[0-9][0-9A-Za-z]*(?:[._-][0-9A-Za-z]+)*(?:\+[0-9A-Za-z.-]+)?$`)
 var headerName = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 
 const maxEgressRules = 32
@@ -158,6 +159,17 @@ func Validate(value domain.Manifest) error {
 	if len(value.Runtime.Build) > 0 && strings.TrimSpace(value.Runtime.Build[0]) == "" {
 		problems = append(problems, "runtime.build must start with an executable")
 	}
+	if len(value.Runtime.Tools) > 0 && (value.Runtime.Image != "" || value.Runtime.BuildImage != "") {
+		problems = append(problems, "runtime.tools cannot be combined with runtime.image or runtime.buildImage")
+	}
+	for name, version := range value.Runtime.Tools {
+		if !identifier.MatchString(name) {
+			problems = append(problems, "runtime.tools contains invalid tool name "+name)
+		}
+		if !exactToolVersion.MatchString(version) || strings.EqualFold(version, "latest") || strings.EqualFold(version, "system") {
+			problems = append(problems, "runtime.tools."+name+" must be an exact version")
+		}
+	}
 	if len(value.Runtime.Egress) > maxEgressRules {
 		problems = append(problems, fmt.Sprintf("runtime.egress accepts at most %d rules", maxEgressRules))
 	}
@@ -198,6 +210,9 @@ func Validate(value domain.Manifest) error {
 		}
 		if strings.HasPrefix(key, "WERKT_") {
 			problems = append(problems, "runtime.environment cannot override reserved WERKT_ variables")
+		}
+		if len(value.Runtime.Tools) > 0 && (key == "PATH" || key == "HOME" || strings.HasPrefix(key, "MISE_")) {
+			problems = append(problems, "runtime.environment cannot override tool environment variable "+key)
 		}
 	}
 	for target, source := range value.Runtime.Secrets {

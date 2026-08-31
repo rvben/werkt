@@ -20,10 +20,11 @@ import (
 )
 
 const (
-	AlgorithmEd25519  = "ed25519"
-	MetadataDirectory = ".werkt"
-	metadataFilename  = "provenance.json"
-	statementVersion  = 1
+	AlgorithmEd25519       = "ed25519"
+	MetadataDirectory      = ".werkt"
+	metadataFilename       = "provenance.json"
+	statementVersionLegacy = 1
+	statementVersionTools  = 2
 )
 
 var (
@@ -40,12 +41,13 @@ type Attestor struct {
 }
 
 type statement struct {
-	Version        int    `json:"version"`
-	ArtifactDigest string `json:"artifactDigest"`
-	ContentHash    string `json:"contentHash"`
-	AutomationID   string `json:"automationId"`
-	RuntimeImage   string `json:"runtimeImage,omitempty"`
-	BuildImage     string `json:"buildImage,omitempty"`
+	Version         int                             `json:"version"`
+	ArtifactDigest  string                          `json:"artifactDigest"`
+	ContentHash     string                          `json:"contentHash"`
+	AutomationID    string                          `json:"automationId"`
+	RuntimeImage    string                          `json:"runtimeImage,omitempty"`
+	BuildImage      string                          `json:"buildImage,omitempty"`
+	ToolEnvironment *domain.ResolvedToolEnvironment `json:"toolEnvironment,omitempty"`
 }
 
 func NewAttestor(encodedMasterKey string) (*Attestor, error) {
@@ -71,16 +73,21 @@ func (a *Attestor) Attest(directory string, manifest domain.Manifest, contentHas
 	if err != nil {
 		return domain.ArtifactProvenance{}, err
 	}
+	version := statementVersionLegacy
+	if manifest.Runtime.ResolvedTools != nil {
+		version = statementVersionTools
+	}
 	value := domain.ArtifactProvenance{
-		Version:        statementVersion,
-		ArtifactDigest: digest,
-		ContentHash:    contentHash,
-		AutomationID:   manifest.Metadata.Name,
-		RuntimeImage:   manifest.Runtime.Image,
-		BuildImage:     effectiveBuildImage(manifest),
-		Algorithm:      AlgorithmEd25519,
-		SigningKeyID:   a.keyID,
-		PublicKey:      base64.StdEncoding.EncodeToString(a.publicKey),
+		Version:         version,
+		ArtifactDigest:  digest,
+		ContentHash:     contentHash,
+		AutomationID:    manifest.Metadata.Name,
+		RuntimeImage:    manifest.Runtime.Image,
+		BuildImage:      effectiveBuildImage(manifest),
+		ToolEnvironment: manifest.Runtime.ResolvedTools,
+		Algorithm:       AlgorithmEd25519,
+		SigningKeyID:    a.keyID,
+		PublicKey:       base64.StdEncoding.EncodeToString(a.publicKey),
 	}
 	payload, err := statementJSON(value)
 	if err != nil {
@@ -91,8 +98,13 @@ func (a *Attestor) Attest(directory string, manifest domain.Manifest, contentHas
 }
 
 func (a *Attestor) Verify(directory string, value domain.ArtifactProvenance) error {
-	if value.Version != statementVersion || value.Algorithm != AlgorithmEd25519 || value.SigningKeyID != a.keyID ||
+	if (value.Version != statementVersionLegacy && value.Version != statementVersionTools) ||
+		value.Algorithm != AlgorithmEd25519 || value.SigningKeyID != a.keyID ||
 		value.PublicKey != base64.StdEncoding.EncodeToString(a.publicKey) {
+		return ErrInvalidAttestation
+	}
+	if (value.Version == statementVersionLegacy && value.ToolEnvironment != nil) ||
+		(value.Version == statementVersionTools && !validToolEnvironment(value.ToolEnvironment)) {
 		return ErrInvalidAttestation
 	}
 	signature, err := base64.StdEncoding.DecodeString(value.Signature)
@@ -117,7 +129,22 @@ func statementJSON(value domain.ArtifactProvenance) ([]byte, error) {
 	return json.Marshal(statement{
 		Version: value.Version, ArtifactDigest: value.ArtifactDigest, ContentHash: value.ContentHash,
 		AutomationID: value.AutomationID, RuntimeImage: value.RuntimeImage, BuildImage: value.BuildImage,
+		ToolEnvironment: value.ToolEnvironment,
 	})
+}
+
+func validToolEnvironment(value *domain.ResolvedToolEnvironment) bool {
+	return value != nil && value.Version == 1 && value.Image != "" && value.BaseImage != "" &&
+		isSHA256Digest(value.IdentityDigest) && isSHA256Digest(value.ImageDigest) &&
+		isSHA256Digest(value.BaseImageDigest) && isSHA256Digest(value.Installer.Digest) && len(value.Tools) > 0
+}
+
+func isSHA256Digest(value string) bool {
+	if !strings.HasPrefix(value, "sha256:") || len(value) != len("sha256:")+sha256.Size*2 || strings.ToLower(value) != value {
+		return false
+	}
+	_, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
+	return err == nil
 }
 
 func effectiveBuildImage(value domain.Manifest) string {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"reflect"
 
 	"github.com/rvben/werkt/internal/database"
 	"github.com/rvben/werkt/internal/provenance"
@@ -42,7 +43,8 @@ func (c *ArtifactCustodian) AdoptLegacy(ctx context.Context) (int, error) {
 			return adopted, fmt.Errorf("adopt legacy revision %s: %w", artifact.RevisionID, err)
 		}
 		if value.ContentHash != artifact.ContentHash || value.AutomationID != artifact.AutomationID ||
-			value.RuntimeImage != artifact.Manifest.Runtime.Image || value.BuildImage != effectiveBuildImage(artifact.Manifest) {
+			value.RuntimeImage != artifact.Manifest.Runtime.Image || value.BuildImage != effectiveBuildImage(artifact.Manifest) ||
+			!reflect.DeepEqual(value.ToolEnvironment, artifact.Manifest.Runtime.ResolvedTools) {
 			return adopted, fmt.Errorf("adopt legacy revision %s: attestation does not match revision identity", artifact.RevisionID)
 		}
 		changed, err := c.store.AdoptRevisionProvenance(ctx, artifact, value)

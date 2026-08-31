@@ -447,11 +447,17 @@ func serve(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	var pinImages func(domain.Manifest) (domain.Manifest, error)
+	var prepareManifest func(context.Context, domain.Manifest) (domain.Manifest, error)
 	if configuration.Executor == "husker" {
-		pinImages = provenance.PinHuskerImages
+		toolPreparer, ok := builder.(interface {
+			PrepareManifest(context.Context, domain.Manifest) (domain.Manifest, error)
+		})
+		if !ok {
+			return errors.New("husker builder does not implement manifest preparation")
+		}
+		prepareManifest = toolPreparer.PrepareManifest
 	}
-	deployer := service.NewDeployer(store, configuration.DataDir, builder, attestor, pinImages)
+	deployer := service.NewDeployer(store, configuration.DataDir, builder, attestor, prepareManifest)
 	deploymentWorkerID := fmt.Sprintf("%s-%d-deployments", hostname, os.Getpid())
 	go service.NewDeploymentWorker(store, deployer, deploymentWorkerID, configuration.DeploymentPoll).Run(ctx)
 	go service.NewScheduler(store, configuration.SchedulerPoll).Run(ctx)
@@ -548,17 +554,24 @@ func newBuilder(configuration config.Config) (service.Builder, error) {
 
 func newHuskerRunner(configuration config.Config, secrets runner.SecretResolver) (*runner.HuskerRunner, error) {
 	return runner.NewHuskerRunner(runner.HuskerConfig{
-		URL:              configuration.HuskerURL,
-		Token:            configuration.HuskerToken,
-		RootFS:           configuration.HuskerRootFS,
-		Kernel:           configuration.HuskerKernel,
-		VCPUs:            configuration.HuskerVCPUs,
-		MemoryMiB:        configuration.HuskerMemory,
-		BuildNetwork:     configuration.HuskerBuildNetwork,
-		BuildTimeout:     configuration.HuskerBuildTimeout,
-		ProvisionTimeout: configuration.HuskerProvisionTimeout,
-		CleanupTimeout:   configuration.HuskerCleanupTimeout,
-		Secrets:          secrets,
+		URL:                configuration.HuskerURL,
+		Token:              configuration.HuskerToken,
+		RootFS:             configuration.HuskerRootFS,
+		Kernel:             configuration.HuskerKernel,
+		VCPUs:              configuration.HuskerVCPUs,
+		MemoryMiB:          configuration.HuskerMemory,
+		BuildNetwork:       configuration.HuskerBuildNetwork,
+		BuildTimeout:       configuration.HuskerBuildTimeout,
+		ProvisionTimeout:   configuration.HuskerProvisionTimeout,
+		CleanupTimeout:     configuration.HuskerCleanupTimeout,
+		ToolBaseImage:      configuration.HuskerToolBaseImage,
+		ToolBaseDigest:     configuration.HuskerToolBaseDigest,
+		ToolPlatform:       configuration.HuskerToolPlatform,
+		MisePath:           configuration.HuskerMisePath,
+		MiseVersion:        configuration.HuskerMiseVersion,
+		MiseDigest:         configuration.HuskerMiseDigest,
+		ToolPrepareTimeout: configuration.HuskerToolPrepareTimeout,
+		Secrets:            secrets,
 	})
 }
 

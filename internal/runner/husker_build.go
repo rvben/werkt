@@ -34,18 +34,27 @@ func (r *HuskerRunner) Build(parent context.Context, directory string, value dom
 	if len(value.Runtime.Build) == 0 && len(value.Deployment.Checks) == 0 {
 		return nil
 	}
-	if _, err := provenance.PinHuskerImages(value); err != nil {
-		return err
-	}
-	rootFS := value.Runtime.BuildImage
-	if rootFS == "" {
-		rootFS = value.Runtime.Image
-	}
-	if rootFS == "" {
-		rootFS = r.rootFS
-	}
-	if strings.TrimSpace(rootFS) == "" {
-		return errors.New("runtime.buildImage, runtime.image, or the husker rootfs fallback is required for deployment commands")
+	toolEnvironment := value.Runtime.ResolvedTools
+	rootFS := ""
+	if len(value.Runtime.Tools) > 0 {
+		if toolEnvironment == nil {
+			return errors.New("runtime.tools revision is missing its resolved environment")
+		}
+		rootFS = toolEnvironment.Image
+	} else {
+		if _, err := provenance.PinHuskerImages(value); err != nil {
+			return err
+		}
+		rootFS = value.Runtime.BuildImage
+		if rootFS == "" {
+			rootFS = value.Runtime.Image
+		}
+		if rootFS == "" {
+			rootFS = r.rootFS
+		}
+		if strings.TrimSpace(rootFS) == "" {
+			return errors.New("runtime.buildImage, runtime.image, or the husker rootfs fallback is required for deployment commands")
+		}
 	}
 
 	source, err := archiveDirectory(directory)
@@ -72,9 +81,15 @@ func (r *HuskerRunner) Build(parent context.Context, directory string, value dom
 
 	provisionContext, cancelProvision := context.WithTimeout(parent, r.provisionTimeout)
 	defer cancelProvision()
-	rootFS, err = r.ensureOCIImage(provisionContext, rootFS)
-	if err != nil {
-		return fmt.Errorf("prepare husker build image: %w", err)
+	if toolEnvironment != nil {
+		if err := r.verifyToolImage(provisionContext, toolEnvironment); err != nil {
+			return err
+		}
+	} else {
+		rootFS, err = r.ensureOCIImage(provisionContext, rootFS)
+		if err != nil {
+			return fmt.Errorf("prepare husker build image: %w", err)
+		}
 	}
 	owner := "werkt/build/" + value.Metadata.Name
 	if err := r.createVM(provisionContext, vmName, owner, rootFS, r.buildNetwork, nil, lifetime); err != nil {

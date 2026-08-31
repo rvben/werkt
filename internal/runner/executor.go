@@ -262,8 +262,11 @@ func resolveRuntimeEnvironment(ctx context.Context, resolver SecretResolver, run
 }
 
 func promotionEnvironment(runtime domain.Runtime) map[string]string {
-	values := make(map[string]string, len(runtime.Environment)+1)
+	values := make(map[string]string, len(runtime.Environment)+8)
 	for key, value := range runtime.Environment {
+		values[key] = value
+	}
+	for key, value := range toolRuntimeEnvironment(runtime.ResolvedTools) {
 		values[key] = value
 	}
 	if runtime.Language == "python" {

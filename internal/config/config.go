@@ -58,6 +58,13 @@ type Config struct {
 	HuskerBuildTimeout       time.Duration
 	HuskerProvisionTimeout   time.Duration
 	HuskerCleanupTimeout     time.Duration
+	HuskerToolBaseImage      string
+	HuskerToolBaseDigest     string
+	HuskerToolPlatform       string
+	HuskerMisePath           string
+	HuskerMiseVersion        string
+	HuskerMiseDigest         string
+	HuskerToolPrepareTimeout time.Duration
 }
 
 func Load() Config {
@@ -101,6 +108,13 @@ func Load() Config {
 		HuskerBuildTimeout:       durationEnv("WERKT_HUSKER_BUILD_TIMEOUT", 15*time.Minute),
 		HuskerProvisionTimeout:   durationEnv("WERKT_HUSKER_PROVISION_TIMEOUT", 2*time.Minute),
 		HuskerCleanupTimeout:     durationEnv("WERKT_HUSKER_CLEANUP_TIMEOUT", 30*time.Second),
+		HuskerToolBaseImage:      os.Getenv("WERKT_HUSKER_TOOL_BASE_IMAGE"),
+		HuskerToolBaseDigest:     os.Getenv("WERKT_HUSKER_TOOL_BASE_DIGEST"),
+		HuskerToolPlatform:       os.Getenv("WERKT_HUSKER_TOOL_PLATFORM"),
+		HuskerMisePath:           os.Getenv("WERKT_HUSKER_MISE_PATH"),
+		HuskerMiseVersion:        os.Getenv("WERKT_HUSKER_MISE_VERSION"),
+		HuskerMiseDigest:         os.Getenv("WERKT_HUSKER_MISE_DIGEST"),
+		HuskerToolPrepareTimeout: durationEnv("WERKT_HUSKER_TOOL_PREPARE_TIMEOUT", 20*time.Minute),
 	}
 }
 

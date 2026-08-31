@@ -211,6 +211,40 @@ func TestValidateRejectsReservedRuntimeEnvironment(t *testing.T) {
 	}
 }
 
+func TestValidateRuntimeToolsRequiresExactIsolatedDeclarations(t *testing.T) {
+	value := domain.Manifest{
+		APIVersion: "werkt.dev/v1",
+		Kind:       "Automation",
+		Metadata:   domain.Metadata{Name: "tools-example", Project: "personal"},
+		Triggers:   []domain.Trigger{{ID: "hourly", Type: "schedule", Config: map[string]any{"cron": "0 * * * *"}}},
+		Runtime: domain.Runtime{
+			Language: "python",
+			Tools:    map[string]string{"python": "3.13.7"},
+			Command:  []string{"python3", "main.py"},
+		},
+	}
+	if err := manifest.Validate(value); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	for name, mutate := range map[string]func(*domain.Manifest){
+		"image conflict":  func(value *domain.Manifest) { value.Runtime.Image = "python@sha256:" + strings.Repeat("a", 64) },
+		"mutable version": func(value *domain.Manifest) { value.Runtime.Tools["python"] = "latest" },
+		"URL version":     func(value *domain.Manifest) { value.Runtime.Tools["python"] = "https://example.com/python.tar.gz" },
+		"PATH override":   func(value *domain.Manifest) { value.Runtime.Environment = map[string]string{"PATH": "/tmp"} },
+		"mise override":   func(value *domain.Manifest) { value.Runtime.Environment = map[string]string{"MISE_DATA_DIR": "/tmp"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := value
+			candidate.Runtime.Tools = map[string]string{"python": "3.13.7"}
+			mutate(&candidate)
+			if err := manifest.Validate(candidate); err == nil {
+				t.Fatal("Validate() error = nil")
+			}
+		})
+	}
+}
+
 func TestValidateRequiresIngressCredentialReferencesAndValidatesRuntimeSecrets(t *testing.T) {
 	value := domain.Manifest{
 		APIVersion: "werkt.dev/v1",

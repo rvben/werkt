@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -222,10 +223,13 @@ func (s *Store) ActivateDeployment(ctx context.Context, deploymentID, workerID s
 }
 
 func (s *Store) deploy(ctx context.Context, value domain.Manifest, contentHash, artifactPath string, provenance domain.ArtifactProvenance, actor, deploymentID, workerID string) (string, error) {
-	if !validSHA256Hex(contentHash) || provenance.Version != 1 || provenance.Algorithm != "ed25519" ||
+	validVersion := provenance.Version == 1 && provenance.ToolEnvironment == nil ||
+		provenance.Version == 2 && validResolvedToolEnvironment(provenance.ToolEnvironment)
+	if !validSHA256Hex(contentHash) || !validVersion || provenance.Algorithm != "ed25519" ||
 		!validSHA256Digest(provenance.ArtifactDigest) || !validSHA256Digest(provenance.SigningKeyID) ||
 		provenance.PublicKey == "" || provenance.Signature == "" ||
-		provenance.ContentHash != contentHash || provenance.AutomationID != value.Metadata.Name {
+		provenance.ContentHash != contentHash || provenance.AutomationID != value.Metadata.Name ||
+		!reflect.DeepEqual(provenance.ToolEnvironment, value.Runtime.ResolvedTools) {
 		return "", ErrArtifactProvenanceRequired
 	}
 	manifestJSON, err := json.Marshal(value)
@@ -342,11 +346,18 @@ func provenanceAuditDetails(value domain.ArtifactProvenance) map[string]any {
 		return nil
 	}
 	return map[string]any{
-		"artifactDigest": value.ArtifactDigest,
-		"signingKeyId":   value.SigningKeyID,
-		"runtimeImage":   value.RuntimeImage,
-		"buildImage":     value.BuildImage,
+		"artifactDigest":  value.ArtifactDigest,
+		"signingKeyId":    value.SigningKeyID,
+		"runtimeImage":    value.RuntimeImage,
+		"buildImage":      value.BuildImage,
+		"toolEnvironment": value.ToolEnvironment,
 	}
+}
+
+func validResolvedToolEnvironment(value *domain.ResolvedToolEnvironment) bool {
+	return value != nil && value.Version == 1 && value.Image != "" && value.BaseImage != "" &&
+		validSHA256Digest(value.IdentityDigest) && validSHA256Digest(value.ImageDigest) &&
+		validSHA256Digest(value.BaseImageDigest) && validSHA256Digest(value.Installer.Digest) && len(value.Tools) > 0
 }
 
 func replaceTriggers(ctx context.Context, tx pgx.Tx, automationID, revisionID string, triggers []domain.Trigger) error {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/rvben/werkt/internal/database"
@@ -17,11 +18,11 @@ import (
 )
 
 type Deployer struct {
-	store     *database.Store
-	dataDir   string
-	builder   Builder
-	attestor  *provenance.Attestor
-	pinImages func(domain.Manifest) (domain.Manifest, error)
+	store           *database.Store
+	dataDir         string
+	builder         Builder
+	attestor        *provenance.Attestor
+	prepareManifest func(context.Context, domain.Manifest) (domain.Manifest, error)
 }
 
 // Builder turns a copied source tree into the artifact that a revision runs.
@@ -49,8 +50,8 @@ type BuiltDeployment struct {
 	Provenance   domain.ArtifactProvenance
 }
 
-func NewDeployer(store *database.Store, dataDir string, builder Builder, attestor *provenance.Attestor, pinImages func(domain.Manifest) (domain.Manifest, error)) *Deployer {
-	return &Deployer{store: store, dataDir: dataDir, builder: builder, attestor: attestor, pinImages: pinImages}
+func NewDeployer(store *database.Store, dataDir string, builder Builder, attestor *provenance.Attestor, prepareManifest func(context.Context, domain.Manifest) (domain.Manifest, error)) *Deployer {
+	return &Deployer{store: store, dataDir: dataDir, builder: builder, attestor: attestor, prepareManifest: prepareManifest}
 }
 
 func (d *Deployer) Deploy(ctx context.Context, sourceDirectory string) (Deployment, error) {
@@ -74,10 +75,10 @@ func (d *Deployer) Prepare(ctx context.Context, sourceDirectory string) (Prepare
 	if err != nil {
 		return PreparedDeployment{}, err
 	}
-	if d.pinImages != nil {
-		value, err = d.pinImages(value)
+	if d.prepareManifest != nil {
+		value, err = d.prepareManifest(ctx, value)
 		if err != nil {
-			return PreparedDeployment{}, fmt.Errorf("pin execution images: %w", err)
+			return PreparedDeployment{}, fmt.Errorf("prepare execution environment: %w", err)
 		}
 	}
 	if err := d.store.ValidateSecretReferences(ctx, value.SecretReferences()); err != nil {
@@ -89,6 +90,9 @@ func (d *Deployer) Prepare(ctx context.Context, sourceDirectory string) (Prepare
 	}
 	if value.Runtime.Language == "python" {
 		contentHash = pythonsdk.RevisionHash(contentHash)
+	}
+	if value.Runtime.ResolvedTools != nil {
+		contentHash = resolvedEnvironmentRevisionHash(contentHash, value.Runtime.ResolvedTools)
 	}
 	return PreparedDeployment{SourceDirectory: absoluteSource, Manifest: value, ContentHash: contentHash}, nil
 }
@@ -204,7 +208,8 @@ func (d *Deployer) loadVerifiedArtifact(artifactPath string, prepared PreparedDe
 		return domain.ArtifactProvenance{}, fmt.Errorf("verify retained artifact: %w", err)
 	}
 	if attestation.ContentHash != prepared.ContentHash || attestation.AutomationID != prepared.Manifest.Metadata.Name ||
-		attestation.RuntimeImage != prepared.Manifest.Runtime.Image || attestation.BuildImage != effectiveBuildImage(prepared.Manifest) {
+		attestation.RuntimeImage != prepared.Manifest.Runtime.Image || attestation.BuildImage != effectiveBuildImage(prepared.Manifest) ||
+		!reflect.DeepEqual(attestation.ToolEnvironment, prepared.Manifest.Runtime.ResolvedTools) {
 		return domain.ArtifactProvenance{}, errors.New("retained artifact attestation does not match the prepared deployment")
 	}
 	return attestation, nil

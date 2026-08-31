@@ -58,11 +58,47 @@ type Runtime struct {
 	Language    string            `yaml:"language" json:"language"`
 	Image       string            `yaml:"image,omitempty" json:"image,omitempty"`
 	BuildImage  string            `yaml:"buildImage,omitempty" json:"buildImage,omitempty"`
+	Tools       map[string]string `yaml:"tools,omitempty" json:"tools,omitempty"`
 	Build       []string          `yaml:"build,omitempty" json:"build,omitempty"`
 	Command     []string          `yaml:"command" json:"command"`
 	Environment map[string]string `yaml:"environment,omitempty" json:"environment,omitempty"`
 	Secrets     map[string]string `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 	Egress      []EgressRule      `yaml:"egress,omitempty" json:"egress,omitempty"`
+	// ResolvedTools is control-plane output. It is persisted with a revision but
+	// cannot be supplied by automation YAML.
+	ResolvedTools *ResolvedToolEnvironment `yaml:"-" json:"resolvedTools,omitempty"`
+}
+
+// ResolvedToolEnvironment is the immutable execution environment selected for
+// runtime.tools. It binds the public request to the catalog, preparation code,
+// installer and base-image inputs, plus the resulting Husker image bytes.
+type ResolvedToolEnvironment struct {
+	Version           int            `json:"version"`
+	IdentityDigest    string         `json:"identityDigest"`
+	Image             string         `json:"image"`
+	ImageDigest       string         `json:"imageDigest"`
+	CatalogRevision   string         `json:"catalogRevision"`
+	PreparerRevision  string         `json:"preparerRevision"`
+	Platform          string         `json:"platform"`
+	BaseImage         string         `json:"baseImage"`
+	BaseImageDigest   string         `json:"baseImageDigest"`
+	Installer         ToolInstaller  `json:"installer"`
+	Tools             []ResolvedTool `json:"tools"`
+	Capabilities      []string       `json:"capabilities"`
+	PreparationEgress []EgressRule   `json:"preparationEgress"`
+}
+
+type ToolInstaller struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Digest  string `json:"digest"`
+}
+
+type ResolvedTool struct {
+	Name         string   `json:"name"`
+	Version      string   `json:"version"`
+	Backend      string   `json:"backend"`
+	Capabilities []string `json:"capabilities"`
 }
 
 // EgressRule names one exact destination available to an automation at
@@ -257,16 +293,17 @@ type RunnableRun struct {
 // and source content that produced a revision. The signature is verified from
 // externally custodied key material before every execution attempt.
 type ArtifactProvenance struct {
-	Version        int    `json:"version"`
-	ArtifactDigest string `json:"artifactDigest"`
-	ContentHash    string `json:"contentHash"`
-	AutomationID   string `json:"automationId"`
-	RuntimeImage   string `json:"runtimeImage,omitempty"`
-	BuildImage     string `json:"buildImage,omitempty"`
-	Algorithm      string `json:"algorithm"`
-	SigningKeyID   string `json:"signingKeyId"`
-	PublicKey      string `json:"publicKey"`
-	Signature      string `json:"signature"`
+	Version         int                      `json:"version"`
+	ArtifactDigest  string                   `json:"artifactDigest"`
+	ContentHash     string                   `json:"contentHash"`
+	AutomationID    string                   `json:"automationId"`
+	RuntimeImage    string                   `json:"runtimeImage,omitempty"`
+	BuildImage      string                   `json:"buildImage,omitempty"`
+	ToolEnvironment *ResolvedToolEnvironment `json:"toolEnvironment,omitempty"`
+	Algorithm       string                   `json:"algorithm"`
+	SigningKeyID    string                   `json:"signingKeyId"`
+	PublicKey       string                   `json:"publicKey"`
+	Signature       string                   `json:"signature"`
 }
 
 // Deployment is the durable, agent-visible lifecycle of one uploaded package.

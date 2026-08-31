@@ -6,13 +6,22 @@ Werkt owns automation definitions, triggers, durable events, revision history, q
 
 Agents upload a deterministic package to the management API. Werkt verifies the digest while streaming the bounded body to disk, safely extracts it into private staging, and records an idempotent `queued` deployment. A lease-backed worker then advances it through `validating`, `building`, and `activating`. Expired leases can be reacquired after a worker crash.
 
-The source package stays private to the control plane and is retained after a terminal result so an operator or agent can retry the exact same bytes without uploading a subtly different package. Policy-driven retention later expires old material through a persisted dry-run/apply workflow. Before publication, Werkt hashes the artifact tree and signs a statement binding it to the source and effective images. Activation stores that provenance with the immutable revision, replaces effective triggers, and marks the deployment successful in one transaction, so clients cannot observe an active revision paired with a failed or unfinished job.
+The source package stays private to the control plane and is retained after a terminal result so an operator or agent can retry the exact same bytes without uploading a subtly different package. Policy-driven retention later expires old material through a persisted dry-run/apply workflow. Before publication, Werkt hashes the artifact tree and signs a statement binding it to the source and effective execution environment. Activation stores that provenance with the immutable revision, replaces effective triggers, and marks the deployment successful in one transaction, so clients cannot observe an active revision paired with a failed or unfinished job.
+
+When `runtime.tools` is present, validation resolves its exact versions through
+the built-in catalog. Werkt verifies a local Husker base-image digest and a
+host-provisioned mise binary digest, uploads mise into a secret-free preparation
+VM, installs only catalogued tools with filtered egress, verifies the guest
+platform and tool capabilities, stops the VM, and promotes its root filesystem
+through Husker's image API. The logical inputs and resulting image digest are
+folded into the revision hash and signed provenance before activation. A repeat
+deployment reuses only an image with the expected parent and digest.
 
 ## Build lifecycle
 
 When a manifest defines `runtime.build` or `deployment.checks`, deployment copies the source into a private staging directory before invoking the selected builder. Checks are ordered command arrays with stable IDs and independent timeouts. They run after the optional build and must all pass before activation. The process backend invokes these commands on the Werkt host for trusted local development only. The Husker backend instead:
 
-1. Ensures the digest-pinned `runtime.buildImage` (falling back only to the digest-pinned `runtime.image`) is present in Husker's image catalog under a bounded, deterministic name, then creates a fresh VM from it.
+1. Verifies the revision's prepared `runtime.tools` image digest, or ensures the digest-pinned image escape hatch is present, then creates a fresh VM from it.
 2. Gives the VM an independent hard expiration and `owner: werkt/build/<automation-id>`.
 3. Uploads and extracts the source, then invokes the build and check arrays directly without a shell in the same disposable VM.
 4. Archives the completed guest workspace and downloads it using bounded ranged reads.
@@ -99,7 +108,7 @@ Standard output and error are redacted against the exact secrets resolved for th
 
 1. Werkt derives a collision-resistant VM name from the run ID and attempt.
 2. It verifies the Ed25519 attestation and current artifact-tree digest before crossing the execution boundary.
-3. It ensures the digest-pinned `runtime.image` is present in Husker's image catalog under a bounded, deterministic name, then creates a VM from it with the requested resources, a manifest-derived network policy, `owner: werkt/<run-id>`, and a hard lifetime covering provisioning, execution, and cleanup grace.
+3. It verifies the prepared `runtime.tools` image digest (or resolves the pinned OCI escape hatch), then creates a VM from it with the requested resources, a manifest-derived network policy, `owner: werkt/<run-id>`, and a hard lifetime covering provisioning, execution, and cleanup grace.
 4. It waits for the guest agent, uploads the compressed immutable artifact in bounded chunks, and extracts it into a fresh guest directory.
 5. It uploads the event, initializes the result, and invokes `runtime.command` without a shell.
 6. It collects bounded logs and the JSON result, then destroys the VM using a cleanup context independent of the run context.

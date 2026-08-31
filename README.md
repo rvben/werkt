@@ -23,7 +23,8 @@ This is an executable MVP, not yet a production sandbox.
 - Filtered inventory, deployment progress, automation detail, pause/resume, manual runs, and audit history
 - AES-256-GCM secret vault with safe rotation, revision bindings, and runtime log redaction
 - Ed25519-signed artifact provenance verified before execution, reuse, and rollback
-- Digest-pinned OCI runtime and build images for Husker deployments
+- Exact `runtime.tools` environments prepared with mise into immutable local Husker images
+- Digest-pinned OCI runtime and build images as a compatibility escape hatch
 - Python, Rust, and Go examples
 - HTTP endpoints for health, automations, hooks, and run history
 - CLI commands for validation, deployment, serving, and inspection
@@ -211,7 +212,8 @@ triggers:
       secret: infrastructure/process-alert/webhook
 runtime:
   language: python
-  image: python@sha256:540c7d91f98ff6880174c40e99067bf5941eb54d818a7a5e094d188b196a934d
+  tools:
+    python: 3.13.7
   command: [python3, main.py]
   egress:
     - host: incidents.example.com
@@ -231,14 +233,21 @@ execution:
 
 `runtime.language` selects a managed language integration when one exists; Python
 packages receive Werkt's embedded authoring SDK. The actual process contract is
-still `runtime.command`, so any executable language works. `deployment.checks`
-uses the same language-neutral command-array contract: checks run in order after
-the optional build, each with a stable ID and timeout. Husker deployments require
-`runtime.image` and any explicit `runtime.buildImage` to use
-`name@sha256:<digest>` OCI references. When `runtime.build` is present,
-`runtime.buildImage` can select a separate pinned toolchain image; otherwise the
-pinned runtime image is reused. The local process executor ignores both image
-fields but still signs and verifies the produced artifact.
+still `runtime.command`, so any executable language works. `runtime.tools` is an
+exact-version, catalog-governed request and cannot be combined with image fields.
+The Husker deployment worker uses a checksum-pinned mise binary inside a
+secret-free preparation VM, commits the stopped root filesystem into Husker's
+local immutable image catalog, and binds both its logical identity and resulting
+content digest into the revision. No per-automation Dockerfile or OCI image is
+created. `deployment.checks` uses the same language-neutral command-array
+contract: checks run in order after the optional build, each with a stable ID
+and timeout.
+
+For software outside the curated tools catalog, `runtime.image` and optional
+`runtime.buildImage` remain escape hatches and must use
+`name@sha256:<digest>` OCI references. The local process executor ignores image
+fields and does not materialize `runtime.tools`; the requested commands must
+already exist on the development host.
 
 Werkt derives a domain-separated Ed25519 artifact-signing key from the persistent 32-byte `WERKT_SECRET_KEY`; the encryption and signing keys are never reused directly. The attestation binds the artifact tree (including executable modes), source content hash, automation identity, and effective images. Its digest, signature, public key, and signing-key fingerprint are stored with the revision, returned by the management API, and shown in the workspace. Artifact metadata lives under the reserved `.werkt` directory and is excluded from automation execution.
 
@@ -337,6 +346,13 @@ artifact and its digest is part of the revision identity. See
 | `WERKT_HUSKER_BUILD_TIMEOUT` | `15m` |
 | `WERKT_HUSKER_PROVISION_TIMEOUT` | `2m` |
 | `WERKT_HUSKER_CLEANUP_TIMEOUT` | `30s` |
+| `WERKT_HUSKER_TOOL_BASE_IMAGE` | local Husker catalog image used by `runtime.tools` |
+| `WERKT_HUSKER_TOOL_BASE_DIGEST` | required SHA-256 of that base image |
+| `WERKT_HUSKER_TOOL_PLATFORM` | required `linux-amd64` or `linux-arm64` |
+| `WERKT_HUSKER_MISE_PATH` | absolute path to the host-provisioned mise binary |
+| `WERKT_HUSKER_MISE_VERSION` | required exact mise version |
+| `WERKT_HUSKER_MISE_DIGEST` | required SHA-256 of the mise binary |
+| `WERKT_HUSKER_TOOL_PREPARE_TIMEOUT` | `20m` |
 
 Webhook `secret`, email/ntfy `tokenSecret`, and `runtime.secrets` values are lowercase hierarchical names in the Werkt vault. Their plaintext values never appear in manifests, API responses, audit details, or PostgreSQL rows.
 
@@ -345,6 +361,11 @@ Webhook `secret`, email/ntfy `tokenSecret`, and `runtime.secrets` values are low
 Set `WERKT_EXECUTOR=husker`, point `WERKT_HUSKER_URL` at the daemon, and set its bearer token when authentication is enabled. Each attempt gets a fresh VM, an immutable artifact upload, the same event/result protocol, and a hard server-side expiration. Werkt requests `network: none` when `runtime.egress` is empty and `network: filtered` with the exact policy otherwise. Husker versions that predate filtered networking reject that distinct mode instead of silently running unrestricted. Werkt destroys the VM after collecting the result; the Husker deadline is the cleanup fallback if a worker crashes.
 
 Deployments with `runtime.build` get a separate short-lived builder VM. Builds default to NAT so package managers can fetch dependencies, while runtime VMs remain offline. Werkt uploads the source, invokes the build command directly without a shell, downloads the result in bounded ranges, rejects links and unsafe archive paths, and atomically promotes the completed workspace. Set `WERKT_HUSKER_BUILD_NETWORK=none` for fully vendored builds.
+
+For `runtime.tools`, environment preparation is a separate deployment phase. It
+receives no automation source or secrets and gets only the catalog's exact
+download allowlist. Normal build and runtime VMs clone the committed local
+image; runtime networking remains governed solely by `runtime.egress`.
 
 Warm pools are deliberately not used yet: Husker's current snapshot-fork pool path is NAT-only, while Werkt's safe default is no guest network. Cold one-shot VMs preserve the intended security boundary until isolated pool forks exist.
 

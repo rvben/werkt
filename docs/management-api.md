@@ -74,7 +74,7 @@ X-Werkt-Actor: agent:deployer
 
 A new upload returns `202 Accepted`; an idempotent retry returns `200 OK` and the original deployment. The response includes `Location` for `GET /api/v1/deployments/{id}` and `Retry-After: 1` while the deployment is not terminal. Reusing an idempotency key for different package bytes returns `409 Conflict`.
 
-The lifecycle is `queued` → `validating` → optional `building` → optional `checking` → `activating` → `succeeded`. Any active stage can become `failed` or `cancelled`. The deployment detail includes ordered validation, build, check, and activation steps with bounded logs, errors, and timings. A successful response includes the automation, source content hash, immutable revision, and `provenance`: the signed artifact digest, effective digest-pinned images, signature algorithm, public key, and installation signing-key fingerprint. Revision activation, provenance persistence, and the transition to `succeeded` commit in the same database transaction.
+The lifecycle is `queued` → `validating` → optional `building` → optional `checking` → `activating` → `succeeded`. Any active stage can become `failed` or `cancelled`. The deployment detail includes ordered validation, build, check, and activation steps with bounded logs, errors, and timings. A successful response includes the automation, source content hash, immutable revision, and `provenance`: the signed artifact digest, effective digest-pinned images or resolved tool environment, signature algorithm, public key, and installation signing-key fingerprint. Revision activation, provenance persistence, and the transition to `succeeded` commit in the same database transaction.
 
 `GET /api/v1/deployments` returns newest first and accepts `automation`, `status`, `limit`, and opaque `cursor` filters. When more history exists, the response includes `X-Werkt-Next-Cursor` and a relative `Link` with `rel="next"`. Agents should poll the resource named by `Location` until `succeeded`, `failed`, or `cancelled`; the CLI implements this contract:
 
@@ -94,7 +94,7 @@ werkt deployment get dep_...
 
 `POST /api/v1/deployments/{id}/cancel` is safe only for nonterminal work. `POST /api/v1/deployments/{id}/retry` requires `Idempotency-Key`, returns a new deployment linked by `retryOf`, and rejects successful or active jobs. A pruned source returns `409 Conflict` rather than silently accepting a retry that cannot run.
 
-Package intake is streamed and bounded. Werkt rejects traversal paths, links, special files, duplicate case-insensitive names, the reserved `.werkt` metadata directory, excessive entries, and compressed or expanded bodies over the configured limits before any build runs. Husker deployments additionally reject `runtime.image` or `runtime.buildImage` values that are not immutable `name@sha256:<digest>` OCI references.
+Package intake is streamed and bounded. Werkt rejects traversal paths, links, special files, duplicate case-insensitive names, the reserved `.werkt` metadata directory, excessive entries, and compressed or expanded bodies over the configured limits before any build runs. A Husker manifest may request exact versions through `runtime.tools`, or use `runtime.image` and `runtime.buildImage` as digest-pinned OCI escape hatches. Tools and image fields are mutually exclusive.
 
 ## Retention plans
 

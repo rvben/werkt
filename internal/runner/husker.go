@@ -37,20 +37,27 @@ const (
 )
 
 type HuskerConfig struct {
-	URL               string
-	Token             string
-	RootFS            string
-	Kernel            string
-	VCPUs             uint32
-	MemoryMiB         uint32
-	BuildNetwork      string
-	BuildTimeout      time.Duration
-	ProvisionTimeout  time.Duration
-	CleanupTimeout    time.Duration
-	UploadChunkSize   int
-	DownloadChunkSize int
-	HTTPClient        *http.Client
-	Secrets           SecretResolver
+	URL                string
+	Token              string
+	RootFS             string
+	Kernel             string
+	VCPUs              uint32
+	MemoryMiB          uint32
+	BuildNetwork       string
+	BuildTimeout       time.Duration
+	ProvisionTimeout   time.Duration
+	CleanupTimeout     time.Duration
+	UploadChunkSize    int
+	DownloadChunkSize  int
+	HTTPClient         *http.Client
+	Secrets            SecretResolver
+	ToolBaseImage      string
+	ToolBaseDigest     string
+	ToolPlatform       string
+	MisePath           string
+	MiseVersion        string
+	MiseDigest         string
+	ToolPrepareTimeout time.Duration
 }
 
 type HuskerRunner struct {
@@ -70,6 +77,7 @@ type HuskerRunner struct {
 	secrets           SecretResolver
 	imageMu           sync.Mutex
 	resolvedImages    map[string]string
+	toolConfig        toolEnvironmentConfig
 }
 
 func NewHuskerRunner(config HuskerConfig) (*HuskerRunner, error) {
@@ -123,10 +131,24 @@ func NewHuskerRunner(config HuskerConfig) (*HuskerRunner, error) {
 		client:            config.HTTPClient,
 		secrets:           config.Secrets,
 		resolvedImages:    make(map[string]string),
+		toolConfig: toolEnvironmentConfig{
+			BaseImage: config.ToolBaseImage, BaseDigest: config.ToolBaseDigest,
+			Platform: config.ToolPlatform, MisePath: config.MisePath,
+			MiseVersion: config.MiseVersion, MiseDigest: config.MiseDigest,
+			PrepareTimeout: config.ToolPrepareTimeout,
+		},
 	}, nil
 }
 
 func (r *HuskerRunner) PinImages(value domain.Manifest) (domain.Manifest, error) {
+	if len(value.Runtime.Tools) > 0 {
+		resolved, err := resolveToolEnvironment(value.Runtime.Tools, r.toolConfig)
+		if err != nil {
+			return domain.Manifest{}, err
+		}
+		value.Runtime.ResolvedTools = &resolved
+		return value, nil
+	}
 	return provenance.PinHuskerImages(value)
 }
 
@@ -134,15 +156,24 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 	if len(run.Manifest.Runtime.Command) == 0 {
 		return Result{}, errors.New("runtime command is empty")
 	}
-	if _, err := provenance.PinHuskerImages(run.Manifest); err != nil {
-		return Result{}, err
-	}
-	rootFS := run.Manifest.Runtime.Image
-	if rootFS == "" {
-		rootFS = r.rootFS
-	}
-	if strings.TrimSpace(rootFS) == "" {
-		return Result{}, errors.New("runtime.image or the husker rootfs fallback is required")
+	toolEnvironment := run.Manifest.Runtime.ResolvedTools
+	rootFS := ""
+	if len(run.Manifest.Runtime.Tools) > 0 {
+		if toolEnvironment == nil {
+			return Result{}, errors.New("runtime.tools revision is missing its resolved environment")
+		}
+		rootFS = toolEnvironment.Image
+	} else {
+		if _, err := provenance.PinHuskerImages(run.Manifest); err != nil {
+			return Result{}, err
+		}
+		rootFS = run.Manifest.Runtime.Image
+		if rootFS == "" {
+			rootFS = r.rootFS
+		}
+		if strings.TrimSpace(rootFS) == "" {
+			return Result{}, errors.New("runtime.image or the husker rootfs fallback is required")
+		}
 	}
 	resolved, err := resolveRuntimeEnvironment(parent, r.secrets, run.Manifest.Runtime)
 	if err != nil {
@@ -172,9 +203,15 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 
 	provisionContext, cancelProvision := context.WithTimeout(parent, r.provisionTimeout)
 	defer cancelProvision()
-	rootFS, err = r.ensureOCIImage(provisionContext, rootFS)
-	if err != nil {
-		return Result{}, fmt.Errorf("prepare husker runtime image: %w", err)
+	if toolEnvironment != nil {
+		if err := r.verifyToolImage(provisionContext, toolEnvironment); err != nil {
+			return Result{}, err
+		}
+	} else {
+		rootFS, err = r.ensureOCIImage(provisionContext, rootFS)
+		if err != nil {
+			return Result{}, fmt.Errorf("prepare husker runtime image: %w", err)
+		}
 	}
 	network := runtimeNetwork(run.Manifest.Runtime)
 	if err := r.createVM(provisionContext, vmName, "werkt/"+run.ID, rootFS, network, run.Manifest.Runtime.Egress, lifetime); err != nil {
@@ -670,8 +707,11 @@ type importOCIImageRequest struct {
 }
 
 type imageResponse struct {
-	Name       string `json:"name"`
-	SourcePath string `json:"source_path"`
+	Name          string `json:"name"`
+	SourcePath    string `json:"source_path"`
+	Kind          string `json:"kind"`
+	ContentDigest string `json:"content_digest"`
+	ParentImage   string `json:"parent_image"`
 }
 
 type egressRuleRequest struct {

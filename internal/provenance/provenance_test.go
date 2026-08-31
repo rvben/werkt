@@ -77,6 +77,41 @@ func TestAttestorExcludesReservedMetadataFromArtifactDigest(t *testing.T) {
 	}
 }
 
+func TestAttestorVersionTwoBindsResolvedToolEnvironment(t *testing.T) {
+	attestor, err := NewAttestor(base64.StdEncoding.EncodeToString(bytesOf(32, 9)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "main.py"), []byte("print('ok')\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	environment := &domain.ResolvedToolEnvironment{
+		Version: 1, IdentityDigest: "sha256:" + strings.Repeat("a", 64),
+		Image: "werkt-tools-test", ImageDigest: "sha256:" + strings.Repeat("b", 64),
+		CatalogRevision: "test", PreparerRevision: "test", Platform: "linux-arm64",
+		BaseImage: "minimal-base", BaseImageDigest: "sha256:" + strings.Repeat("c", 64),
+		Installer:    domain.ToolInstaller{Name: "mise", Version: "2026.8.1", Digest: "sha256:" + strings.Repeat("d", 64)},
+		Tools:        []domain.ResolvedTool{{Name: "python", Version: "3.13.7", Backend: "python", Capabilities: []string{"python3"}}},
+		Capabilities: []string{"python3"},
+	}
+	manifest := domain.Manifest{Metadata: domain.Metadata{Name: "tools-example"}, Runtime: domain.Runtime{Tools: map[string]string{"python": "3.13.7"}, ResolvedTools: environment}}
+	value, err := attestor.Attest(directory, manifest, strings.Repeat("e", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Version != 2 || value.ToolEnvironment == nil {
+		t.Fatalf("tool provenance = %#v", value)
+	}
+	if err := attestor.Verify(directory, value); err != nil {
+		t.Fatalf("verify tool provenance: %v", err)
+	}
+	value.ToolEnvironment.ImageDigest = "sha256:" + strings.Repeat("f", 64)
+	if err := attestor.Verify(directory, value); !errors.Is(err, ErrInvalidAttestation) {
+		t.Fatalf("tampered tool digest error = %v", err)
+	}
+}
+
 func TestLoadRejectsUnknownFieldsAndTrailingJSON(t *testing.T) {
 	directory := t.TempDir()
 	metadataDirectory := filepath.Join(directory, MetadataDirectory)
