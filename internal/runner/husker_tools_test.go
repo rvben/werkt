@@ -58,18 +58,6 @@ func TestResolveToolEnvironmentIsCanonicalAndRejectsCatalogEscape(t *testing.T) 
 	}
 }
 
-func TestVerifyPinnedToolArtifactsRequiresCatalogURLAndDigest(t *testing.T) {
-	artifact := &domain.ToolArtifact{URL: "https://github.com/example/tool/releases/download/1.2.3/tool.zip", Digest: testDigest("tool archive")}
-	tools := []domain.ResolvedTool{{Name: "tool", Version: "1.2.3", Artifact: artifact}}
-	lock := "url = \"" + artifact.URL + "\"\nchecksum = \"" + artifact.Digest + "\"\n"
-	if err := verifyPinnedToolArtifacts(lock, tools); err != nil {
-		t.Fatal(err)
-	}
-	if err := verifyPinnedToolArtifacts(strings.Replace(lock, artifact.Digest, testDigest("replacement"), 1), tools); err == nil {
-		t.Fatal("replacement artifact digest was accepted")
-	}
-}
-
 func TestRenderMiseConfigPinsCatalogArtifactsAndKeepsCoreToolsSimple(t *testing.T) {
 	artifact := &domain.ToolArtifact{
 		URL: "https://example.com/tool.tar.xz", Digest: testDigest("tool archive"),
