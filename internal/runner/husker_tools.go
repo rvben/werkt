@@ -131,9 +131,17 @@ func (r *HuskerRunner) ensureToolImage(parent context.Context, environment *doma
 	if !strings.Contains(versionResponse.Stdout, environment.Installer.Version) {
 		return fmt.Errorf("mise version mismatch: expected %s, got %q", environment.Installer.Version, strings.TrimSpace(versionResponse.Stdout))
 	}
-	response, err := r.exec(ctx, vmName, execRequest{Command: guestMisePath, Args: []string{"install"}, Environment: setupEnvironment, Timeout: durationSeconds(timeout)})
-	if err != nil || response.ExitCode != 0 {
-		return fmt.Errorf("prepare tools with mise: %w%s", errors.Join(err, exitCodeError(response)), errorLogs(formatLogs(response.Stdout, response.Stderr)))
+	for _, phase := range []struct {
+		name string
+		args []string
+	}{
+		{name: "install tools", args: []string{"install"}},
+		{name: "generate tool shims", args: []string{"reshim"}},
+	} {
+		response, err := r.exec(ctx, vmName, execRequest{Command: guestMisePath, Args: phase.args, Environment: setupEnvironment, Timeout: durationSeconds(timeout)})
+		if err != nil || response.ExitCode != 0 {
+			return fmt.Errorf("%s with mise: %w%s", phase.name, errors.Join(err, exitCodeError(response)), errorLogs(formatLogs(response.Stdout, response.Stderr)))
+		}
 	}
 	for _, tool := range environment.Tools {
 		entry := toolCatalog[tool.Name]

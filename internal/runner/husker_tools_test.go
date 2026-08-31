@@ -95,6 +95,7 @@ func TestPrepareManifestBuildsVerifiedPythonEnvironmentWithoutOCIImport(t *testi
 	var created createVMRequest
 	var committed string
 	deleted := false
+	reshimmed := false
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -127,6 +128,9 @@ func TestPrepareManifestBuildsVerifiedPythonEnvironmentWithoutOCIImport(t *testi
 			}
 			if command.Command == guestMisePath && len(command.Args) == 1 && command.Args[0] == "--version" {
 				result.Stdout = "2026.8.1 linux-arm64\n"
+			}
+			if command.Command == guestMisePath && len(command.Args) == 1 && command.Args[0] == "reshim" {
+				reshimmed = true
 			}
 			writeJSON(t, response, result)
 		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/stop"):
@@ -183,8 +187,8 @@ func TestPrepareManifestBuildsVerifiedPythonEnvironmentWithoutOCIImport(t *testi
 	if !attestationAPI || !attestationTrustRoot {
 		t.Fatalf("preparation VM does not permit GitHub attestation verification: %#v", created.Egress)
 	}
-	if committed != prepared.Runtime.ResolvedTools.Image || !deleted {
-		t.Fatalf("committed=%q deleted=%v resolved=%#v", committed, deleted, prepared.Runtime.ResolvedTools)
+	if committed != prepared.Runtime.ResolvedTools.Image || !reshimmed || !deleted {
+		t.Fatalf("committed=%q reshimmed=%v deleted=%v resolved=%#v", committed, reshimmed, deleted, prepared.Runtime.ResolvedTools)
 	}
 }
 
