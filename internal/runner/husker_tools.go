@@ -164,6 +164,10 @@ func (r *HuskerRunner) ensureToolImage(parent context.Context, environment *doma
 			return fmt.Errorf("verify prepared %s tool: %w%s", tool.Name, errors.Join(err, exitCodeError(response)), errorLogs(formatLogs(response.Stdout, response.Stderr)))
 		}
 	}
+	flushed, err := r.exec(ctx, vmName, execRequest{Command: "/bin/sync", Timeout: 60})
+	if err != nil || flushed.ExitCode != 0 {
+		return fmt.Errorf("flush prepared tool image: %w%s", errors.Join(err, exitCodeError(flushed)), errorLogs(formatLogs(flushed.Stdout, flushed.Stderr)))
+	}
 	if err := r.doJSON(ctx, http.MethodPost, vmPath(vmName)+"/stop", nil, http.StatusNoContent, nil); err != nil {
 		return fmt.Errorf("stop tool preparation VM: %w", err)
 	}

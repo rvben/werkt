@@ -99,6 +99,7 @@ func TestPrepareManifestBuildsVerifiedPythonEnvironmentWithoutOCIImport(t *testi
 	var committed string
 	deleted := false
 	linked := make(map[string]string)
+	flushed := false
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -146,10 +147,16 @@ func TestPrepareManifestBuildsVerifiedPythonEnvironmentWithoutOCIImport(t *testi
 			if command.Command == guestMisePath && len(command.Args) == 2 && command.Args[0] == "where" {
 				result.Stdout = guestMiseDataDir + "/installs/python/3.13.7\n"
 			}
+			if command.Command == "/bin/sync" {
+				flushed = true
+			}
 			writeJSON(t, response, result)
 		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/stop"):
 			response.WriteHeader(http.StatusNoContent)
 		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/commit-image"):
+			if !flushed {
+				t.Error("tool image committed without a successful filesystem flush")
+			}
 			var body commitImageRequest
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 				t.Errorf("decode commit: %v", err)
@@ -201,8 +208,8 @@ func TestPrepareManifestBuildsVerifiedPythonEnvironmentWithoutOCIImport(t *testi
 	if !attestationAPI || !attestationTrustRoot {
 		t.Fatalf("preparation VM does not permit GitHub attestation verification: %#v", created.Egress)
 	}
-	if committed != prepared.Runtime.ResolvedTools.Image || len(linked) != 3 || !deleted {
-		t.Fatalf("committed=%q linked=%#v deleted=%v resolved=%#v", committed, linked, deleted, prepared.Runtime.ResolvedTools)
+	if committed != prepared.Runtime.ResolvedTools.Image || len(linked) != 3 || !flushed || !deleted {
+		t.Fatalf("committed=%q linked=%#v flushed=%v deleted=%v resolved=%#v", committed, linked, flushed, deleted, prepared.Runtime.ResolvedTools)
 	}
 }
 
