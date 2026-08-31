@@ -87,12 +87,13 @@ func TestAttestorVersionTwoBindsResolvedToolEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	environment := &domain.ResolvedToolEnvironment{
-		Version: 1, IdentityDigest: "sha256:" + strings.Repeat("a", 64),
+		Version: 2, IdentityDigest: "sha256:" + strings.Repeat("a", 64),
 		Image: "werkt-tools-test", ImageDigest: "sha256:" + strings.Repeat("b", 64),
 		CatalogRevision: "test", PreparerRevision: "test", Platform: "linux-arm64",
 		BaseImage: "minimal-base", BaseImageDigest: "sha256:" + strings.Repeat("c", 64),
-		Installer:    domain.ToolInstaller{Name: "mise", Version: "2026.8.1", Digest: "sha256:" + strings.Repeat("d", 64)},
-		Tools:        []domain.ResolvedTool{{Name: "python", Version: "3.13.7", Backend: "python", Capabilities: []string{"python3"}}},
+		Installer: domain.ToolInstaller{Name: "mise", Version: "2026.8.1", Digest: "sha256:" + strings.Repeat("d", 64)},
+		Tools: []domain.ResolvedTool{{Name: "python", Version: "3.13.7", Backend: "python",
+			Executables: []domain.ResolvedToolExecutable{{Name: "python3", RelativePath: "bin/python3"}}, Capabilities: []string{"python3"}}},
 		Capabilities: []string{"python3"},
 	}
 	manifest := domain.Manifest{Metadata: domain.Metadata{Name: "tools-example"}, Runtime: domain.Runtime{Tools: map[string]string{"python": "3.13.7"}, ResolvedTools: environment}}
@@ -109,6 +110,29 @@ func TestAttestorVersionTwoBindsResolvedToolEnvironment(t *testing.T) {
 	value.ToolEnvironment.ImageDigest = "sha256:" + strings.Repeat("f", 64)
 	if err := attestor.Verify(directory, value); !errors.Is(err, ErrInvalidAttestation) {
 		t.Fatalf("tampered tool digest error = %v", err)
+	}
+}
+
+func TestValidToolEnvironmentPreservesV1AndRejectsUnsafeV2ExecutablePaths(t *testing.T) {
+	base := &domain.ResolvedToolEnvironment{
+		IdentityDigest: "sha256:" + strings.Repeat("a", 64), Image: "werkt-tools-test",
+		ImageDigest: "sha256:" + strings.Repeat("b", 64), BaseImage: "minimal-base",
+		BaseImageDigest: "sha256:" + strings.Repeat("c", 64),
+		Installer:       domain.ToolInstaller{Digest: "sha256:" + strings.Repeat("d", 64)},
+		Tools:           []domain.ResolvedTool{{Name: "python", Version: "3.13.7", Backend: "python"}},
+	}
+	base.Version = 1
+	if !validToolEnvironment(base) {
+		t.Fatal("legacy v1 tool environment rejected")
+	}
+	base.Version = 2
+	base.Tools[0].Executables = []domain.ResolvedToolExecutable{{Name: "python3", RelativePath: "../bin/python3"}}
+	if validToolEnvironment(base) {
+		t.Fatal("v2 tool environment accepted path traversal")
+	}
+	base.Tools[0].Executables[0].RelativePath = "bin/python3"
+	if !validToolEnvironment(base) {
+		t.Fatal("valid v2 tool environment rejected")
 	}
 }
 

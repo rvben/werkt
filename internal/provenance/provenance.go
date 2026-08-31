@@ -12,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -134,9 +135,38 @@ func statementJSON(value domain.ArtifactProvenance) ([]byte, error) {
 }
 
 func validToolEnvironment(value *domain.ResolvedToolEnvironment) bool {
-	return value != nil && value.Version == 1 && value.Image != "" && value.BaseImage != "" &&
-		isSHA256Digest(value.IdentityDigest) && isSHA256Digest(value.ImageDigest) &&
-		isSHA256Digest(value.BaseImageDigest) && isSHA256Digest(value.Installer.Digest) && len(value.Tools) > 0
+	if value == nil || (value.Version != 1 && value.Version != 2) || value.Image == "" || value.BaseImage == "" ||
+		!isSHA256Digest(value.IdentityDigest) || !isSHA256Digest(value.ImageDigest) ||
+		!isSHA256Digest(value.BaseImageDigest) || !isSHA256Digest(value.Installer.Digest) || len(value.Tools) == 0 {
+		return false
+	}
+	for _, tool := range value.Tools {
+		if tool.Name == "" || tool.Version == "" || tool.Backend == "" {
+			return false
+		}
+		if value.Version == 1 {
+			continue
+		}
+		if len(tool.Executables) == 0 {
+			return false
+		}
+		seen := make(map[string]struct{}, len(tool.Executables))
+		for _, executable := range tool.Executables {
+			if executable.Name == "" || strings.ContainsAny(executable.Name, "/\\\t\r\n ") {
+				return false
+			}
+			relativePath := executable.RelativePath
+			if relativePath == "" || pathpkg.IsAbs(relativePath) || pathpkg.Clean(relativePath) != relativePath ||
+				relativePath == "." || strings.HasPrefix(relativePath, "../") {
+				return false
+			}
+			if _, exists := seen[executable.Name]; exists {
+				return false
+			}
+			seen[executable.Name] = struct{}{}
+		}
+	}
+	return true
 }
 
 func isSHA256Digest(value string) bool {
