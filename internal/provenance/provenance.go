@@ -105,7 +105,7 @@ func (a *Attestor) Verify(directory string, value domain.ArtifactProvenance) err
 		return ErrInvalidAttestation
 	}
 	if (value.Version == statementVersionLegacy && value.ToolEnvironment != nil) ||
-		(value.Version == statementVersionTools && !validToolEnvironment(value.ToolEnvironment)) {
+		(value.Version == statementVersionTools && !ValidToolEnvironment(value.ToolEnvironment)) {
 		return ErrInvalidAttestation
 	}
 	signature, err := base64.StdEncoding.DecodeString(value.Signature)
@@ -134,7 +134,9 @@ func statementJSON(value domain.ArtifactProvenance) ([]byte, error) {
 	})
 }
 
-func validToolEnvironment(value *domain.ResolvedToolEnvironment) bool {
+// ValidToolEnvironment applies the structural compatibility contract shared by
+// signature verification and durable revision activation.
+func ValidToolEnvironment(value *domain.ResolvedToolEnvironment) bool {
 	if value == nil || (value.Version != 1 && value.Version != 2) || value.Image == "" || value.BaseImage == "" ||
 		!isSHA256Digest(value.IdentityDigest) || !isSHA256Digest(value.ImageDigest) ||
 		!isSHA256Digest(value.BaseImageDigest) || !isSHA256Digest(value.Installer.Digest) || len(value.Tools) == 0 {

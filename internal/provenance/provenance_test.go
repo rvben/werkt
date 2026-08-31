@@ -122,16 +122,16 @@ func TestValidToolEnvironmentPreservesV1AndRejectsUnsafeV2ExecutablePaths(t *tes
 		Tools:           []domain.ResolvedTool{{Name: "python", Version: "3.13.7", Backend: "python"}},
 	}
 	base.Version = 1
-	if !validToolEnvironment(base) {
+	if !ValidToolEnvironment(base) {
 		t.Fatal("legacy v1 tool environment rejected")
 	}
 	base.Version = 2
 	base.Tools[0].Executables = []domain.ResolvedToolExecutable{{Name: "python3", RelativePath: "../bin/python3"}}
-	if validToolEnvironment(base) {
+	if ValidToolEnvironment(base) {
 		t.Fatal("v2 tool environment accepted path traversal")
 	}
 	base.Tools[0].Executables[0].RelativePath = "bin/python3"
-	if !validToolEnvironment(base) {
+	if !ValidToolEnvironment(base) {
 		t.Fatal("valid v2 tool environment rejected")
 	}
 }

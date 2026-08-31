@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/robfig/cron/v3"
 	"github.com/rvben/werkt/internal/domain"
+	provenancepkg "github.com/rvben/werkt/internal/provenance"
 )
 
 var (
@@ -224,7 +225,7 @@ func (s *Store) ActivateDeployment(ctx context.Context, deploymentID, workerID s
 
 func (s *Store) deploy(ctx context.Context, value domain.Manifest, contentHash, artifactPath string, provenance domain.ArtifactProvenance, actor, deploymentID, workerID string) (string, error) {
 	validVersion := provenance.Version == 1 && provenance.ToolEnvironment == nil ||
-		provenance.Version == 2 && validResolvedToolEnvironment(provenance.ToolEnvironment)
+		provenance.Version == 2 && provenancepkg.ValidToolEnvironment(provenance.ToolEnvironment)
 	if !validSHA256Hex(contentHash) || !validVersion || provenance.Algorithm != "ed25519" ||
 		!validSHA256Digest(provenance.ArtifactDigest) || !validSHA256Digest(provenance.SigningKeyID) ||
 		provenance.PublicKey == "" || provenance.Signature == "" ||
@@ -352,12 +353,6 @@ func provenanceAuditDetails(value domain.ArtifactProvenance) map[string]any {
 		"buildImage":      value.BuildImage,
 		"toolEnvironment": value.ToolEnvironment,
 	}
-}
-
-func validResolvedToolEnvironment(value *domain.ResolvedToolEnvironment) bool {
-	return value != nil && value.Version == 1 && value.Image != "" && value.BaseImage != "" &&
-		validSHA256Digest(value.IdentityDigest) && validSHA256Digest(value.ImageDigest) &&
-		validSHA256Digest(value.BaseImageDigest) && validSHA256Digest(value.Installer.Digest) && len(value.Tools) > 0
 }
 
 func replaceTriggers(ctx context.Context, tx pgx.Tx, automationID, revisionID string, triggers []domain.Trigger) error {
