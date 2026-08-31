@@ -139,18 +139,23 @@ func (r *HuskerRunner) ensureToolImage(parent context.Context, environment *doma
 	}
 	for _, tool := range environment.Tools {
 		entry := toolCatalog[tool.Name]
+		where, err := r.exec(ctx, vmName, execRequest{Command: guestMisePath, Args: []string{"where", tool.Backend + "@" + tool.Version}, Environment: setupEnvironment, Timeout: 30})
+		installRoot := strings.TrimSpace(where.Stdout)
+		if err != nil || where.ExitCode != 0 {
+			return fmt.Errorf("resolve prepared %s install root: %w%s", tool.Name, errors.Join(err, exitCodeError(where)), errorLogs(formatLogs(where.Stdout, where.Stderr)))
+		}
+		if !path.IsAbs(installRoot) || path.Clean(installRoot) != installRoot || !strings.HasPrefix(installRoot, guestMiseDataDir+"/installs/") {
+			return fmt.Errorf("resolve prepared %s install root: mise returned unsafe path %q", tool.Name, installRoot)
+		}
 		for _, executable := range tool.Executables {
-			which, err := r.exec(ctx, vmName, execRequest{Command: guestMisePath, Args: []string{"which", executable}, Environment: setupEnvironment, Timeout: 30})
-			resolvedPath := strings.TrimSpace(which.Stdout)
-			if err != nil || which.ExitCode != 0 {
-				return fmt.Errorf("resolve prepared %s executable %s: %w%s", tool.Name, executable, errors.Join(err, exitCodeError(which)), errorLogs(formatLogs(which.Stdout, which.Stderr)))
+			resolvedPath := path.Join(installRoot, executable.RelativePath)
+			checked, err := r.exec(ctx, vmName, execRequest{Command: "/usr/bin/test", Args: []string{"-x", resolvedPath}, Timeout: 30})
+			if err != nil || checked.ExitCode != 0 {
+				return fmt.Errorf("verify prepared %s executable %s: %w%s", tool.Name, executable.Name, errors.Join(err, exitCodeError(checked)), errorLogs(formatLogs(checked.Stdout, checked.Stderr)))
 			}
-			if !path.IsAbs(resolvedPath) || path.Clean(resolvedPath) != resolvedPath || !strings.HasPrefix(resolvedPath, guestMiseDataDir+"/installs/") {
-				return fmt.Errorf("resolve prepared %s executable %s: mise returned unsafe path %q", tool.Name, executable, resolvedPath)
-			}
-			linked, err := r.exec(ctx, vmName, execRequest{Command: "/bin/ln", Args: []string{"-s", resolvedPath, path.Join(guestRuntimeBinDir, executable)}, Timeout: 30})
+			linked, err := r.exec(ctx, vmName, execRequest{Command: "/bin/ln", Args: []string{"-s", resolvedPath, path.Join(guestRuntimeBinDir, executable.Name)}, Timeout: 30})
 			if err != nil || linked.ExitCode != 0 {
-				return fmt.Errorf("publish prepared %s executable %s: %w%s", tool.Name, executable, errors.Join(err, exitCodeError(linked)), errorLogs(formatLogs(linked.Stdout, linked.Stderr)))
+				return fmt.Errorf("publish prepared %s executable %s: %w%s", tool.Name, executable.Name, errors.Join(err, exitCodeError(linked)), errorLogs(formatLogs(linked.Stdout, linked.Stderr)))
 			}
 		}
 		command := path.Join(guestRuntimeBinDir, entry.SmokeCommand[0])

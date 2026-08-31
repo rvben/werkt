@@ -95,12 +95,17 @@ type ToolInstaller struct {
 }
 
 type ResolvedTool struct {
-	Name         string        `json:"name"`
-	Version      string        `json:"version"`
-	Backend      string        `json:"backend"`
-	Executables  []string      `json:"executables,omitempty"`
-	Capabilities []string      `json:"capabilities"`
-	Artifact     *ToolArtifact `json:"artifact,omitempty"`
+	Name         string                   `json:"name"`
+	Version      string                   `json:"version"`
+	Backend      string                   `json:"backend"`
+	Executables  []ResolvedToolExecutable `json:"executables,omitempty"`
+	Capabilities []string                 `json:"capabilities"`
+	Artifact     *ToolArtifact            `json:"artifact,omitempty"`
+}
+
+type ResolvedToolExecutable struct {
+	Name         string `json:"name"`
+	RelativePath string `json:"relativePath"`
 }
 
 // ToolArtifact pins a catalog tool to the exact archive bytes mise must

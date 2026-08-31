@@ -1016,10 +1016,19 @@ components:
         name: {type: string}
         version: {type: string}
         backend: {type: string}
-        executables: {type: array, items: {type: string}}
+        executables:
+          type: array
+          items: {$ref: "#/components/schemas/ResolvedToolExecutable"}
         capabilities: {type: array, items: {type: string}}
         artifact: {$ref: "#/components/schemas/ToolArtifact"}
       required: [name, version, backend, capabilities]
+    ResolvedToolExecutable:
+      type: object
+      additionalProperties: false
+      properties:
+        name: {type: string}
+        relativePath: {type: string}
+      required: [name, relativePath]
     ToolArtifact:
       type: object
       additionalProperties: false

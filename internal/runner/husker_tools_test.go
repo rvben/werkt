@@ -49,7 +49,8 @@ func TestResolveToolEnvironmentIsCanonicalAndRejectsCatalogEscape(t *testing.T) 
 	}
 	if len(withFFmpeg.Tools) != 2 || withFFmpeg.Tools[0].Name != "ffmpeg" || withFFmpeg.Tools[0].Artifact == nil ||
 		withFFmpeg.Tools[0].Artifact.Digest != "sha256:ae5da4f51b9052390f414005f8ab26c1eed1268f327cce7cb79aa076b29bd66e" ||
-		len(withFFmpeg.Tools[0].Executables) != 2 || withFFmpeg.Tools[0].Executables[0] != "ffmpeg" {
+		len(withFFmpeg.Tools[0].Executables) != 2 || withFFmpeg.Tools[0].Executables[0].Name != "ffmpeg" ||
+		withFFmpeg.Tools[0].Executables[0].RelativePath != "bin/ffmpeg" {
 		t.Fatalf("resolved FFmpeg artifact = %#v", withFFmpeg.Tools)
 	}
 	if len(withFFmpeg.PreparationEgress) != 6 {
@@ -131,8 +132,8 @@ func TestPrepareManifestBuildsVerifiedPythonEnvironmentWithoutOCIImport(t *testi
 			if command.Command == guestMisePath && len(command.Args) == 1 && command.Args[0] == "--version" {
 				result.Stdout = "2026.8.1 linux-arm64\n"
 			}
-			if command.Command == guestMisePath && len(command.Args) == 2 && command.Args[0] == "which" {
-				result.Stdout = guestMiseDataDir + "/installs/python/3.13.7/bin/" + command.Args[1] + "\n"
+			if command.Command == guestMisePath && len(command.Args) == 2 && command.Args[0] == "where" {
+				result.Stdout = guestMiseDataDir + "/installs/python/3.13.7\n"
 			}
 			if command.Command == "/bin/ln" && len(command.Args) == 3 {
 				linked[path.Base(command.Args[2])] = command.Args[1]

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -19,8 +20,8 @@ import (
 
 const (
 	toolEnvironmentVersion = 2
-	toolCatalogRevision    = "2026-09-01.4"
-	toolPreparerRevision   = "werkt-mise-v4"
+	toolCatalogRevision    = "2026-09-01.5"
+	toolPreparerRevision   = "werkt-mise-v5"
 )
 
 var exactResolvedToolVersion = regexp.MustCompile(`^[0-9][0-9A-Za-z]*(?:[._-][0-9A-Za-z]+)*(?:\+[0-9A-Za-z.-]+)?$`)
@@ -38,7 +39,7 @@ type toolEnvironmentConfig struct {
 
 type toolCatalogEntry struct {
 	Backend      string
-	Executables  []string
+	Executables  map[string]string
 	Capabilities []string
 	SmokeCommand []string
 	Egress       []domain.EgressRule
@@ -48,7 +49,7 @@ type toolCatalogEntry struct {
 var toolCatalog = map[string]toolCatalogEntry{
 	"ffmpeg": {
 		Backend:      "http:ffmpeg",
-		Executables:  []string{"ffmpeg", "ffprobe"},
+		Executables:  map[string]string{"ffmpeg": "bin/ffmpeg", "ffprobe": "bin/ffprobe"},
 		Capabilities: []string{"audio-encode:libmp3lame", "ffmpeg", "ffprobe"},
 		SmokeCommand: []string{"ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono", "-t", "0.01", "-c:a", "libmp3lame", "-f", "null", "-"},
 		Egress: []domain.EgressRule{
@@ -76,7 +77,7 @@ var toolCatalog = map[string]toolCatalogEntry{
 	},
 	"python": {
 		Backend:      "python",
-		Executables:  []string{"pip", "python", "python3"},
+		Executables:  map[string]string{"pip": "bin/pip", "python": "bin/python", "python3": "bin/python3"},
 		Capabilities: []string{"pip", "python", "python3"},
 		SmokeCommand: []string{"python3", "--version"},
 		Egress:       verifiedGitHubReleaseEgress(),
@@ -150,19 +151,28 @@ func resolveToolEnvironment(requested map[string]string, config toolEnvironmentC
 		}
 		capabilities := append([]string(nil), entry.Capabilities...)
 		sort.Strings(capabilities)
-		executables := append([]string(nil), entry.Executables...)
-		sort.Strings(executables)
-		if len(executables) == 0 || len(entry.SmokeCommand) == 0 {
+		executableNames := make([]string, 0, len(entry.Executables))
+		for executable := range entry.Executables {
+			executableNames = append(executableNames, executable)
+		}
+		sort.Strings(executableNames)
+		if len(executableNames) == 0 || len(entry.SmokeCommand) == 0 {
 			return domain.ResolvedToolEnvironment{}, fmt.Errorf("runtime.tools.%s has an incomplete catalog entry", name)
 		}
-		for _, executable := range executables {
+		executables := make([]domain.ResolvedToolExecutable, 0, len(executableNames))
+		for _, executable := range executableNames {
 			if !catalogExecutableName.MatchString(executable) {
 				return domain.ResolvedToolEnvironment{}, fmt.Errorf("runtime.tools.%s has unsafe catalog executable %q", name, executable)
+			}
+			relativePath := entry.Executables[executable]
+			if relativePath == "" || path.IsAbs(relativePath) || path.Clean(relativePath) != relativePath || relativePath == "." || strings.HasPrefix(relativePath, "../") {
+				return domain.ResolvedToolEnvironment{}, fmt.Errorf("runtime.tools.%s executable %s has unsafe catalog path %q", name, executable, relativePath)
 			}
 			if owner, exists := executableSet[executable]; exists {
 				return domain.ResolvedToolEnvironment{}, fmt.Errorf("runtime.tools.%s executable %s conflicts with runtime.tools.%s", name, executable, owner)
 			}
 			executableSet[executable] = name
+			executables = append(executables, domain.ResolvedToolExecutable{Name: executable, RelativePath: relativePath})
 		}
 		if executableSet[entry.SmokeCommand[0]] != name {
 			return domain.ResolvedToolEnvironment{}, fmt.Errorf("runtime.tools.%s smoke command is not a cataloged executable", name)
