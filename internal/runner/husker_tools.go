@@ -145,7 +145,7 @@ func (r *HuskerRunner) ensureToolImage(parent context.Context, environment *doma
 			return fmt.Errorf("verify prepared %s tool: %w%s", tool.Name, errors.Join(err, exitCodeError(response)), errorLogs(formatLogs(response.Stdout, response.Stderr)))
 		}
 	}
-	if err := r.doJSON(ctx, http.MethodPost, vmPath(vmName)+"/stop", nil, http.StatusOK, nil); err != nil {
+	if err := r.doJSON(ctx, http.MethodPost, vmPath(vmName)+"/stop", nil, http.StatusNoContent, nil); err != nil {
 		return fmt.Errorf("stop tool preparation VM: %w", err)
 	}
 	var committed imageResponse

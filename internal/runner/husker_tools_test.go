@@ -92,7 +92,7 @@ func TestPrepareManifestBuildsVerifiedPythonEnvironmentWithoutOCIImport(t *testi
 			}
 			writeJSON(t, response, result)
 		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/stop"):
-			response.WriteHeader(http.StatusOK)
+			response.WriteHeader(http.StatusNoContent)
 		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/commit-image"):
 			var body commitImageRequest
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
