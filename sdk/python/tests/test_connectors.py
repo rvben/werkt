@@ -72,8 +72,16 @@ class ConnectorContractTest(unittest.TestCase):
         transport = ScriptedTransport([response({"text": "Psalm 23"})])
         openai = OpenAI("openai-token", client=HTTPClient(transport))
         audio = SimpleNamespace(name="opening.m4a", read_bytes=lambda: b"audio")
-        self.assertEqual(openai.transcribe(audio, language="nl", timeout=360), "Psalm 23")
+        self.assertEqual(openai.transcribe(audio, model="gpt-transcribe", languages=["nl"], timeout=360), "Psalm 23")
         self.assertEqual(transport.requests[0].timeout, 360)
+        self.assertIn(b'name="languages[]"\r\n\r\nnl\r\n', transport.requests[0].body)
+        self.assertNotIn(b'name="language"', transport.requests[0].body)
+
+    def test_openai_transcription_rejects_conflicting_language_hints(self) -> None:
+        openai = OpenAI("openai-token", client=HTTPClient(ScriptedTransport([])))
+        audio = SimpleNamespace(name="opening.m4a", read_bytes=lambda: b"audio")
+        with self.assertRaisesRegex(ConnectorError, "language or languages"):
+            openai.transcribe(audio, language="nl", languages=["nl"])
 
     def test_http_client_fails_closed_on_unexpected_status(self) -> None:
         client = HTTPClient(ScriptedTransport([response({"error": "no"}, status=503)]))

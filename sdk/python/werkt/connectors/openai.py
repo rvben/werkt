@@ -4,6 +4,7 @@ import base64
 import json
 import mimetypes
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -42,9 +43,20 @@ class OpenAI:
             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}", "detail": detail}},
         ]}])
 
-    def transcribe(self, audio: Path, *, model: str = "whisper-1", language: str | None = None, timeout: float = 180) -> str:
+    def transcribe(
+        self,
+        audio: Path,
+        *,
+        model: str = "whisper-1",
+        language: str | None = None,
+        languages: Sequence[str] | None = None,
+        timeout: float = 180,
+    ) -> str:
+        if language and languages:
+            raise ConnectorError("OpenAI transcription accepts language or languages, not both")
         boundary = "werkt-" + uuid.uuid4().hex
         fields = [("model", model)] + ([("language", language)] if language else [])
+        fields.extend(("languages[]", value) for value in languages or ())
         parts = [f"--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n".encode() for key, value in fields]
         parts.extend([
             f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{audio.name}\"\r\nContent-Type: application/octet-stream\r\n\r\n".encode(),
