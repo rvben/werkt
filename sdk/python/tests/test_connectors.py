@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from werkt.connectors import BUILTIN_CONNECTORS, ConnectorError, GoogleServiceAccount, HTTPClient, HTTPResponse, Ntfy, OAuth2ClientCredentials, Zoom
+from werkt.connectors import BUILTIN_CONNECTORS, ConnectorError, GoogleServiceAccount, HTTPClient, HTTPResponse, Ntfy, OAuth2ClientCredentials, OpenAI, Zoom
 from werkt.connectors.testing import ScriptedTransport
 
 
@@ -67,6 +67,13 @@ class ConnectorContractTest(unittest.TestCase):
         self.assertEqual(request.body, b"body")
         self.assertNotIn("password", request.url)
         self.assertTrue(request.headers["Authorization"].startswith("Basic "))
+
+    def test_openai_transcription_accepts_a_workload_specific_timeout(self) -> None:
+        transport = ScriptedTransport([response({"text": "Psalm 23"})])
+        openai = OpenAI("openai-token", client=HTTPClient(transport))
+        audio = SimpleNamespace(name="opening.m4a", read_bytes=lambda: b"audio")
+        self.assertEqual(openai.transcribe(audio, language="nl", timeout=360), "Psalm 23")
+        self.assertEqual(transport.requests[0].timeout, 360)
 
     def test_http_client_fails_closed_on_unexpected_status(self) -> None:
         client = HTTPClient(ScriptedTransport([response({"error": "no"}, status=503)]))

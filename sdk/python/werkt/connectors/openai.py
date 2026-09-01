@@ -42,7 +42,7 @@ class OpenAI:
             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}", "detail": detail}},
         ]}])
 
-    def transcribe(self, audio: Path, *, model: str = "whisper-1", language: str | None = None) -> str:
+    def transcribe(self, audio: Path, *, model: str = "whisper-1", language: str | None = None, timeout: float = 180) -> str:
         boundary = "werkt-" + uuid.uuid4().hex
         fields = [("model", model)] + ([("language", language)] if language else [])
         parts = [f"--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n".encode() for key, value in fields]
@@ -51,7 +51,7 @@ class OpenAI:
             audio.read_bytes(), f"\r\n--{boundary}--\r\n".encode(),
         ])
         headers = {**self.headers, "Content-Type": f"multipart/form-data; boundary={boundary}"}
-        value = self.client.request("POST", f"{self.base_url}/audio/transcriptions", headers=headers, body=b"".join(parts), timeout=180).json("OpenAI transcription")
+        value = self.client.request("POST", f"{self.base_url}/audio/transcriptions", headers=headers, body=b"".join(parts), timeout=timeout).json("OpenAI transcription")
         if not isinstance(value, dict) or not isinstance(value.get("text"), str):
             raise ConnectorError("OpenAI transcription response omitted text")
         return value["text"]
