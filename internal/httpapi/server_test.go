@@ -679,7 +679,7 @@ func TestGitHubWebhookVerifiesProviderSignatureAndUsesSignedBodyForIdempotency(t
 }
 
 func TestZoomWebhookAnswersValidationChallengeWithoutQueuingRun(t *testing.T) {
-	const webhookSecret = "zoom-webhook-secret-at-least-32-bytes"
+	const webhookSecret = "zoom-provider-token-22"
 	store := &fakeStore{ingressConfig: json.RawMessage(`{"provider":"zoom","secret":"tests/zoom-webhook"}`)}
 	server := New(store, ":0", "", WithSecretManager(testSecretManager(map[string]string{"tests/zoom-webhook": webhookSecret})))
 	body := []byte(`{"event":"endpoint.url_validation","payload":{"plainToken":"zoom-plain-token"}}`)
@@ -707,7 +707,7 @@ func TestZoomWebhookAnswersValidationChallengeWithoutQueuingRun(t *testing.T) {
 }
 
 func TestZoomWebhookVerifiesProviderSignatureAndUsesBodyForIdempotency(t *testing.T) {
-	const webhookSecret = "zoom-webhook-secret-at-least-32-bytes"
+	const webhookSecret = "zoom-provider-token-22"
 	store := &fakeStore{ingressConfig: json.RawMessage(`{"provider":"zoom","secret":"tests/zoom-webhook"}`)}
 	server := New(store, ":0", "", WithSecretManager(testSecretManager(map[string]string{"tests/zoom-webhook": webhookSecret})))
 	body := []byte(`{"event":"recording.completed","payload":{"object":{"uuid":"recording-42"}}}`)

@@ -34,7 +34,10 @@ import (
 
 const maxWebhookBody = 2 << 20
 const maxEmailBody = 12 << 20
-const minimumIngressSecretBytes = 32
+const (
+	minimumIngressSecretBytes   = 32
+	minimumZoomSecretTokenBytes = 16
+)
 const defaultWebhookSignatureHeader = "X-Werkt-Signature"
 const webhookTimestampHeader = "X-Werkt-Timestamp"
 const webhookSignatureTolerance = 5 * time.Minute
@@ -571,7 +574,7 @@ func (s *Server) email(response http.ResponseWriter, request *http.Request) {
 		writeError(response, http.StatusServiceUnavailable, "trigger credential unavailable")
 		return
 	}
-	token, ok := s.ingressSecret(response, request, config.TokenSecret)
+	token, ok := s.ingressSecret(response, request, config.TokenSecret, minimumIngressSecretBytes)
 	if !ok {
 		return
 	}
@@ -691,7 +694,14 @@ func (s *Server) webhook(response http.ResponseWriter, request *http.Request) {
 		writeError(response, http.StatusServiceUnavailable, "trigger credential unavailable")
 		return
 	}
-	secret, ok := s.ingressSecret(response, request, config.Secret)
+	minimumSecretBytes := minimumIngressSecretBytes
+	if config.Provider == "zoom" {
+		// Zoom issues and owns the webhook Secret Token. Its provider-managed
+		// values can be shorter than Werkt's minimum for operator-generated
+		// HMAC secrets, so validate them against Zoom's supported contract.
+		minimumSecretBytes = minimumZoomSecretTokenBytes
+	}
+	secret, ok := s.ingressSecret(response, request, config.Secret, minimumSecretBytes)
 	if !ok {
 		return
 	}
@@ -892,15 +902,15 @@ func (s *Server) triggerIngressPolicy(response http.ResponseWriter, request *htt
 	return policy, true
 }
 
-func (s *Server) ingressSecret(response http.ResponseWriter, request *http.Request, name string) ([]byte, bool) {
+func (s *Server) ingressSecret(response http.ResponseWriter, request *http.Request, name string, minimumBytes int) ([]byte, bool) {
 	if s.secrets == nil {
 		writeError(response, http.StatusServiceUnavailable, "trigger credential unavailable")
 		return nil, false
 	}
 	values, err := s.secrets.Resolve(request.Context(), []string{name})
 	secret := values[name]
-	if err != nil || len(secret) < minimumIngressSecretBytes {
-		slog.Error("trigger credential is missing or too short", "secret", name, "minimumBytes", minimumIngressSecretBytes, "error", err)
+	if err != nil || len(secret) < minimumBytes {
+		slog.Error("trigger credential is missing or too short", "secret", name, "minimumBytes", minimumBytes, "error", err)
 		writeError(response, http.StatusServiceUnavailable, "trigger credential unavailable")
 		return nil, false
 	}
