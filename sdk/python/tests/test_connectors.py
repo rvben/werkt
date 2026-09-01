@@ -44,7 +44,7 @@ class ConnectorContractTest(unittest.TestCase):
         self.assertEqual(len(transport.requests), 2)
         transport.assert_finished()
 
-    def test_zoom_normalizes_recording_api_and_rejects_unlisted_download_host(self) -> None:
+    def test_zoom_normalizes_recording_api_and_keeps_download_credentials_out_of_url(self) -> None:
         transport = ScriptedTransport([
             response({"access_token": "zoom-token", "expires_in": 3600}),
             response({"uuid": "/uuid", "recording_files": []}),
@@ -52,8 +52,12 @@ class ConnectorContractTest(unittest.TestCase):
         zoom = Zoom("account", "client", "secret", allowed_download_hosts={"us02web.zoom.us"}, client=HTTPClient(transport))
         self.assertEqual(zoom.recording("/uuid")["uuid"], "/uuid")
         self.assertIn("%252Fuuid", transport.requests[1].url)
+        download = zoom.download_request("https://us02web.zoom.us/rec/archive/download/id?existing=value")
+        self.assertEqual(download.url, "https://us02web.zoom.us/rec/archive/download/id?existing=value")
+        self.assertEqual(download.headers, {"Authorization": "Bearer zoom-token"})
+        self.assertNotIn("zoom-token", download.url)
         with self.assertRaises(ConnectorError):
-            zoom.authenticated_download_url("https://attacker.example/recording")
+            zoom.download_request("https://attacker.example/recording")
 
     def test_ntfy_supports_basic_auth_without_embedding_it_in_url_or_body(self) -> None:
         transport = ScriptedTransport([HTTPResponse(200, {}, b"")])

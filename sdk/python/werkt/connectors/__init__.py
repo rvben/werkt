@@ -1,6 +1,6 @@
 """Reusable, dependency-free connectors for Werkt automation packages."""
 
-from .base import ConnectorError, ConnectorField, ConnectorSpec, HTTPClient, HTTPResponse, Transport, UrllibTransport
+from .base import ConnectorError, ConnectorField, ConnectorSpec, DownloadRequest, HTTPClient, HTTPResponse, Transport, UrllibTransport
 from .calendar import CalendarEvent, ICalendar
 from .command import CommandResult, CommandRunner
 from .google_sheets import GoogleServiceAccount, GoogleSheets
@@ -13,7 +13,7 @@ BUILTIN_CONNECTORS = {connector.spec.id: connector.spec for connector in (Zoom, 
 
 __all__ = [
     "BUILTIN_CONNECTORS", "CalendarEvent", "CommandResult", "CommandRunner", "ConnectorError", "ConnectorField", "ConnectorSpec",
-    "GoogleServiceAccount", "GoogleSheets", "HTTPClient", "HTTPResponse",
+    "DownloadRequest", "GoogleServiceAccount", "GoogleSheets", "HTTPClient", "HTTPResponse",
     "ICalendar", "Ntfy", "OAuth2ClientCredentials", "OpenAI", "Transport",
     "UrllibTransport", "Zoom",
 ]

@@ -43,6 +43,14 @@ class HTTPResponse:
             raise ConnectorError(f"{label} returned invalid JSON") from error
 
 
+@dataclass(frozen=True)
+class DownloadRequest:
+    """An allowlisted download URL plus credentials kept out of its query."""
+
+    url: str
+    headers: Mapping[str, str]
+
+
 class Transport(Protocol):
     def request(self, method: str, url: str, *, headers: Mapping[str, str] | None = None, body: bytes | None = None, timeout: float = 30) -> HTTPResponse: ...
 
