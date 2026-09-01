@@ -50,6 +50,7 @@ class OpenAI:
         model: str = "whisper-1",
         language: str | None = None,
         languages: Sequence[str] | None = None,
+        stream: bool = False,
         timeout: float = 180,
     ) -> str:
         if language and languages:
@@ -57,13 +58,34 @@ class OpenAI:
         boundary = "werkt-" + uuid.uuid4().hex
         fields = [("model", model)] + ([("language", language)] if language else [])
         fields.extend(("languages[]", value) for value in languages or ())
+        if stream:
+            fields.append(("stream", "true"))
         parts = [f"--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n".encode() for key, value in fields]
+        mime = "audio/mp4" if Path(audio.name).suffix.lower() == ".m4a" else mimetypes.guess_type(audio.name)[0] or "application/octet-stream"
         parts.extend([
-            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{audio.name}\"\r\nContent-Type: application/octet-stream\r\n\r\n".encode(),
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{audio.name}\"\r\nContent-Type: {mime}\r\n\r\n".encode(),
             audio.read_bytes(), f"\r\n--{boundary}--\r\n".encode(),
         ])
         headers = {**self.headers, "Content-Type": f"multipart/form-data; boundary={boundary}"}
-        value = self.client.request("POST", f"{self.base_url}/audio/transcriptions", headers=headers, body=b"".join(parts), timeout=timeout).json("OpenAI transcription")
+        response = self.client.request("POST", f"{self.base_url}/audio/transcriptions", headers=headers, body=b"".join(parts), timeout=timeout)
+        if stream:
+            deltas: list[str] = []
+            for line in response.body.decode("utf-8").splitlines():
+                if not line.startswith("data:"):
+                    continue
+                data = line.removeprefix("data:").strip()
+                if not data or data == "[DONE]":
+                    continue
+                try:
+                    event = json.loads(data)
+                except json.JSONDecodeError as error:
+                    raise ConnectorError("OpenAI transcription stream contained invalid JSON") from error
+                if isinstance(event, dict) and event.get("type") == "transcript.text.delta" and isinstance(event.get("delta"), str):
+                    deltas.append(event["delta"])
+            if not deltas:
+                raise ConnectorError("OpenAI transcription stream omitted text")
+            return "".join(deltas)
+        value = response.json("OpenAI transcription")
         if not isinstance(value, dict) or not isinstance(value.get("text"), str):
             raise ConnectorError("OpenAI transcription response omitted text")
         return value["text"]

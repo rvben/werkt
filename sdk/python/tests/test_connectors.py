@@ -76,6 +76,15 @@ class ConnectorContractTest(unittest.TestCase):
         self.assertEqual(transport.requests[0].timeout, 360)
         self.assertIn(b'name="languages[]"\r\n\r\nnl\r\n', transport.requests[0].body)
         self.assertNotIn(b'name="language"', transport.requests[0].body)
+        self.assertIn(b"Content-Type: audio/mp4", transport.requests[0].body)
+
+    def test_openai_transcription_supports_text_delta_streams(self) -> None:
+        body = b'data: {"type":"transcript.text.delta","delta":"Psalm "}\n\ndata: {"type":"transcript.text.delta","delta":"23"}\n\ndata: [DONE]\n\n'
+        transport = ScriptedTransport([HTTPResponse(200, {"Content-Type": "text/event-stream"}, body)])
+        openai = OpenAI("openai-token", client=HTTPClient(transport))
+        audio = SimpleNamespace(name="opening.m4a", read_bytes=lambda: b"audio")
+        self.assertEqual(openai.transcribe(audio, model="gpt-transcribe", languages=["nl"], stream=True), "Psalm 23")
+        self.assertIn(b'name="stream"\r\n\r\ntrue\r\n', transport.requests[0].body)
 
     def test_openai_transcription_rejects_conflicting_language_hints(self) -> None:
         openai = OpenAI("openai-token", client=HTTPClient(ScriptedTransport([])))
