@@ -40,6 +40,7 @@
   const runIdempotency = document.querySelector("#run-idempotency");
   const runTargetAutomation = document.querySelector("#run-target-automation");
   const runTargetRevision = document.querySelector("#run-target-revision");
+  const runTargetVersion = document.querySelector("#run-target-version");
   const runTargetLifecycle = document.querySelector("#run-target-lifecycle");
   const runTargetEnvironment = document.querySelector("#run-target-environment");
   const runTargetInstance = document.querySelector("#run-target-instance");
@@ -353,7 +354,7 @@
     const scope = currentScope();
     scopeEnvironment.textContent = scope.environment;
     scopeInstance.textContent = scope.instance;
-    scopeActor.textContent = scope.actor;
+    scopeActor.textContent = state.auth.authenticated ? identityLabel() : (state.token ? "Agent token" : "Local session");
     operatorScope.title = `${scope.environment} · ${scope.instance} · ${scope.actor}`;
   }
 
@@ -573,6 +574,7 @@
     });
     const failedCount = state.automations.filter((automation) => automationHealth(automation).needsAttention).length;
     failedFilterCount.textContent = failedCount;
+    failedFilterCount.hidden = failedCount === 0;
     const automations = filteredAutomations();
     const projectCount = new Set(automations.map((automation) => automation.project)).size;
     inventoryResults.textContent = state.enabledFilter === "failed"
@@ -612,7 +614,6 @@
     return `<button class="inventory-item${selected ? " is-selected" : ""}" type="button" data-automation="${escapeHTML(automation.id)}" ${selected ? 'aria-current="true"' : ""} aria-label="${escapeHTML(automation.id)}, ${escapeHTML(health.label)}" aria-keyshortcuts="ArrowUp ArrowDown Home End Enter" title="${escapeHTML(automation.description || automation.id)}">
       <span class="status-dot ${health.className}" aria-hidden="true"></span>
       <span><span class="inventory-name">${escapeHTML(automation.id)}</span><span class="inventory-meta ${health.className}">${health.htmlLabel}</span></span>
-      <span class="revision-pill mono">${escapeHTML(shortID(automation.activeRevisionId, 7))}</span>
     </button>`;
   }
 
@@ -628,7 +629,7 @@
   }
 
   function renderSelectAutomation() {
-    workspaceContent.innerHTML = `<section class="empty-state"><div class="empty-state-inner"><span class="empty-symbol">${icon("bolt")}</span><h2>Select an automation</h2><p>Choose an automation from the inventory to inspect its active revision, triggers, recent runs, and safe operator actions.</p></div></section>`;
+    workspaceContent.innerHTML = `<section class="empty-state"><div class="empty-state-inner"><span class="empty-symbol">${icon("bolt")}</span><h2>Select an automation</h2><p>Choose an automation to see whether it is healthy, what happens next, and whether it needs you.</p></div></section>`;
   }
 
   function showDetailLoading() {
@@ -636,7 +637,77 @@
   }
 
   function renderEmptyWorkspace() {
-    workspaceContent.innerHTML = `<section class="empty-state"><div class="empty-state-inner"><span class="empty-symbol">${icon("bolt")}</span><h2>Deploy the first automation</h2><p>The workspace will organize deployed packages by project and folder. Validation happens before an immutable revision is created.</p><code class="empty-command">werkt deploy ./path/to/automation</code></div></section>`;
+    const command = "werkt deploy ./path/to/automation";
+    workspaceContent.innerHTML = `<section class="empty-state onboarding-empty"><div class="empty-state-inner"><span class="empty-symbol">${icon("bolt")}</span><h2>Bring your first automation to life</h2><p>Werkt validates the package, connects its triggers, and keeps every run attributable and recoverable.</p><ol class="onboarding-flow"><li><strong>Automation</strong><span>Describe one bounded job.</span></li><li><strong>Trigger</strong><span>Choose what starts it.</span></li><li><strong>Run</strong><span>Inspect every outcome.</span></li></ol><div class="command-row"><code class="empty-command">${command}</code><button class="button button-quiet button-compact" type="button" data-copy-value="${command}" aria-label="Copy first deployment command">${icon("copy")}Copy</button></div><p class="onboarding-note">Nothing becomes active until validation and deployment succeed.</p></div></section>`;
+  }
+
+  function actorLabel(actor) {
+    const value = String(actor || "");
+    if (!value) return "Unknown operator";
+    if (value.startsWith("workspace:oidc:")) return "Signed-in operator";
+    if (value.startsWith("system:")) return "Werkt";
+    if (value === "cli" || value.startsWith("cli:")) return "Werkt CLI";
+    if (value.startsWith("workspace:")) return "Workspace operator";
+    return value;
+  }
+
+  function nextEventSummary(triggers, automationEnabled) {
+    if (!automationEnabled) return "Paused until resumed";
+    const enabled = triggers.filter((trigger) => trigger.enabled);
+    const scheduled = enabled.filter((trigger) => trigger.nextFireAt)
+      .sort((left, right) => new Date(left.nextFireAt) - new Date(right.nextFireAt));
+    if (scheduled.length) return `Scheduled ${relativeTimeElement(scheduled[0].nextFireAt)}`;
+    if (enabled.length) return "Waiting for an event";
+    return "No enabled trigger";
+  }
+
+  function executionProtection(execution) {
+    const concurrency = {
+      forbid: "One run at a time",
+      replace: "Newest run takes over",
+      allow: "Runs may overlap",
+    }[execution.concurrency] || "Standard execution";
+    return `${concurrency} · ${execution.timeout || "5m"} limit`;
+  }
+
+  function overviewRuns(runs) {
+    const selected = [];
+    for (const run of runs) {
+      if (run.status === "succeeded") continue;
+      selected.push(run);
+      if (selected.length === 3) break;
+    }
+    for (const run of runs) {
+      if (selected.length === 3) break;
+      if (!selected.includes(run)) selected.push(run);
+    }
+    return selected.sort((left, right) => runs.indexOf(left) - runs.indexOf(right));
+  }
+
+  function runHistorySummary(runs) {
+    if (!runs.length) return "No outcomes recorded yet";
+    const succeeded = runs.filter((run) => run.status === "succeeded").length;
+    const failed = runs.filter((run) => run.status === "failed").length;
+    const active = runs.filter((run) => ["queued", "running"].includes(run.status)).length;
+    const parts = [];
+    if (failed) parts.push(`${failed} ${failed === 1 ? "failure" : "failures"} to review`);
+    if (active) parts.push(`${active} in progress`);
+    if (succeeded) parts.push(`${succeeded} successful`);
+    return `${parts.join(" · ")} in loaded history`;
+  }
+
+  function copyValueButton(value, label) {
+    if (!value) return "";
+    return `<button class="copy-value" type="button" data-copy-value="${escapeHTML(value)}" aria-label="Copy ${escapeHTML(label)}" title="Copy ${escapeHTML(label)}">${icon("copy")}</button>`;
+  }
+
+  function technicalFact(label, value) {
+    const display = value || "Not recorded";
+    return `<div><dt>${escapeHTML(label)}</dt><dd><code>${escapeHTML(display)}</code>${value ? copyValueButton(value, label) : ""}</dd></div>`;
+  }
+
+  function renderAutomationTechnicalDetails(detail, activeRevision, runtime, execution) {
+    return `<details class="technical-disclosure automation-technical"><summary>Technical details</summary><p>Exact immutable identifiers and execution settings for audits, support, and incident response.</p><dl class="technical-grid">${technicalFact("Revision", detail.activeRevisionId)}${technicalFact("Content SHA-256", activeRevision?.contentHash)}${technicalFact("Artifact SHA-256", activeRevision?.provenance?.artifactDigest)}${technicalFact("Runtime", runtime.image || runtime.language || "Local process")}<div><dt>Execution policy</dt><dd>${escapeHTML(execution.concurrency || "allow")} · ${escapeHTML(execution.timeout || "5m timeout")}</dd></div></dl></details>`;
   }
 
   function renderAutomationDetail() {
@@ -645,8 +716,10 @@
     const execution = detail.manifest?.execution || {};
     const activeRevision = detail.revisions?.find((revision) => revision.active) || detail.revisions?.[0];
     const triggers = detail.triggers || [];
-    const recentRuns = state.detailRuns.slice(0, 8);
+    const recentRuns = overviewRuns(state.detailRuns);
     const status = detail.enabled ? "active" : "paused";
+    const latestRun = detail.latestRun || state.detailRuns[0];
+    const health = automationHealth({...detail, latestRun});
     workspaceContent.innerHTML = `<article class="detail-shell">
       <header class="detail-header">
         <button class="icon-button mobile-back" type="button" data-mobile-back aria-label="Back to automation inventory">${icon("arrow-left")}</button>
@@ -655,17 +728,18 @@
           <div class="detail-title"><div class="detail-title-line"><h2>${escapeHTML(detail.id)}</h2><span class="status-badge status-${status}">${detail.enabled ? "Active" : "Paused"}</span></div><p>${escapeHTML(detail.description || "No description is set in this automation's manifest.")}</p></div>
           <div class="detail-actions">
             <button class="button button-quiet" type="button" data-toggle-enabled="${detail.enabled ? "false" : "true"}" ${state.mutating ? "disabled" : ""}>${icon(detail.enabled ? "pause" : "play")}${detail.enabled ? "Pause" : "Resume"}</button>
-            <button class="button button-primary" type="button" data-open-run aria-keyshortcuts="R" ${state.mutating ? "disabled" : ""}>${icon("play")}Run now</button>
+            <button class="button button-primary" type="button" data-open-run aria-keyshortcuts="R" ${state.mutating ? "disabled" : ""}>${icon("play")}Test run</button>
           </div>
         </div>
       </header>
       <div class="detail-body">
         <dl class="facts">
-          <div class="fact"><dt>Active revision</dt><dd class="mono" title="${escapeHTML(detail.activeRevisionId)}">${escapeHTML(shortID(detail.activeRevisionId, 16))}</dd></div>
-          <div class="fact"><dt>Runtime</dt><dd title="${escapeHTML(runtime.image || "local process")}">${escapeHTML(runtime.language || "Executable")} · ${escapeHTML(shortID(runtime.image || "local process", 24))}</dd></div>
-          <div class="fact"><dt>Concurrency</dt><dd>${escapeHTML(execution.concurrency || "allow")} · ${escapeHTML(execution.timeout || "5m timeout")}</dd></div>
-          <div class="fact"><dt>Artifact trust</dt><dd class="mono" title="${escapeHTML(activeRevision?.provenance?.artifactDigest || "No attestation")}">${activeRevision?.provenance ? `Attested · ${escapeHTML(shortID(activeRevision.provenance.artifactDigest, 17))}` : "Unattested"}</dd></div>
+          <div class="fact"><dt>Latest outcome</dt><dd class="${health.className}">${health.htmlLabel}</dd></div>
+          <div class="fact"><dt>Next event</dt><dd>${nextEventSummary(triggers, detail.enabled)}</dd></div>
+          <div class="fact"><dt>Current version</dt><dd>${activeRevision?.createdAt ? `Deployed ${relativeTimeElement(activeRevision.createdAt)}` : "Deployment time unavailable"}${activeRevision?.provenance ? ' · <span class="verification-inline">Verified</span>' : " · Not verified"}</dd></div>
+          <div class="fact"><dt>Run safety</dt><dd>${escapeHTML(executionProtection(execution))}</dd></div>
         </dl>
+        ${renderAutomationTechnicalDetails(detail, activeRevision, runtime, execution)}
 
         <section class="workspace-section" aria-labelledby="triggers-heading">
           <div class="section-heading"><div><h3 id="triggers-heading">Triggers</h3><p>${triggers.length} configured event ${triggers.length === 1 ? "source" : "sources"}</p></div></div>
@@ -673,13 +747,13 @@
         </section>
 
         <section class="workspace-section" aria-labelledby="runs-heading">
-          <div class="section-heading"><div><h3 id="runs-heading">Recent runs</h3><p>Newest attempts for this automation · ${escapeHTML(historyScope(state.detailRuns.length))}</p></div><button class="section-link" type="button" data-view-link="runs">Browse recent runs</button></div>
+          <div class="section-heading"><div><h3 id="runs-heading">Run history</h3><p>${escapeHTML(runHistorySummary(state.detailRuns))}</p></div><button class="section-link" type="button" data-view-link="runs">View all runs</button></div>
           ${state.detailRunsError ? `<div class="inline-notice is-error" role="status"><span>${escapeHTML(state.detailRunsError)}</span><button class="button button-quiet button-compact" type="button" data-retry-detail-runs>Try again</button></div>` : ""}
           ${renderRunsTable(recentRuns, true)}
         </section>
 
         <section class="workspace-section" aria-labelledby="revisions-heading">
-          <div class="section-heading"><div><h3 id="revisions-heading">Latest revisions</h3><p>${revisionCountLabel(Math.min(detail.revisions?.length || 0, 8))}</p></div></div>
+          <div class="section-heading"><div><h3 id="revisions-heading">Version history</h3><p>${revisionCountLabel(Math.min(detail.revisions?.length || 0, 5))}</p></div></div>
           ${renderRevisions(detail.revisions || [])}
         </section>
       </div>
@@ -697,8 +771,8 @@
   function triggerConfiguration(trigger) {
     const config = trigger.config || {};
     if (trigger.type === "schedule") return `${config.cron || "No cron"} · ${config.timezone || "UTC"}`;
-    if (trigger.type === "webhook" && config.provider === "zoom") return "Zoom · native signature";
-    if (trigger.type === "webhook" && config.provider === "github") return "GitHub · native signature";
+    if (trigger.type === "webhook" && config.provider === "zoom") return "Zoom · verified by Werkt";
+    if (trigger.type === "webhook" && config.provider === "github") return "GitHub · verified by Werkt";
     if (trigger.type === "webhook") return `HMAC · ${config.signatureHeader || "X-Werkt-Signature"}`;
     if (trigger.type === "email") return "Bearer-authenticated RFC 5322";
     if (trigger.type === "ntfy") return `${config.server || "ntfy"}/${config.topic || "topic"}`;
@@ -707,16 +781,36 @@
 
   function renderRunsTable(runs, compact = false) {
     if (!runs.length) return `<div class="empty-state"><div class="empty-state-inner"><h2>No runs yet</h2><p>${compact ? "Trigger this automation" : "Trigger an automation"} or queue a manual diagnostic run to see execution history.</p></div></div>`;
-    return `<table class="data-table runs-table"><thead><tr><th class="status-column">Status</th>${compact ? "" : "<th>Automation</th>"}<th>Started</th><th class="hide-tablet">Attempt</th><th class="wide">Run ID</th><th class="hide-tablet">Duration</th><th class="run-actions-column"><span class="sr-only">Run actions</span></th></tr></thead><tbody>${runs.map((run) => `<tr><td data-label="Status"><span class="status-badge status-${statusClass(run.status)}">${escapeHTML(capitalize(run.status))}</span></td>${compact ? "" : `<td data-label="Automation"><button class="table-button" type="button" data-automation="${escapeHTML(run.automationId)}">${escapeHTML(run.automationId)}</button></td>`}<td data-label="Started" class="tabular">${relativeTimeElement(run.startedAt || run.createdAt)}</td><td data-label="Attempt" class="hide-tablet">${escapeHTML(`${run.attempt}/${run.maxAttempts}`)}</td><td data-label="Run"><button class="table-button" type="button" data-run="${escapeHTML(run.id)}" aria-label="Inspect run ${escapeHTML(run.id)}"><span class="mono">${escapeHTML(shortID(run.id, compact ? 18 : 26))}</span></button></td><td data-label="Duration" class="hide-tablet tabular">${escapeHTML(runDuration(run))}</td><td data-label="Actions" class="run-actions-column"><button class="button button-quiet button-compact" type="button" data-run-logs="${escapeHTML(run.id)}" aria-label="View logs for run ${escapeHTML(run.id)}">View logs</button></td></tr>`).join("")}</tbody></table>`;
+    return `<table class="data-table runs-table"><thead><tr><th class="status-column">Status</th>${compact ? "" : "<th>Automation</th>"}<th>Started</th><th class="hide-tablet">Attempt</th><th class="hide-tablet">Duration</th><th class="run-actions-column"><span class="sr-only">Run actions</span></th></tr></thead><tbody>${runs.map((run) => `<tr><td data-label="Status"><span class="status-badge status-${statusClass(run.status)}">${escapeHTML(capitalize(run.status))}</span></td>${compact ? "" : `<td data-label="Automation"><button class="table-button" type="button" data-automation="${escapeHTML(run.automationId)}">${escapeHTML(run.automationId)}</button></td>`}<td data-label="Started" class="tabular">${relativeTimeElement(run.startedAt || run.createdAt)}</td><td data-label="Attempt" class="hide-tablet">${escapeHTML(`${run.attempt}/${run.maxAttempts}`)}</td><td data-label="Duration" class="hide-tablet tabular">${escapeHTML(runDuration(run))}</td><td data-label="Actions" class="run-actions-column"><div class="row-actions"><button class="button button-quiet button-compact" type="button" data-run="${escapeHTML(run.id)}" aria-label="Inspect ${escapeHTML(run.automationId)} run from ${escapeHTML(formatDate(run.startedAt || run.createdAt))}">Inspect</button><button class="button button-quiet button-compact" type="button" data-run-logs="${escapeHTML(run.id)}" aria-label="View logs for ${escapeHTML(run.automationId)} run from ${escapeHTML(formatDate(run.startedAt || run.createdAt))}">Logs</button></div></td></tr>`).join("")}</tbody></table>`;
   }
 
   function renderRevisions(revisions) {
     if (!revisions.length) return `<div class="empty-state"><div class="empty-state-inner"><h2>No revisions available</h2><p>Deploy the automation package to create its first immutable revision.</p></div></div>`;
-    return `<div class="revision-list">${revisions.slice(0, 8).map((revision) => `<div class="revision-row"><strong class="mono">${escapeHTML(shortID(revision.id, 18))}${revision.active ? " · active" : ""}</strong><span class="mono" title="Source content SHA-256 · ${escapeHTML(revision.contentHash)}">${escapeHTML(shortID(revision.contentHash, 16))}</span><span class="mono" title="${escapeHTML(revision.provenance?.artifactDigest || "Unattested artifact")}">${revision.provenance ? `Attested · ${escapeHTML(shortID(revision.provenance.artifactDigest, 17))}` : "Unattested"}</span><span class="tabular">${escapeHTML(formatDate(revision.createdAt))}</span><span class="revision-action">${revision.active ? '<span class="muted-value">Current</span>' : `<button class="button button-quiet button-compact" type="button" data-rollback-revision="${escapeHTML(revision.id)}" ${state.mutating ? "disabled" : ""}>${icon("rollback")}Roll back</button>`}</span></div>`).join("")}</div>`;
+    let previous = 0;
+    return `<table class="data-table revision-table"><thead><tr><th class="version-column">Version</th><th>Deployed</th><th>By</th><th>Verification</th><th class="revision-action-column"><span class="sr-only">Version action</span></th></tr></thead><tbody>${revisions.slice(0, 5).map((revision) => {
+      if (!revision.active) previous += 1;
+      const version = revision.active ? "Current" : previous === 1 ? "Previous" : `${previous} versions back`;
+      const deployment = state.deployments.find((item) => item.revisionId === revision.id);
+      const verification = revision.provenance ? "Verified" : "Not verified";
+      return `<tr${revision.active ? ' class="revision-current"' : ""}><td data-label="Version"><strong>${escapeHTML(version)}</strong><details class="technical-disclosure revision-technical"><summary>Technical details</summary><dl class="technical-grid">${technicalFact("Revision", revision.id)}${technicalFact("Content SHA-256", revision.contentHash)}${technicalFact("Artifact SHA-256", revision.provenance?.artifactDigest)}</dl></details></td><td data-label="Deployed" class="tabular">${relativeTimeElement(revision.createdAt)}</td><td data-label="By" title="${escapeHTML(deployment?.actor || "")}">${deployment ? escapeHTML(actorLabel(deployment.actor)) : '<span class="muted-value">Not recorded</span>'}</td><td data-label="Verification"><span class="verification-state ${revision.provenance ? "is-verified" : ""}">${escapeHTML(verification)}</span></td><td data-label="Action" class="revision-action-column">${revision.active ? '<span class="current-version-label">In use</span>' : `<button class="button button-quiet button-compact" type="button" data-rollback-revision="${escapeHTML(revision.id)}" ${state.mutating ? "disabled" : ""}>${icon("rollback")}Restore</button>`}</td></tr>`;
+    }).join("")}</tbody></table>`;
   }
 
   function revisionCountLabel(count) {
-    return `${count} most recent immutable ${count === 1 ? "revision" : "revisions"}`;
+    return `${count} recent deployed ${count === 1 ? "version" : "versions"}`;
+  }
+
+  function revisionDisplayName(revisionID) {
+    let previous = 0;
+    for (const revision of state.detail?.revisions || []) {
+      if (revision.active) {
+        if (revision.id === revisionID) return "current version";
+        continue;
+      }
+      previous += 1;
+      if (revision.id === revisionID) return previous === 1 ? "previous version" : `version from ${formatDate(revision.createdAt)}`;
+    }
+    return "selected version";
   }
 
   function renderGlobalApprovals() {
@@ -724,12 +818,12 @@
       ? [...state.approvals].sort((left, right) => Number(right.status === "pending") - Number(left.status === "pending"))
       : state.approvals.filter((approval) => approval.status === state.approvalStatusFilter);
     const pending = state.approvals.filter((approval) => approval.status === "pending").length;
-    workspaceContent.innerHTML = `<section class="global-view approvals-view"><header class="global-view-header"><div><h1>Approvals</h1><p>${pending ? `${pending} ${pending === 1 ? "decision needs" : "decisions need"} an operator.` : "No decisions are waiting."} Every response resumes the immutable revision that requested it.</p></div><div class="global-toolbar"><label class="sr-only" for="approval-status-filter">Filter approvals by status</label><select class="select-control" id="approval-status-filter"><option value="all">All statuses</option>${["pending", "approved", "rejected", "expired"].map((status) => `<option value="${status}"${state.approvalStatusFilter === status ? " selected" : ""}>${capitalize(status)}</option>`).join("")}</select></div></header>${feedNotice("approvals")}${state.feedLoading.approvals && !approvals.length ? "" : renderApprovalsTable(approvals)}${feedFooter("approvals")}</section>`;
+    workspaceContent.innerHTML = `<section class="global-view approvals-view"><header class="global-view-header"><div><h1>Approvals</h1><p>${pending ? `${pending} ${pending === 1 ? "decision needs" : "decisions need"} you.` : "No decisions are waiting."} Werkt safely resumes the same deployed version after your response.</p></div><div class="global-toolbar"><label class="sr-only" for="approval-status-filter">Filter approvals by status</label><select class="select-control" id="approval-status-filter"><option value="all">All statuses</option>${["pending", "approved", "rejected", "expired"].map((status) => `<option value="${status}"${state.approvalStatusFilter === status ? " selected" : ""}>${capitalize(status)}</option>`).join("")}</select></div></header>${feedNotice("approvals")}${state.feedLoading.approvals && !approvals.length ? "" : renderApprovalsTable(approvals)}${feedFooter("approvals")}</section>`;
   }
 
   function renderApprovalsTable(approvals) {
     if (!approvals.length) return `<div class="empty-state"><div class="empty-state-inner"><span class="empty-symbol">${icon("approval")}</span><h2>No approvals found</h2><p>${state.approvalStatusFilter === "pending" ? "New requests will appear here with their expiry, fields, and exact execution target." : "Choose another status to inspect past operator decisions."}</p></div></div>`;
-    return `<table class="data-table approvals-table"><thead><tr><th class="status-column">Status</th><th class="approval-title-column">Decision</th><th>Automation</th><th>Requested</th><th>Expires</th><th class="wide">Revision</th><th class="approval-action-column"><span class="sr-only">Action</span></th></tr></thead><tbody>${approvals.map((approval) => `<tr${approval.status === "pending" ? ' class="approval-pending"' : ""}><td data-label="Status"><span class="status-badge status-${escapeHTML(approval.status)}">${escapeHTML(capitalize(approval.status))}</span></td><td data-label="Decision"><strong>${escapeHTML(approval.title)}</strong></td><td data-label="Automation"><button class="table-button" type="button" data-automation="${escapeHTML(approval.automationId)}">${escapeHTML(approval.automationId)}</button></td><td data-label="Requested" class="tabular">${relativeTimeElement(approval.createdAt)}</td><td data-label="Expires" class="tabular" title="${escapeHTML(formatDate(approval.expiresAt))}">${relativeTimeElement(approval.expiresAt)}</td><td data-label="Revision" class="mono" title="${escapeHTML(approval.revisionId)}">${escapeHTML(shortID(approval.revisionId, 20))}</td><td data-label="Action" class="approval-action-column">${approval.status === "pending" ? `<button class="button button-primary button-compact" type="button" data-approval="${escapeHTML(approval.id)}">Review</button>` : approval.actionRunId ? `<button class="button button-quiet button-compact" type="button" data-run="${escapeHTML(approval.actionRunId)}">View run</button>` : '<span class="muted-value">Closed</span>'}</td></tr>`).join("")}</tbody></table>`;
+    return `<table class="data-table approvals-table"><thead><tr><th class="status-column">Status</th><th class="approval-title-column">Decision</th><th>Automation</th><th>Requested</th><th>Expires</th><th class="approval-action-column"><span class="sr-only">Action</span></th></tr></thead><tbody>${approvals.map((approval) => `<tr${approval.status === "pending" ? ' class="approval-pending"' : ""}><td data-label="Status"><span class="status-badge status-${escapeHTML(approval.status)}">${escapeHTML(capitalize(approval.status))}</span></td><td data-label="Decision"><strong>${escapeHTML(approval.title)}</strong></td><td data-label="Automation"><button class="table-button" type="button" data-automation="${escapeHTML(approval.automationId)}">${escapeHTML(approval.automationId)}</button></td><td data-label="Requested" class="tabular">${relativeTimeElement(approval.createdAt)}</td><td data-label="Expires" class="tabular" title="${escapeHTML(formatDate(approval.expiresAt))}">${relativeTimeElement(approval.expiresAt)}</td><td data-label="Action" class="approval-action-column">${approval.status === "pending" ? `<button class="button button-primary button-compact" type="button" data-approval="${escapeHTML(approval.id)}">Review</button>` : approval.actionRunId ? `<button class="button button-quiet button-compact" type="button" data-run="${escapeHTML(approval.actionRunId)}">View run</button>` : '<span class="muted-value">Closed</span>'}</td></tr>`).join("")}</tbody></table>`;
   }
 
   function renderGlobalRuns() {
@@ -751,7 +845,7 @@
 
   function renderDeploymentsTable(deployments) {
     if (!deployments.length) return `<div class="empty-state"><div class="empty-state-inner"><span class="empty-symbol">${icon("package")}</span><h2>No deployments found</h2><p>Upload an automation package with the CLI or adjust the status filter.</p><code class="empty-command">werkt deploy ./path/to/automation</code></div></div>`;
-    return `<table class="data-table"><thead><tr><th class="status-column">Status</th><th>Automation</th><th>Received</th><th class="hide-tablet">Actor</th><th class="wide">Deployment ID</th><th class="hide-tablet">Duration</th><th class="action-column"><span class="sr-only">Open</span></th></tr></thead><tbody>${deployments.map((deployment) => `<tr><td data-label="Status"><span class="status-badge status-${statusClass(deployment.status)}">${escapeHTML(capitalize(deployment.status))}</span></td><td data-label="Automation">${deployment.automationId ? `<button class="table-button" type="button" data-automation="${escapeHTML(deployment.automationId)}">${escapeHTML(deployment.automationId)}</button>` : '<span class="muted-value">Awaiting manifest</span>'}</td><td data-label="Received" class="tabular">${relativeTimeElement(deployment.createdAt)}</td><td data-label="Actor" class="hide-tablet">${escapeHTML(deployment.actor)}</td><td data-label="Deployment"><button class="table-button" type="button" data-deployment="${escapeHTML(deployment.id)}"><span class="mono">${escapeHTML(shortID(deployment.id, 26))}</span></button></td><td data-label="Duration" class="hide-tablet tabular">${escapeHTML(deploymentDuration(deployment))}</td><td class="action-column"><button class="icon-button" type="button" data-deployment="${escapeHTML(deployment.id)}" aria-label="Inspect deployment ${escapeHTML(deployment.id)}">${icon("chevron")}</button></td></tr>`).join("")}</tbody></table>`;
+    return `<table class="data-table"><thead><tr><th class="status-column">Status</th><th>Automation</th><th>Received</th><th class="hide-tablet">By</th><th class="hide-tablet">Duration</th><th class="action-column"><span class="sr-only">Open</span></th></tr></thead><tbody>${deployments.map((deployment) => `<tr><td data-label="Status"><span class="status-badge status-${statusClass(deployment.status)}">${escapeHTML(capitalize(deployment.status))}</span></td><td data-label="Automation">${deployment.automationId ? `<button class="table-button" type="button" data-automation="${escapeHTML(deployment.automationId)}">${escapeHTML(deployment.automationId)}</button>` : '<span class="muted-value">Awaiting manifest</span>'}</td><td data-label="Received" class="tabular">${relativeTimeElement(deployment.createdAt)}</td><td data-label="By" class="hide-tablet" title="${escapeHTML(deployment.actor)}">${escapeHTML(actorLabel(deployment.actor))}</td><td data-label="Duration" class="hide-tablet tabular">${escapeHTML(deploymentDuration(deployment))}</td><td class="action-column"><button class="icon-button" type="button" data-deployment="${escapeHTML(deployment.id)}" aria-label="Inspect ${escapeHTML(deployment.automationId || "deployment")}">${icon("chevron")}</button></td></tr>`).join("")}</tbody></table>`;
   }
 
   function renderGlobalAudit() {
@@ -760,7 +854,7 @@
 
   function renderAuditTable(events) {
     if (!events.length) return `<div class="empty-state"><div class="empty-state-inner"><h2>No audit activity yet</h2><p>Deployments and management mutations will appear here with actor attribution.</p></div></div>`;
-    return `<table class="data-table"><thead><tr><th class="wide">Action</th><th>Automation</th><th>Actor</th><th>When</th><th class="action-column"><span class="sr-only">Open</span></th></tr></thead><tbody>${events.map((event) => `<tr><td data-label="Action"><button class="table-button" type="button" data-audit="${escapeHTML(event.id)}">${escapeHTML(humanizeAction(event.action))}</button></td><td data-label="Automation"><button class="table-button" type="button" data-automation="${escapeHTML(event.automationId)}"><span class="mono">${escapeHTML(event.automationId)}</span></button></td><td data-label="Actor">${escapeHTML(event.actor)}</td><td data-label="When" class="tabular">${relativeTimeElement(event.createdAt)}</td><td class="action-column"><button class="icon-button" type="button" data-audit="${escapeHTML(event.id)}" aria-label="Inspect audit event ${escapeHTML(event.id)}">${icon("chevron")}</button></td></tr>`).join("")}</tbody></table>`;
+    return `<table class="data-table"><thead><tr><th class="wide">Action</th><th>Automation</th><th>By</th><th>When</th><th class="action-column"><span class="sr-only">Open</span></th></tr></thead><tbody>${events.map((event) => `<tr><td data-label="Action"><button class="table-button" type="button" data-audit="${escapeHTML(event.id)}">${escapeHTML(humanizeAction(event.action))}</button></td><td data-label="Automation"><button class="table-button" type="button" data-automation="${escapeHTML(event.automationId)}">${escapeHTML(event.automationId)}</button></td><td data-label="By" title="${escapeHTML(event.actor)}">${escapeHTML(actorLabel(event.actor))}</td><td data-label="When" class="tabular">${relativeTimeElement(event.createdAt)}</td><td class="action-column"><button class="icon-button" type="button" data-audit="${escapeHTML(event.id)}" aria-label="Inspect ${escapeHTML(humanizeAction(event.action))}">${icon("chevron")}</button></td></tr>`).join("")}</tbody></table>`;
   }
 
   function feedFooter(kind) {
@@ -844,7 +938,7 @@
     state.diagnosisReturnFocus = document.activeElement;
     diagnosisPane.hidden = false;
     shell.classList.add("has-diagnosis");
-    diagnosisContent.innerHTML = `<div class="diagnosis-header"><div class="diagnosis-header-top"><h2 id="diagnosis-title">Audit event</h2><button class="icon-button" type="button" data-close-diagnosis aria-label="Close audit event">${icon("close")}</button></div><div class="diagnosis-run"><span class="status-badge status-active">Recorded</span><code title="${escapeHTML(audit.id)}">${escapeHTML(audit.id)}</code></div><p class="diagnosis-meta"><span>${escapeHTML(humanizeAction(audit.action))}</span><span>${escapeHTML(formatDate(audit.createdAt))}</span></p></div><div class="diagnosis-body"><dl class="diagnosis-facts"><dt>Action</dt><dd class="mono">${escapeHTML(audit.action)}</dd><dt>Automation</dt><dd class="mono">${escapeHTML(audit.automationId || "—")}</dd><dt>Actor</dt><dd class="mono">${escapeHTML(audit.actor)}</dd><dt>Recorded</dt><dd class="tabular">${escapeHTML(formatDate(audit.createdAt))}</dd></dl><h3>Recorded context</h3><pre class="code-block">${escapeHTML(prettyJSON(audit.details) || "No additional context was recorded.")}</pre></div>`;
+    diagnosisContent.innerHTML = `<div class="diagnosis-header"><div class="diagnosis-header-top"><h2 id="diagnosis-title">Audit event</h2><button class="icon-button" type="button" data-close-diagnosis aria-label="Close audit event">${icon("close")}</button></div><div class="diagnosis-run"><span class="status-badge status-active">Recorded</span><strong>${escapeHTML(humanizeAction(audit.action))}</strong></div><p class="diagnosis-meta"><span>${escapeHTML(audit.automationId || "Workspace")}</span><span>${escapeHTML(formatDate(audit.createdAt))}</span></p></div><div class="diagnosis-body"><dl class="diagnosis-facts"><dt>Action</dt><dd>${escapeHTML(humanizeAction(audit.action))}</dd><dt>Automation</dt><dd>${escapeHTML(audit.automationId || "Workspace")}</dd><dt>By</dt><dd title="${escapeHTML(audit.actor)}">${escapeHTML(actorLabel(audit.actor))}</dd><dt>Recorded</dt><dd class="tabular">${escapeHTML(formatDate(audit.createdAt))}</dd></dl><details class="technical-disclosure"><summary>Technical details</summary><dl class="technical-grid">${technicalFact("Audit event", audit.id)}${technicalFact("Action key", audit.action)}${technicalFact("Actor identity", audit.actor)}</dl></details><h3>Recorded context</h3><pre class="code-block">${escapeHTML(prettyJSON(audit.details) || "No additional context was recorded.")}</pre></div>`;
     syncDiagnosisModality();
     diagnosisContent.querySelector("[data-close-diagnosis]")?.focus();
   }
@@ -894,14 +988,14 @@
     if (!run) return;
     const tabs = ["summary", "logs", "output"];
     const activeTab = state.diagnosisTab;
-    diagnosisContent.innerHTML = `<div class="diagnosis-header"><div class="diagnosis-header-top"><h2 id="diagnosis-title">Run diagnosis</h2><button class="icon-button" type="button" data-close-diagnosis aria-label="Close run diagnosis">${icon("close")}</button></div><div class="diagnosis-run"><span class="status-badge status-${statusClass(run.status)}" data-run-status>${escapeHTML(capitalize(run.status))}</span><code title="${escapeHTML(run.id)}">${escapeHTML(run.id)}</code></div><p class="diagnosis-meta"><span>${escapeHTML(run.automationId)}</span><span data-run-duration>${escapeHTML(runDuration(run))}</span><span>attempt <span data-run-attempt>${escapeHTML(`${run.attempt}/${run.maxAttempts}`)}</span></span></p><div class="diagnosis-tabs" role="tablist" aria-label="Run detail">${tabs.map((tab) => `<button id="diagnosis-tab-${tab}" class="tab-button" type="button" role="tab" data-diagnosis-tab="${tab}" aria-controls="diagnosis-panel-${tab}" aria-selected="${activeTab === tab}" tabindex="${activeTab === tab ? "0" : "-1"}">${capitalize(tab)}</button>`).join("")}</div></div><div class="diagnosis-body">${renderRunFailure(run)}${tabs.map((tab) => `<div id="diagnosis-panel-${tab}" role="tabpanel" aria-labelledby="diagnosis-tab-${tab}" tabindex="0" ${activeTab === tab ? "" : "hidden"}>${activeTab === tab ? diagnosisTabContent(run) : ""}</div>`).join("")}</div>`;
+    diagnosisContent.innerHTML = `<div class="diagnosis-header"><div class="diagnosis-header-top"><h2 id="diagnosis-title">Run details</h2><button class="icon-button" type="button" data-close-diagnosis aria-label="Close run details">${icon("close")}</button></div><div class="diagnosis-run"><span class="status-badge status-${statusClass(run.status)}" data-run-status>${escapeHTML(capitalize(run.status))}</span><strong>${escapeHTML(run.automationId)}</strong></div><p class="diagnosis-meta"><span>${relativeTimeElement(run.startedAt || run.createdAt)}</span><span data-run-duration>${escapeHTML(runDuration(run))}</span><span>attempt <span data-run-attempt>${escapeHTML(`${run.attempt}/${run.maxAttempts}`)}</span></span></p><div class="diagnosis-tabs" role="tablist" aria-label="Run detail">${tabs.map((tab) => `<button id="diagnosis-tab-${tab}" class="tab-button" type="button" role="tab" data-diagnosis-tab="${tab}" aria-controls="diagnosis-panel-${tab}" aria-selected="${activeTab === tab}" tabindex="${activeTab === tab ? "0" : "-1"}">${capitalize(tab)}</button>`).join("")}</div></div><div class="diagnosis-body">${renderRunFailure(run)}${tabs.map((tab) => `<div id="diagnosis-panel-${tab}" role="tabpanel" aria-labelledby="diagnosis-tab-${tab}" tabindex="0" ${activeTab === tab ? "" : "hidden"}>${activeTab === tab ? diagnosisTabContent(run) : ""}</div>`).join("")}</div>`;
     if (focusPanel) diagnosisContent.querySelector("[data-close-diagnosis]").focus();
   }
 
   function renderDeploymentDiagnosis(focusPanel = false) {
     const deployment = state.selectedDeployment;
     if (!deployment) return;
-    diagnosisContent.innerHTML = `<div class="diagnosis-header"><div class="diagnosis-header-top"><h2 id="diagnosis-title">Deployment details</h2><button class="icon-button" type="button" data-close-diagnosis aria-label="Close deployment details">${icon("close")}</button></div><div class="diagnosis-run"><span class="status-badge status-${statusClass(deployment.status)}" data-deployment-status>${escapeHTML(capitalize(deployment.status))}</span><code title="${escapeHTML(deployment.id)}">${escapeHTML(deployment.id)}</code></div><p class="diagnosis-meta"><span>${escapeHTML(deployment.automationId || "Manifest not validated yet")}</span><span data-deployment-duration>${escapeHTML(deploymentDuration(deployment))}</span><span>${escapeHTML(deployment.actor)}</span></p><div data-deployment-actions>${deploymentActions(deployment)}</div></div><div class="diagnosis-body">${deploymentDiagnosisBody(deployment)}</div>`;
+    diagnosisContent.innerHTML = `<div class="diagnosis-header"><div class="diagnosis-header-top"><h2 id="diagnosis-title">Deployment details</h2><button class="icon-button" type="button" data-close-diagnosis aria-label="Close deployment details">${icon("close")}</button></div><div class="diagnosis-run"><span class="status-badge status-${statusClass(deployment.status)}" data-deployment-status>${escapeHTML(capitalize(deployment.status))}</span><strong>${escapeHTML(deployment.automationId || "Package validation")}</strong></div><p class="diagnosis-meta"><span data-deployment-duration>${escapeHTML(deploymentDuration(deployment))}</span><span title="${escapeHTML(deployment.actor)}">${escapeHTML(actorLabel(deployment.actor))}</span></p><div data-deployment-actions>${deploymentActions(deployment)}</div></div><div class="diagnosis-body">${deploymentDiagnosisBody(deployment)}</div>`;
     if (focusPanel) diagnosisContent.querySelector("[data-close-diagnosis]").focus();
   }
 
@@ -934,7 +1028,7 @@
       ? `<section class="deployment-notice" aria-labelledby="deployment-cancellation-title"><h3 id="deployment-cancellation-title">Cancellation requested</h3><p>Werkt is stopping the active promotion command. Requested ${relativeTimeElement(deployment.cancelRequestedAt)}.</p></section>`
       : "";
     const provenance = deployment.provenance;
-    return `${failure}${cancellation}${renderDeploymentSteps(deployment.steps || [])}<dl class="diagnosis-facts"><dt>Automation</dt><dd>${escapeHTML(deployment.automationId || "Awaiting manifest")}</dd><dt>Revision</dt><dd class="mono">${escapeHTML(deployment.revisionId || "Not activated")}</dd>${deployment.retryOf ? `<dt>Retry of</dt><dd class="mono">${escapeHTML(deployment.retryOf)}</dd>` : ""}<dt>Package SHA-256</dt><dd class="mono">${escapeHTML(deployment.packageDigest)}</dd><dt>Content hash</dt><dd class="mono">${escapeHTML(deployment.contentHash || "Not built")}</dd><dt>Artifact SHA-256</dt><dd class="mono">${escapeHTML(provenance?.artifactDigest || "Not attested")}</dd><dt>Signing key</dt><dd class="mono">${escapeHTML(provenance?.signingKeyId || "Not attested")}</dd><dt>Runtime image</dt><dd class="mono">${escapeHTML(provenance?.runtimeImage || "Local process")}</dd>${provenance?.buildImage ? `<dt>Build image</dt><dd class="mono">${escapeHTML(provenance.buildImage)}</dd>` : ""}<dt>Received</dt><dd class="tabular">${escapeHTML(formatDate(deployment.createdAt))}</dd><dt>Started</dt><dd class="tabular">${escapeHTML(formatDate(deployment.startedAt))}</dd><dt>Finished</dt><dd class="tabular">${escapeHTML(formatDate(deployment.finishedAt))}</dd><dt>Updated</dt><dd class="tabular">${escapeHTML(formatDate(deployment.updatedAt))}</dd></dl>`;
+    return `${failure}${cancellation}${renderDeploymentSteps(deployment.steps || [])}<dl class="diagnosis-facts"><dt>Automation</dt><dd>${escapeHTML(deployment.automationId || "Awaiting manifest")}</dd><dt>Started by</dt><dd title="${escapeHTML(deployment.actor)}">${escapeHTML(actorLabel(deployment.actor))}</dd><dt>Received</dt><dd class="tabular">${escapeHTML(formatDate(deployment.createdAt))}</dd><dt>Started</dt><dd class="tabular">${escapeHTML(formatDate(deployment.startedAt))}</dd><dt>Finished</dt><dd class="tabular">${escapeHTML(formatDate(deployment.finishedAt))}</dd><dt>Updated</dt><dd class="tabular">${escapeHTML(formatDate(deployment.updatedAt))}</dd></dl><details class="technical-disclosure"><summary>Technical details</summary><p>Exact package, version, and provenance identifiers for verification and support.</p><dl class="technical-grid">${technicalFact("Deployment", deployment.id)}${technicalFact("Revision", deployment.revisionId)}${deployment.retryOf ? technicalFact("Retry of", deployment.retryOf) : ""}${technicalFact("Package SHA-256", deployment.packageDigest)}${technicalFact("Content SHA-256", deployment.contentHash)}${technicalFact("Artifact SHA-256", provenance?.artifactDigest)}${technicalFact("Signing key", provenance?.signingKeyId)}${technicalFact("Runtime image", provenance?.runtimeImage)}${provenance?.buildImage ? technicalFact("Build image", provenance.buildImage) : ""}</dl></details>`;
   }
 
   function updateDeploymentDiagnosis(deployment) {
@@ -972,7 +1066,7 @@
     if (state.diagnosisTab === "output") {
       return `<div class="copy-row"><button class="button button-quiet" type="button" data-copy="output">${icon("copy")}Copy output</button></div><pre class="code-block">${escapeHTML(prettyJSON(run.result) || "This run produced no structured result.")}</pre>`;
     }
-    return `<dl class="diagnosis-facts"><dt>Automation</dt><dd>${escapeHTML(run.automationId)}</dd><dt>Revision</dt><dd class="mono">${escapeHTML(run.revisionId)}</dd><dt>Event</dt><dd class="mono">${escapeHTML(run.eventId)}</dd><dt>Created</dt><dd class="tabular">${escapeHTML(formatDate(run.createdAt))}</dd><dt>Started</dt><dd class="tabular">${escapeHTML(formatDate(run.startedAt))}</dd><dt>Finished</dt><dd class="tabular">${escapeHTML(formatDate(run.finishedAt))}</dd><dt>Attempts</dt><dd>${escapeHTML(`${run.attempt} of ${run.maxAttempts}`)}</dd></dl>`;
+    return `<dl class="diagnosis-facts"><dt>Automation</dt><dd>${escapeHTML(run.automationId)}</dd><dt>Created</dt><dd class="tabular">${escapeHTML(formatDate(run.createdAt))}</dd><dt>Started</dt><dd class="tabular">${escapeHTML(formatDate(run.startedAt))}</dd><dt>Finished</dt><dd class="tabular">${escapeHTML(formatDate(run.finishedAt))}</dd><dt>Attempts</dt><dd>${escapeHTML(`${run.attempt} of ${run.maxAttempts}`)}</dd></dl><details class="technical-disclosure"><summary>Technical details</summary><dl class="technical-grid">${technicalFact("Run", run.id)}${technicalFact("Revision", run.revisionId)}${technicalFact("Event", run.eventId)}</dl></details>`;
   }
 
   function renderRunFailure(run) {
@@ -1062,7 +1156,6 @@
     if (!automationID) return;
     runError.textContent = "";
     runPayload.removeAttribute("aria-invalid");
-    runIdempotency.removeAttribute("aria-invalid");
     let detail = state.detail?.id === automationID ? state.detail : null;
     try {
       if (!detail) detail = await api(`/api/v1/automations/${encodeURIComponent(automationID)}`);
@@ -1077,6 +1170,10 @@
     };
     runTargetAutomation.textContent = automationID;
     runTargetRevision.textContent = detail.activeRevisionId;
+    const activeRevision = detail.revisions?.find((revision) => revision.active) || detail.revisions?.[0];
+    runTargetVersion.textContent = activeRevision?.createdAt
+      ? `Deployed ${relativeTime(activeRevision.createdAt)}${activeRevision.provenance ? " · verified" : ""}`
+      : "Current deployed version";
     runTargetLifecycle.textContent = detail.enabled ? "Active" : "Paused · manual runs remain available";
     const scope = currentScope();
     runTargetEnvironment.textContent = scope.environment;
@@ -1085,9 +1182,9 @@
     runPayload.value = sourceRunID
       ? `{\n  "reason": "diagnose ${sourceRunID}"\n}`
       : '{\n  "reason": "operator diagnostic"\n}';
-    runIdempotency.value = `workspace-${automationID}-${Date.now()}`;
+    runIdempotency.textContent = `workspace-${automationID}-${Date.now()}`;
     runDialog.showModal();
-    runPayload.focus();
+    runForm.querySelector('button[type="submit"]')?.focus();
   }
 
   async function queueManualRun() {
@@ -1110,27 +1207,32 @@
     try {
       const current = await api(`/api/v1/automations/${encodeURIComponent(target.automationId)}`);
       if (current.activeRevisionId !== target.expectedRevisionId) {
-        const previous = target.expectedRevisionId;
         target.expectedRevisionId = current.activeRevisionId;
         runTargetRevision.textContent = current.activeRevisionId;
+        const activeRevision = current.revisions?.find((revision) => revision.active) || current.revisions?.[0];
+        runTargetVersion.textContent = activeRevision?.createdAt
+          ? `Deployed ${relativeTime(activeRevision.createdAt)}${activeRevision.provenance ? " · verified" : ""}`
+          : "Current deployed version";
         runTargetLifecycle.textContent = current.enabled ? "Active" : "Paused · manual runs remain available";
-        runError.textContent = `Active revision changed from ${previous} to ${current.activeRevisionId}. Review the new target, then queue again.`;
-        runTargetRevision.focus();
+        runError.textContent = "The deployed version changed while this dialog was open. Werkt updated the target; review it, then run the diagnostic again.";
+        runError.focus();
         return;
       }
       const response = await api(`/api/v1/automations/${encodeURIComponent(target.automationId)}/runs`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Idempotency-Key": runIdempotency.value.trim(),
+          "Idempotency-Key": runIdempotency.textContent.trim(),
           "X-Werkt-Expected-Revision": target.expectedRevisionId,
         },
         body: JSON.stringify(parsed),
       });
       runDialog.close();
       showReceipt(
-        response.created ? "Manual run queued" : "Existing manual run opened",
-        `${response.runId} targets ${target.expectedRevisionId} for ${target.automationId}.`,
+        response.created ? "Diagnostic run queued" : "Existing diagnostic opened",
+        response.created
+          ? `${target.automationId} is starting against the deployed version you reviewed.`
+          : `${target.automationId} already received this diagnostic request; Werkt opened the existing run.`,
         {audit: true},
       );
       state.pendingManualRun = null;
@@ -1161,7 +1263,7 @@
       }
       state.selectedApproval = {...approval, idempotencyKey: `workspace-approval-${approval.id}-${Date.now()}`};
       approvalTitle.textContent = approval.title;
-      approvalDescription.textContent = approval.description || "Review the declared fields and exact revision before choosing an action.";
+      approvalDescription.textContent = approval.description || "Review the requested fields before choosing an action.";
       approvalScopeAutomation.textContent = approval.automationId;
       approvalScopeRevision.textContent = approval.revisionId;
       approvalScopeRequested.textContent = formatDate(approval.createdAt);
@@ -1226,7 +1328,7 @@
       state.selectedApproval = null;
       showReceipt(
         actionID === "approve" ? "Approval accepted" : "Approval rejected",
-        `${approval.automationId} will resume ${approval.revisionId} in run ${response.approval.actionRunId}.`,
+        `${approval.automationId} will resume safely against the same deployed version.`,
         {audit: true},
       );
       await refreshFeed("approvals");
@@ -1244,23 +1346,25 @@
     const scope = currentScope();
     actionScopeEnvironment.textContent = scope.environment;
     actionScopeInstance.textContent = scope.instance;
-    actionScopeActor.textContent = scope.actor;
+    actionScopeActor.textContent = actorLabel(scope.actor);
+    actionScopeActor.title = scope.actor;
     if (action.kind === "rollback") {
       actionIconUse.setAttribute("href", "#icon-rollback");
-      actionTitle.textContent = "Roll back revision?";
-      actionMessage.textContent = `Werkt will make ${action.revisionId} active for ${action.automationId} and replace its effective triggers. Running jobs keep their pinned revision.`;
-      actionSubmit.textContent = "Roll back revision";
-      actionDismiss.textContent = "Keep current revision";
+      const version = revisionDisplayName(action.revisionId);
+      actionTitle.textContent = `Restore ${version}?`;
+      actionMessage.textContent = `Werkt will make the ${version} active for ${action.automationId} and restore its triggers. Work already running stays on the version it started with.`;
+      actionSubmit.textContent = "Restore version";
+      actionDismiss.textContent = "Keep current version";
     } else if (action.kind === "pause") {
       actionIconUse.setAttribute("href", "#icon-pause");
       actionTitle.textContent = `Pause ${action.automationId}?`;
-      actionMessage.textContent = "Schedule, webhook, email, and ntfy ingestion will stop. Queued and running jobs continue on their pinned revisions. Manual diagnostic runs remain available. When resumed, missed schedule intervals are not replayed.";
+      actionMessage.textContent = "New trigger events will stop. Work already queued or running will finish on the version it started with. Diagnostic runs remain available, and missed schedules are not replayed after resume.";
       actionSubmit.textContent = "Pause automation";
       actionDismiss.textContent = "Keep active";
     } else {
       actionIconUse.setAttribute("href", "#icon-stop");
       actionTitle.textContent = "Cancel deployment?";
-      actionMessage.textContent = `Werkt will stop ${action.deploymentId} at its current promotion step. Its source and diagnostics remain available for a retry.`;
+      actionMessage.textContent = "Werkt will stop this deployment at its current promotion step. Its package and diagnostics remain available for a retry.";
       actionSubmit.textContent = "Cancel deployment";
       actionDismiss.textContent = "Keep deployment running";
     }
@@ -1282,7 +1386,7 @@
           body: JSON.stringify({revisionId: action.revisionId}),
         });
         actionDialog.close();
-        showReceipt("Revision activated", `${action.automationId} now uses ${action.revisionId}. Running jobs kept their pinned revisions.`, {audit: true});
+        showReceipt("Version restored", `${action.automationId} now uses the version you selected. Work already running was not changed.`, {audit: true});
         await loadWorkspace({preserveSelection: true});
       } else if (action.kind === "pause") {
         const response = await updateAutomationEnabled(action.automationId, false);
@@ -1300,7 +1404,7 @@
         state.selectedDeployment = deployment;
         showReceipt(
           deployment.status === "cancelled" ? "Deployment cancelled" : "Deployment cancellation requested",
-          `${deployment.id} ${deployment.status === "cancelled" ? "stopped" : "is stopping at its current promotion step"}. Its source and diagnostics remain available.`,
+          `${deployment.automationId || "The package"} ${deployment.status === "cancelled" ? "stopped" : "is stopping at its current promotion step"}. Its source and diagnostics remain available.`,
           {audit: true},
         );
         await refreshDeploymentLists();
@@ -1328,7 +1432,9 @@
       });
       showReceipt(
         response.created ? "Retry queued" : "Existing retry opened",
-        `${response.deployment.id} retries the retained package from ${deploymentID}.`,
+        response.created
+          ? `${response.deployment.automationId || "The automation"} is retrying the retained package.`
+          : "Werkt opened the existing retry for this package.",
         {audit: response.created},
       );
       await refreshDeploymentLists();
@@ -1579,7 +1685,7 @@
       "automation.rolled_back": "Automation rolled back",
       "automation.paused": "Automation paused",
       "automation.resumed": "Automation resumed",
-      "run.queued_manually": "Manual run queued",
+      "run.queued_manually": "Diagnostic run queued",
     };
     return values[action] || String(action || "Activity").replaceAll(".", " ");
   }
@@ -1665,6 +1771,14 @@
     }
     const diagnosticRun = event.target.closest("[data-queue-diagnostic]");
     if (diagnosticRun && state.selectedRun) { openManualRun(diagnosticRun.dataset.queueDiagnostic, state.selectedRun.id); return; }
+    const copyValue = event.target.closest("[data-copy-value]");
+    if (copyValue) {
+      navigator.clipboard.writeText(copyValue.dataset.copyValue || "").then(
+        () => showToast("Copied to clipboard."),
+        () => showToast("Clipboard access was unavailable.", true),
+      );
+      return;
+    }
     const copyButton = event.target.closest("[data-copy]");
     if (copyButton && state.selectedRun) {
       const text = copyButton.dataset.copy === "logs" ? state.selectedRun.logs : prettyJSON(state.selectedRun.result);

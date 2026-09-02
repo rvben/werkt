@@ -59,7 +59,9 @@ func TestWorkspaceBrowserKeyboardFocusAndResponsiveModality(t *testing.T) {
 		"mobileSearchEscape",
 		"operatorScopeVisible",
 		"approvalFieldTyped",
-		"approvalTargetVisible",
+		"approvalTargetProtected",
+		"identifierHierarchy",
+		"diagnosticAdvancedClosed",
 		"runShortcutReviews",
 		"runTargetScoped",
 		"tableHeadersRetained",
@@ -119,8 +121,9 @@ func workspaceBrowserFixture(response http.ResponseWriter, request *http.Request
 	case "/api/v1/automations/test-automation":
 		writeBrowserJSON(response, `{
 			"id":"test-automation","project":"Operations","folder":"Tests","description":"Browser contract fixture","labels":[],"enabled":true,"activeRevisionId":"rev_test",
+			"latestRun":{"id":"run_test","status":"failed","createdAt":"2026-08-23T18:42:00Z"},
 			"manifest":{"runtime":{"language":"Go","image":"local"},"execution":{"concurrency":"forbid","timeout":"5m"}},
-			"triggers":[],"revisions":[{"id":"rev_test","contentHash":"sha256:test","createdAt":"2026-08-23T18:42:00Z","active":true}]
+			"triggers":[],"revisions":[{"id":"rev_test","contentHash":"sha256:test","createdAt":"2026-08-23T18:42:00Z","active":true,"provenance":{"artifactDigest":"sha256:artifact"}}]
 		}`)
 	case "/api/v1/runs":
 		writeBrowserJSON(response, `[{"id":"run_test","automationId":"test-automation","revisionId":"rev_test","eventId":"evt_test","status":"failed","attempt":2,"maxAttempts":2,"createdAt":"2026-08-23T18:42:00Z","startedAt":"2026-08-23T18:42:00Z","finishedAt":"2026-08-23T18:42:01Z","error":"fixture failure","logs":"fixture log"}]`)
@@ -165,14 +168,15 @@ const workspaceBrowserDriver = `
       results.logsDirect = document.querySelector('[data-diagnosis-tab="logs"]').getAttribute("aria-selected") === "true"
         && document.querySelector("#diagnosis-panel-logs").textContent.includes("fixture log");
       results.diagnosisRouted = new URL(location.href).searchParams.get("run") === "run_test" && new URL(location.href).searchParams.get("tab") === "logs";
-      results.operatorScopeVisible = document.querySelector("#operator-scope").textContent.includes("development") && document.querySelector("#operator-scope").textContent.includes("workspace:local");
+      results.operatorScopeVisible = document.querySelector("#operator-scope").textContent.includes("development") && document.querySelector("#operator-scope").textContent.includes("Local session");
       document.querySelector("[data-close-diagnosis]").click();
       document.querySelector('[data-view="approvals"]').click();
       await waitFor(() => document.querySelector("[data-approval]"));
       document.querySelector("[data-approval]").click();
       await waitFor(() => document.querySelector("#approval-dialog").open);
-      results.approvalTargetVisible = document.querySelector("#approval-scope-revision").textContent === "rev_test"
-        && document.querySelector("#approval-scope-automation").textContent === "test-automation";
+      results.approvalTargetProtected = document.querySelector("#approval-scope-revision").textContent === "rev_test"
+        && document.querySelector("#approval-scope-automation").textContent === "test-automation"
+        && document.querySelector("#approval-scope-revision").closest("details").open === false;
       results.approvalFieldTyped = document.querySelector('[data-approval-field="title"]') instanceof HTMLInputElement
         && document.querySelector('[data-resolve-approval="approve"]').textContent === "Publish";
       document.querySelector("#approval-dialog").close();
@@ -181,10 +185,17 @@ const workspaceBrowserDriver = `
       results.backCleared = !document.querySelector("#app-shell").classList.contains("has-selection") && location.hash === "";
       document.querySelector("[data-automation]").click();
       await waitFor(() => document.querySelector("[data-open-run]"));
+      results.identifierHierarchy = !document.querySelector(".inventory-item").textContent.includes("rev_test")
+        && document.querySelector(".automation-technical").open === false
+        && document.querySelector("[data-open-run]").textContent.includes("Test run")
+        && document.querySelector(".revision-table").textContent.includes("Current");
       document.dispatchEvent(new KeyboardEvent("keydown", {key: "r", bubbles: true}));
       await waitFor(() => document.querySelector("#run-dialog").open);
       results.runShortcutReviews = document.querySelector("#run-dialog").open;
+      results.diagnosticAdvancedClosed = document.querySelector(".run-advanced").open === false
+        && document.activeElement === document.querySelector('#run-form button[type="submit"]');
       results.runTargetScoped = document.querySelector("#run-target-environment").textContent === "development"
+        && document.querySelector("#run-target-version").textContent.includes("Deployed")
         && document.querySelector("#run-target-instance").textContent.length > 0
         && document.querySelector("#run-target-actor").textContent === "workspace:local";
       document.querySelector("#run-dialog").close();

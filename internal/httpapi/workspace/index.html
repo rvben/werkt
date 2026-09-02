@@ -166,12 +166,12 @@
       </button>
       <span class="dialog-symbol" aria-hidden="true"><svg class="icon"><use href="#icon-help"></use></svg></span>
       <h2 id="help-dialog-title">Operate from the keyboard</h2>
-      <p id="help-dialog-description">A compact operator guide for reading health, diagnosing failures, and intervening without losing revision truth.</p>
+      <p id="help-dialog-description">A compact guide to understanding what is healthy, what needs you, and how to intervene safely.</p>
       <div class="help-guides">
-        <section aria-labelledby="help-connect"><h3 id="help-connect" tabindex="-1">Connect and read health</h3><p>The connection status is live. “Needs attention” means the authoritative latest run failed; paused automations remain visible and manual diagnostic runs stay available.</p></section>
-        <section aria-labelledby="help-lifecycle"><h3 id="help-lifecycle" tabindex="-1">Intervene safely</h3><p>Pause stops new ingress while queued and running work continues. Resume starts from the next future schedule. Rollback changes the active revision, while running jobs keep their pinned revision.</p></section>
-        <section aria-labelledby="help-recovery"><h3 id="help-recovery" tabindex="-1">Diagnose and recover</h3><p>Start with the exact failure, then inspect logs or copy the diagnostic bundle. A diagnostic rerun shows and atomically pins its target revision before work is queued.</p></section>
-        <section aria-labelledby="help-history"><h3 id="help-history" tabindex="-1">Verify the outcome</h3><p>Receipts persist until dismissed. Use View audit to verify attributed lifecycle changes; history views load 100 records at a time and offer older pages when available.</p></section>
+        <section aria-labelledby="help-connect"><h3 id="help-connect" tabindex="-1">Read the workspace</h3><p>An automation listens for a trigger, starts a run, and records the outcome. “Needs attention” means its latest run failed; paused automations remain visible.</p></section>
+        <section aria-labelledby="help-lifecycle"><h3 id="help-lifecycle" tabindex="-1">Intervene safely</h3><p>Pause stops new events while work already underway finishes. Resume waits for the next event. Rollback restores an earlier deployed version without changing work already running.</p></section>
+        <section aria-labelledby="help-recovery"><h3 id="help-recovery" tabindex="-1">Diagnose and recover</h3><p>Start with the exact failure, then inspect logs or copy the diagnostic bundle. A diagnostic rerun confirms and keeps the same deployed version before work is queued.</p></section>
+        <section aria-labelledby="help-history"><h3 id="help-history" tabindex="-1">Verify the outcome</h3><p>Receipts stay visible until dismissed. Use View audit to confirm who changed what. Exact IDs, hashes, and provenance remain available under Technical details.</p></section>
       </div>
       <h3 class="shortcut-heading">Shortcuts</h3>
       <dl class="shortcut-list">
@@ -179,7 +179,7 @@
         <div><dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move through the inventory</dd></div>
         <div><dt><kbd>Enter</kbd></dt><dd>Open the focused automation</dd></div>
         <div><dt><kbd>Alt</kbd> <kbd>1–5</kbd></dt><dd>Open Automations, Approvals, Runs, Deployments, or Audit</dd></div>
-        <div><dt><kbd>R</kbd></dt><dd>Review a manual run for the selected automation</dd></div>
+        <div><dt><kbd>R</kbd></dt><dd>Review a diagnostic run for the selected automation</dd></div>
         <div><dt><kbd>L</kbd></dt><dd>Open logs for the diagnosed run</dd></div>
         <div><dt><kbd>⇧</kbd> <kbd>R</kbd></dt><dd>Refresh the workspace</dd></div>
         <div><dt><kbd>?</kbd></dt><dd>Open this help</dd></div>
@@ -194,27 +194,34 @@
       <button class="icon-button dialog-close" type="button" data-close-dialog="run" aria-label="Close run form">
         <svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg>
       </button>
-      <h2 id="run-dialog-title">Queue a manual run</h2>
-      <p id="run-dialog-description">Queue a synthetic <span class="mono">manual</span> event against the revision shown below. Werkt keeps the idempotency key with the audit trail.</p>
-      <dl class="run-target" id="run-target">
+      <span class="dialog-symbol" aria-hidden="true"><svg class="icon"><use href="#icon-play"></use></svg></span>
+      <h2 id="run-dialog-title">Run a diagnostic</h2>
+      <p id="run-dialog-description">Send one manual test event to the currently deployed version. Werkt records who started it and prevents accidental duplicates.</p>
+      <dl class="run-target run-target-summary" id="run-target">
         <dt>Automation</dt><dd class="mono" id="run-target-automation">Not selected</dd>
-        <dt>Revision</dt><dd class="mono" id="run-target-revision" tabindex="-1">Not selected</dd>
-        <dt>Lifecycle</dt><dd id="run-target-lifecycle">Not loaded</dd>
         <dt>Environment</dt><dd id="run-target-environment">Not loaded</dd>
-        <dt>Instance</dt><dd class="mono" id="run-target-instance">Not loaded</dd>
-        <dt>Attributed actor</dt><dd class="mono" id="run-target-actor">Not loaded</dd>
+        <dt>Version</dt><dd id="run-target-version">Not loaded</dd>
+        <dt>State</dt><dd id="run-target-lifecycle">Not loaded</dd>
       </dl>
-      <label for="run-payload">Event data</label>
-      <textarea id="run-payload" name="payload" rows="9" spellcheck="false" aria-describedby="run-error">{
+      <details class="technical-disclosure run-advanced">
+        <summary>Advanced event options</summary>
+        <p>Adjust the JSON only when the automation expects specific manual event data. The exact execution target is shown for troubleshooting.</p>
+        <label for="run-payload">Event data</label>
+        <textarea id="run-payload" name="payload" rows="7" spellcheck="false" aria-describedby="run-error">{
   "reason": "operator diagnostic"
 }</textarea>
-      <label for="run-idempotency">Idempotency key</label>
-      <input id="run-idempotency" name="idempotency" type="text" required maxlength="255" spellcheck="false" aria-describedby="run-error">
-      <p class="field-message" id="run-error" role="alert"></p>
+        <dl class="technical-facts">
+          <dt>Revision</dt><dd><code id="run-target-revision" tabindex="-1">Not selected</code></dd>
+          <dt>Instance</dt><dd><code id="run-target-instance">Not loaded</code></dd>
+          <dt>Attributed actor</dt><dd><code id="run-target-actor">Not loaded</code></dd>
+          <dt>Request key</dt><dd><code id="run-idempotency">Generated when opened</code></dd>
+        </dl>
+      </details>
+      <p class="field-message" id="run-error" role="alert" tabindex="-1"></p>
       <div class="dialog-actions">
         <button class="button button-quiet" type="button" data-close-dialog="run">Cancel</button>
         <button class="button button-primary" type="submit">
-          <svg class="icon" aria-hidden="true"><use href="#icon-play"></use></svg>Queue run
+          <svg class="icon" aria-hidden="true"><use href="#icon-play"></use></svg>Run diagnostic
         </button>
       </div>
     </form>
@@ -251,10 +258,13 @@
       <p id="approval-dialog-description"></p>
       <dl class="approval-scope">
         <dt>Automation</dt><dd class="mono" id="approval-scope-automation">Not loaded</dd>
-        <dt>Revision</dt><dd class="mono" id="approval-scope-revision">Not loaded</dd>
         <dt>Requested</dt><dd class="tabular" id="approval-scope-requested">Not loaded</dd>
         <dt>Expires</dt><dd class="tabular" id="approval-scope-expires">Not loaded</dd>
       </dl>
+      <details class="technical-disclosure approval-technical">
+        <summary>Technical target</summary>
+        <dl class="technical-facts"><dt>Revision</dt><dd><code id="approval-scope-revision">Not loaded</code></dd></dl>
+      </details>
       <div id="approval-fields"></div>
       <p class="field-message" id="approval-error" role="alert"></p>
       <div class="dialog-actions approval-actions" id="approval-actions"></div>

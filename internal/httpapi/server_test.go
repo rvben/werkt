@@ -447,6 +447,9 @@ func TestWorkspaceClientKeepsOperationalStateAuthoritative(t *testing.T) {
 		"records loaded",
 		"window.addEventListener(\"popstate\"",
 		"data-relative-time",
+		"runHistorySummary",
+		"Technical details",
+		"Test run",
 	} {
 		if !strings.Contains(string(script), marker) {
 			t.Errorf("workspace client omitted operational-state contract %q", marker)
@@ -457,7 +460,7 @@ func TestWorkspaceClientKeepsOperationalStateAuthoritative(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, marker := range []string{`data-enabled-filter="failed"`, `aria-pressed="true"`, `id="inventory-results"`, `data-view="approvals"`, `id="approval-dialog"`} {
+	for _, marker := range []string{`data-enabled-filter="failed"`, `aria-pressed="true"`, `id="inventory-results"`, `data-view="approvals"`, `id="approval-dialog"`, `Advanced event options`, `id="run-target-version"`} {
 		if !strings.Contains(string(markup), marker) {
 			t.Errorf("workspace markup omitted inventory-state contract %q", marker)
 		}
