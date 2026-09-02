@@ -16,6 +16,7 @@ import (
 var destinationIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 var supportedEvents = map[string]bool{
+	"notification.test":  true,
 	"approval.requested": true,
 	"approval.expiring":  true,
 	"approval.resolved":  true,
@@ -40,6 +41,10 @@ type Destination struct {
 	AccessTokenSecret   string `json:"accessTokenSecret,omitempty"`
 	DeviceID            string `json:"deviceId,omitempty"`
 	ChannelTag          string `json:"channelTag,omitempty"`
+	AppTokenSecret      string `json:"appTokenSecret,omitempty"`
+	UserKeySecret       string `json:"userKeySecret,omitempty"`
+	Device              string `json:"device,omitempty"`
+	Sound               string `json:"sound,omitempty"`
 	URL                 string `json:"url,omitempty"`
 	SigningSecret       string `json:"signingSecret,omitempty"`
 	AuthorizationSecret string `json:"authorizationSecret,omitempty"`
@@ -156,6 +161,18 @@ func (d Destination) validate() error {
 		if d.DeviceID != "" && d.ChannelTag != "" {
 			return errors.New("deviceId and channelTag are mutually exclusive")
 		}
+	case "pushover":
+		if field := d.unexpectedField("server", "appTokenSecret", "userKeySecret", "device", "sound"); field != "" {
+			return fmt.Errorf("field %s is not valid for pushover", field)
+		}
+		if strings.TrimSpace(d.AppTokenSecret) == "" || strings.TrimSpace(d.UserKeySecret) == "" {
+			return errors.New("appTokenSecret and userKeySecret are required")
+		}
+		if d.Server != "" {
+			if err := validateBaseURL(d.Server); err != nil {
+				return fmt.Errorf("server: %w", err)
+			}
+		}
 	case "webhook":
 		if field := d.unexpectedField("url", "signingSecret", "authorizationSecret"); field != "" {
 			return fmt.Errorf("field %s is not valid for webhook", field)
@@ -213,6 +230,8 @@ func (d Destination) unexpectedField(allowed ...string) string {
 		{"basicSecret", d.BasicSecret}, {"botTokenSecret", d.BotTokenSecret},
 		{"chatId", d.ChatID}, {"accessTokenSecret", d.AccessTokenSecret},
 		{"deviceId", d.DeviceID}, {"channelTag", d.ChannelTag}, {"url", d.URL},
+		{"appTokenSecret", d.AppTokenSecret}, {"userKeySecret", d.UserKeySecret},
+		{"device", d.Device}, {"sound", d.Sound},
 		{"signingSecret", d.SigningSecret}, {"authorizationSecret", d.AuthorizationSecret},
 	}
 	for _, field := range configured {

@@ -135,4 +135,27 @@ func TestNotificationOutboxIntegration(t *testing.T) {
 	if deliveredAudit != 1 {
 		t.Fatalf("delivered audit count=%d", deliveredAudit)
 	}
+	testEventID, err := store.EnqueueNotificationTest(ctx, "operator:test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var testEventType, testEventStatus string
+	if err := store.pool.QueryRow(ctx, `
+		SELECT event_type, status FROM notification_events WHERE id = $1`, testEventID,
+	).Scan(&testEventType, &testEventStatus); err != nil {
+		t.Fatal(err)
+	}
+	if testEventType != "notification.test" || testEventStatus != "pending" {
+		t.Fatalf("test notification type=%q status=%q", testEventType, testEventStatus)
+	}
+	var testAudit int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*) FROM audit_events
+		WHERE action = 'notification.test_enqueued' AND actor = 'operator:test'`,
+	).Scan(&testAudit); err != nil {
+		t.Fatal(err)
+	}
+	if testAudit != 1 {
+		t.Fatalf("test notification audit count=%d", testAudit)
+	}
 }

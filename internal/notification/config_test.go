@@ -11,8 +11,10 @@ func TestConfigRoutesFanOutOnceAndRespectAutomationScope(t *testing.T) {
 		Destinations: []Destination{
 			{ID: "phone", Provider: "ntfy", Server: "https://notify.example", Topic: "ops"},
 			{ID: "chat", Provider: "telegram", BotTokenSecret: "notifications/telegram", ChatID: "123"},
+			{ID: "push", Provider: "pushover", AppTokenSecret: "notifications/pushover-app", UserKeySecret: "notifications/pushover-user"},
 		},
 		Routes: []Route{
+			{Events: []string{"notification.test"}, Destinations: []string{"push"}},
 			{Events: []string{"approval.requested"}, Destinations: []string{"phone"}},
 			{Events: []string{"approval.requested"}, Automations: []string{"sermon"}, Destinations: []string{"phone", "chat"}},
 		},
@@ -37,6 +39,8 @@ func TestConfigRejectsUnsafeOrAmbiguousDestinations(t *testing.T) {
 		"public cleartext":     {ID: "ops", Provider: "webhook", URL: "http://example.test/hook"},
 		"both ntfy auth modes": {ID: "ops", Provider: "ntfy", Server: "https://notify.example", Topic: "ops", TokenSecret: "token", BasicSecret: "basic"},
 		"provider field mixup": {ID: "ops", Provider: "ntfy", Server: "https://notify.example", Topic: "ops", BotTokenSecret: "token"},
+		"pushover missing key": {ID: "ops", Provider: "pushover", AppTokenSecret: "app-token"},
+		"pushover field mixup": {ID: "ops", Provider: "pushover", AppTokenSecret: "app-token", UserKeySecret: "user-key", Topic: "ops"},
 		"unknown provider":     {ID: "ops", Provider: "smtp"},
 	} {
 		t.Run(name, func(t *testing.T) {

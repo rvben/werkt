@@ -7,14 +7,15 @@ automation transaction.
 
 Supported events:
 
+- `notification.test` (operator-generated with `werkt notification test`)
 - `approval.requested`
 - `approval.expiring`
 - `approval.resolved`
 - `run.failed`
 
-Supported providers are ntfy, Telegram Bot API, Pushbullet, and a signed generic
-webhook. Delivery is at least once: every destination receives a stable delivery
-ID, retries use exponential backoff, ntfy receives that ID as
+Supported providers are ntfy, Telegram Bot API, Pushbullet, Pushover, and a
+signed generic webhook. Delivery is at least once: every destination receives a
+stable delivery ID, retries use exponential backoff, ntfy receives that ID as
 `X-Sequence-ID`, and webhooks receive it as both `Idempotency-Key` and
 `X-Werkt-Delivery`.
 Providers without a deduplication primitive can occasionally show a duplicate
@@ -49,6 +50,12 @@ values.
       "accessTokenSecret": "notifications/pushbullet/access-token"
     },
     {
+      "id": "operator-pushover",
+      "provider": "pushover",
+      "appTokenSecret": "notifications/pushover/app-token",
+      "userKeySecret": "notifications/pushover/user-key"
+    },
+    {
       "id": "incident-router",
       "provider": "webhook",
       "url": "https://events.example.com/werkt",
@@ -77,8 +84,14 @@ Store provider credentials with `werkt secret set`. ntfy accepts either
 `tokenSecret` for bearer authentication or `basicSecret` for a vault value in
 `username:password` form. Telegram requires `botTokenSecret` and `chatId`.
 Pushbullet requires `accessTokenSecret` and can optionally target one `deviceId`
-or `channelTag`. A webhook may use `authorizationSecret`, `signingSecret`, or
-both. Signed webhooks receive an HMAC-SHA256 signature over
+or `channelTag`. Pushover requires `appTokenSecret` and `userKeySecret`; optional
+`device` and `sound` fields narrow the target or select a sound. Its optional
+`server` field supports a trusted egress proxy and otherwise defaults to
+`https://api.pushover.net`. Pushover receives normal priority for new approval
+requests and high priority for expiry warnings and failed runs. Approval expiry
+is also sent as a TTL, preventing stale requests from appearing after they can
+no longer be resolved. A webhook may use `authorizationSecret`, `signingSecret`,
+or both. Signed webhooks receive an HMAC-SHA256 signature over
 `<timestamp>.<delivery-id>.<raw-body>`.
 
 `WERKT_PUBLIC_URL` controls links in messages. Approval messages always open the
@@ -91,3 +104,8 @@ Delivery results are recorded as `notification.delivered` and
 `notification.failed` audit events. Payloads intentionally omit approval field
 values, runtime logs, and exception text. Provider credentials are resolved
 only immediately before a request and are never stored in the outbox.
+
+After configuring a route for `notification.test`, exercise the complete
+durable path with `werkt notification test`. It queues an ordinary outbox event
+and records `notification.test_enqueued`; the worker's usual delivered or
+failed audit event is the authoritative result.

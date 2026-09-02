@@ -54,6 +54,33 @@ func enqueueNotificationEvent(ctx context.Context, tx pgx.Tx, eventType, automat
 	return err
 }
 
+// EnqueueNotificationTest creates a real durable event so operators can verify
+// the configured routes, vault resolution, network policy, provider contract,
+// retries, and audit trail as one path.
+func (s *Store) EnqueueNotificationTest(ctx context.Context, actor string) (string, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	eventID := newID("notification")
+	subjectID := newID("test")
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO notification_events (id, event_type, automation_id, subject_id, payload)
+		VALUES ($1, 'notification.test', 'system', $2, '{}'::jsonb)`, eventID, subjectID); err != nil {
+		return "", err
+	}
+	if err := insertAuditEvent(ctx, tx, "notification.test_enqueued", "", actor, map[string]any{
+		"eventId": eventID,
+	}); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return eventID, nil
+}
+
 // AcquireNotificationEvent locks one unexpanded event. Expansion snapshots the
 // currently configured routes into durable deliveries before the event is
 // acknowledged, so restarts and later route changes cannot lose or redirect it.

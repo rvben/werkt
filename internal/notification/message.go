@@ -9,15 +9,16 @@ import (
 )
 
 type Message struct {
-	EventType    string    `json:"eventType"`
-	AutomationID string    `json:"automationId"`
-	SubjectID    string    `json:"subjectId"`
-	Title        string    `json:"title"`
-	Body         string    `json:"body"`
-	URL          string    `json:"url"`
-	Priority     string    `json:"priority"`
-	Tags         []string  `json:"tags"`
-	OccurredAt   time.Time `json:"occurredAt"`
+	EventType    string     `json:"eventType"`
+	AutomationID string     `json:"automationId"`
+	SubjectID    string     `json:"subjectId"`
+	Title        string     `json:"title"`
+	Body         string     `json:"body"`
+	URL          string     `json:"url"`
+	Priority     string     `json:"priority"`
+	Tags         []string   `json:"tags"`
+	OccurredAt   time.Time  `json:"occurredAt"`
+	ExpiresAt    *time.Time `json:"expiresAt,omitempty"`
 }
 
 func Render(eventType, automationID, subjectID string, payload json.RawMessage, publicURL string, occurredAt time.Time) (Message, error) {
@@ -39,6 +40,11 @@ func Render(eventType, automationID, subjectID string, payload json.RawMessage, 
 		Priority: "default", OccurredAt: occurredAt.UTC(),
 	}
 	switch eventType {
+	case "notification.test":
+		message.Title = "Werkt notification test"
+		message.Body = "The durable notification delivery path is working."
+		message.URL = strings.TrimRight(publicURL, "/") + "/app/"
+		message.Tags = []string{"white_check_mark"}
 	case "approval.requested":
 		message.Title = "Approval needed: " + fallback(data.Title, automationID)
 		message.Body = compactBody(data.Description, "Open Werkt to review this request.")
@@ -46,8 +52,12 @@ func Render(eventType, automationID, subjectID string, payload json.RawMessage, 
 			message.Body += " Expires " + data.ExpiresAt.UTC().Format(time.RFC3339) + "."
 		}
 		message.URL = approvalURL(publicURL)
-		message.Priority = "high"
+		message.Priority = "default"
 		message.Tags = []string{"approval", "inbox_tray"}
+		if !data.ExpiresAt.IsZero() {
+			expiresAt := data.ExpiresAt.UTC()
+			message.ExpiresAt = &expiresAt
+		}
 	case "approval.expiring":
 		message.Title = "Approval expiring: " + fallback(data.Title, automationID)
 		message.Body = "This request still needs a decision."
@@ -57,6 +67,10 @@ func Render(eventType, automationID, subjectID string, payload json.RawMessage, 
 		message.URL = approvalURL(publicURL)
 		message.Priority = "high"
 		message.Tags = []string{"approval", "hourglass_flowing_sand"}
+		if !data.ExpiresAt.IsZero() {
+			expiresAt := data.ExpiresAt.UTC()
+			message.ExpiresAt = &expiresAt
+		}
 	case "approval.resolved":
 		message.Title = "Approval " + fallback(data.Status, "resolved") + ": " + fallback(data.Title, automationID)
 		message.Body = "The decision was recorded in Werkt."

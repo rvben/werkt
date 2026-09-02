@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,10 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 
 func response(status int) *http.Response {
 	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}
+}
+
+func responseBody(status int, body string) *http.Response {
+	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
 }
 
 func sampleMessage() Message {
@@ -87,6 +92,60 @@ func TestSenderBuildsTelegramAndPushbulletContracts(t *testing.T) {
 	}
 	if _, err := sender.Send(context.Background(), Destination{ID: "push", Provider: "pushbullet", AccessTokenSecret: "pushbullet/token"}, sampleMessage(), "delivery_2"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSenderBuildsPushoverContract(t *testing.T) {
+	expiresAt := time.Now().Add(30 * time.Minute)
+	message := sampleMessage()
+	message.Priority = "default"
+	message.ExpiresAt = &expiresAt
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != "https://pushover-proxy.example/1/messages.json" {
+			t.Fatalf("request URL = %s", request.URL)
+		}
+		if request.Header.Get("Content-Type") != "application/x-www-form-urlencoded" || request.UserAgent() != userAgent {
+			t.Fatalf("headers = %#v", request.Header)
+		}
+		if err := request.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if request.Form.Get("token") != "app-token" || request.Form.Get("user") != "user-key" {
+			t.Fatalf("credentials were not encoded in the form")
+		}
+		if request.Form.Get("title") != message.Title || request.Form.Get("message") != message.Body || request.Form.Get("priority") != "0" {
+			t.Fatalf("form = %#v", request.Form)
+		}
+		if request.Form.Get("url") != message.URL || request.Form.Get("url_title") != "Open in Werkt" || request.Form.Get("sound") != "pushover" {
+			t.Fatalf("form = %#v", request.Form)
+		}
+		ttl, err := strconv.Atoi(request.Form.Get("ttl"))
+		if err != nil || ttl < 1700 || ttl > 1800 {
+			t.Fatalf("ttl = %q", request.Form.Get("ttl"))
+		}
+		return responseBody(http.StatusOK, `{"status":1,"request":"fixture"}`), nil
+	})}
+	sender := NewSenderWithClient(staticSecrets{"pushover/app": "app-token", "pushover/user": "user-key"}, client)
+	status, err := sender.Send(context.Background(), Destination{
+		ID: "phone", Provider: "pushover", Server: "https://pushover-proxy.example",
+		AppTokenSecret: "pushover/app", UserKeySecret: "pushover/user", Sound: "pushover",
+	}, message, "delivery_3")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("Send() status=%d err=%v", status, err)
+	}
+}
+
+func TestSenderRejectsPushoverFailureInSuccessfulHTTPResponse(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return responseBody(http.StatusOK, `{"status":0,"errors":["invalid"]}`), nil
+	})}
+	sender := NewSenderWithClient(staticSecrets{"pushover/app": "app-token", "pushover/user": "user-key"}, client)
+	_, err := sender.Send(context.Background(), Destination{
+		ID: "phone", Provider: "pushover", AppTokenSecret: "pushover/app", UserKeySecret: "pushover/user",
+	}, sampleMessage(), "delivery_4")
+	var deliveryErr *DeliveryError
+	if !errors.As(err, &deliveryErr) || deliveryErr.Retryable {
+		t.Fatalf("Send() error = %#v", err)
 	}
 }
 

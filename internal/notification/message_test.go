@@ -16,7 +16,7 @@ func TestRenderApprovalUsesWorkspaceInboxAndBoundsDescription(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if message.Title != "Approval needed: Publish Sunday sermon" || message.Priority != "high" {
+	if message.Title != "Approval needed: Publish Sunday sermon" || message.Priority != "default" {
 		t.Fatalf("message = %#v", message)
 	}
 	if message.URL != "https://werkt.example/app/?approvalStatus=pending&view=approvals" {
@@ -24,6 +24,19 @@ func TestRenderApprovalUsesWorkspaceInboxAndBoundsDescription(t *testing.T) {
 	}
 	if len([]rune(message.Body)) > 550 || !strings.Contains(message.Body, "Expires") {
 		t.Fatalf("body = %q", message.Body)
+	}
+	if message.ExpiresAt == nil || !message.ExpiresAt.Equal(time.Date(2026, 9, 8, 20, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expiresAt = %v", message.ExpiresAt)
+	}
+}
+
+func TestRenderNotificationTest(t *testing.T) {
+	message, err := Render("notification.test", "system", "test_1", json.RawMessage(`{}`), "https://werkt.example/", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.Title != "Werkt notification test" || message.Priority != "default" || message.URL != "https://werkt.example/app/" {
+		t.Fatalf("message = %#v", message)
 	}
 }
 

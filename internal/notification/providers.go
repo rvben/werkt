@@ -61,6 +61,8 @@ func (s *Sender) Send(ctx context.Context, destination Destination, message Mess
 		request, err = telegramRequest(ctx, destination, message, secrets)
 	case "pushbullet":
 		request, err = pushbulletRequest(ctx, destination, message, secrets)
+	case "pushover":
+		request, err = pushoverRequest(ctx, destination, message, secrets)
 	case "webhook":
 		request, err = webhookRequest(ctx, destination, message, deliveryID, secrets)
 	default:
@@ -77,8 +79,16 @@ func (s *Sender) Send(ctx context.Context, destination Destination, message Mess
 		return 0, &DeliveryError{Message: destination.Provider + " notification request failed", Retryable: true}
 	}
 	defer response.Body.Close() //nolint:errcheck
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+	responseBody, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
+		if destination.Provider == "pushover" {
+			var result struct {
+				Status int `json:"status"`
+			}
+			if json.Unmarshal(responseBody, &result) != nil || result.Status != 1 {
+				return response.StatusCode, &DeliveryError{Message: "pushover notification was not accepted", Retryable: false}
+			}
+		}
 		return response.StatusCode, nil
 	}
 	retryable := response.StatusCode == http.StatusRequestTimeout || response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500
@@ -89,7 +99,7 @@ func (s *Sender) Send(ctx context.Context, destination Destination, message Mess
 }
 
 func (d Destination) secretNames() []string {
-	values := []string{d.TokenSecret, d.BasicSecret, d.BotTokenSecret, d.AccessTokenSecret, d.SigningSecret, d.AuthorizationSecret}
+	values := []string{d.TokenSecret, d.BasicSecret, d.BotTokenSecret, d.AccessTokenSecret, d.AppTokenSecret, d.UserKeySecret, d.SigningSecret, d.AuthorizationSecret}
 	result := make([]string, 0, len(values))
 	seen := make(map[string]bool)
 	for _, value := range values {
@@ -177,6 +187,59 @@ func pushbulletRequest(ctx context.Context, destination Destination, message Mes
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Access-Token", token)
 	return request, nil
+}
+
+func pushoverRequest(ctx context.Context, destination Destination, message Message, secrets map[string]string) (*http.Request, error) {
+	appToken, err := requiredSecret(secrets, destination.AppTokenSecret)
+	if err != nil {
+		return nil, err
+	}
+	userKey, err := requiredSecret(secrets, destination.UserKeySecret)
+	if err != nil {
+		return nil, err
+	}
+	values := url.Values{
+		"token":     {appToken},
+		"user":      {userKey},
+		"title":     {message.Title},
+		"message":   {message.Body},
+		"priority":  {pushoverPriority(message.Priority)},
+		"timestamp": {strconv.FormatInt(message.OccurredAt.UTC().Unix(), 10)},
+	}
+	if message.URL != "" {
+		values.Set("url", message.URL)
+		values.Set("url_title", "Open in Werkt")
+	}
+	if destination.Device != "" {
+		values.Set("device", destination.Device)
+	}
+	if destination.Sound != "" {
+		values.Set("sound", destination.Sound)
+	}
+	if message.ExpiresAt != nil {
+		ttl := int(time.Until(*message.ExpiresAt).Seconds())
+		if ttl <= 0 {
+			return nil, errors.New("pushover notification has already expired")
+		}
+		values.Set("ttl", strconv.Itoa(ttl))
+	}
+	server := destination.Server
+	if server == "" {
+		server = "https://api.pushover.net"
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(server, "/")+"/1/messages.json", strings.NewReader(values.Encode()))
+	if err != nil {
+		return nil, errors.New("create pushover request")
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return request, nil
+}
+
+func pushoverPriority(priority string) string {
+	if priority == "high" {
+		return "1"
+	}
+	return "0"
 }
 
 func webhookRequest(ctx context.Context, destination Destination, message Message, deliveryID string, secrets map[string]string) (*http.Request, error) {

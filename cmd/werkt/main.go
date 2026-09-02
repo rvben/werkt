@@ -55,6 +55,8 @@ func run(arguments []string) error {
 		return retentionCommand(arguments[1:])
 	case "secret":
 		return secretCommand(arguments[1:])
+	case "notification":
+		return notificationCommand(arguments[1:])
 	case "recovery":
 		return recoveryCommand(arguments[1:])
 	case "serve":
@@ -365,6 +367,25 @@ func secretCommand(arguments []string) error {
 	}
 }
 
+func notificationCommand(arguments []string) error {
+	if len(arguments) != 1 || arguments[0] != "test" {
+		return errors.New("usage: werkt notification test")
+	}
+	configuration := config.Load()
+	ctx, cancel := context.WithTimeout(context.Background(), configuration.DeployTimeout)
+	defer cancel()
+	store, err := openStore(ctx, configuration)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	eventID, err := store.EnqueueNotificationTest(ctx, "cli")
+	if err != nil {
+		return err
+	}
+	return printJSON(map[string]any{"eventId": eventID, "status": "queued"})
+}
+
 func recoveryCommand(arguments []string) error {
 	if len(arguments) != 1 || arguments[0] != "verify" {
 		return errors.New("usage: werkt recovery verify")
@@ -658,10 +679,11 @@ func usage() {
   %s rollback AUTOMATION_ID REVISION_ID
   %s retention plan|get|apply [PLAN_ID]
   %s secret list|get|set|delete [NAME]
+  %s notification test
   %s recovery verify
   %s serve [-workers N]
   %s automations
   %s runs [-limit N]
   %s version
-	`, executable, executable, executable, executable, executable, executable, executable, executable, executable, executable, executable)
+	`, executable, executable, executable, executable, executable, executable, executable, executable, executable, executable, executable, executable)
 }

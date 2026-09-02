@@ -21,7 +21,7 @@ This is an executable MVP, not yet a production sandbox.
 - Bearer-protected management API for external agents and operators
 - Responsive management workspace at `/app/`, backed only by that public API
 - Filtered inventory, deployment progress, automation detail, pause/resume, manual runs, and audit history
-- Durable approval and failure notifications through ntfy, Telegram, Pushbullet, or signed webhooks
+- Durable approval and failure notifications through ntfy, Telegram, Pushbullet, Pushover, or signed webhooks
 - AES-256-GCM secret vault with safe rotation, revision bindings, and runtime log redaction
 - Ed25519-signed artifact provenance verified before execution, reuse, and rollback
 - Exact `runtime.tools` environments prepared with mise into immutable local Husker images
