@@ -1791,17 +1791,48 @@ func (s *Store) ListRunSummariesPage(ctx context.Context, automationID, status s
 
 func (s *Store) GetRun(ctx context.Context, runID string) (domain.Run, error) {
 	var item domain.Run
+	var eventJSON []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, automation_id, revision_id, event_id, status, attempt, max_attempts,
-			created_at, started_at, finished_at, logs, error, result
-		FROM runs WHERE id = $1`, runID).Scan(
+		SELECT r.id, r.automation_id, r.revision_id, r.event_id, r.status, r.attempt, r.max_attempts,
+			r.created_at, r.started_at, r.finished_at, r.logs, r.error, r.result, e.envelope
+		FROM runs r JOIN events e ON e.id = r.event_id WHERE r.id = $1`, runID).Scan(
 		&item.ID, &item.AutomationID, &item.RevisionID, &item.EventID, &item.Status,
 		&item.Attempt, &item.MaxAttempts, &item.CreatedAt, &item.StartedAt,
-		&item.FinishedAt, &item.Logs, &item.Error, &item.Result)
+		&item.FinishedAt, &item.Logs, &item.Error, &item.Result, &eventJSON)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Run{}, ErrRunNotFound
 	}
-	return item, err
+	if err != nil {
+		return domain.Run{}, err
+	}
+	var event domain.EventEnvelope
+	if err := json.Unmarshal(eventJSON, &event); err != nil {
+		return domain.Run{}, err
+	}
+	item.Event = &domain.RunEvent{
+		ID:         event.ID,
+		OccurredAt: event.OccurredAt,
+		ReceivedAt: event.ReceivedAt,
+		Trigger:    event.Trigger,
+		Metadata:   runEventMetadata(event.Metadata),
+	}
+	return item, nil
+}
+
+func runEventMetadata(metadata map[string]any) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	value := make(map[string]any)
+	for _, key := range []string{"source", "actor", "approvalId", "parentRunId", "continuationKey"} {
+		if item, exists := metadata[key]; exists {
+			value[key] = item
+		}
+	}
+	if len(value) == 0 {
+		return nil
+	}
+	return value
 }
 
 func (s *Store) ListAuditEvents(ctx context.Context, automationID string, limit int) ([]AuditEvent, error) {
