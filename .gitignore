@@ -8,3 +8,6 @@
 **/target/
 *.log
 .public-safety-denylist
+/DESIGN.md
+/.impeccable/
+/reports/
