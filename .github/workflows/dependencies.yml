@@ -1,0 +1,34 @@
+name: Dependency health
+
+on:
+  schedule:
+    - cron: "14 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  packages: read
+  pull-requests: read
+
+jobs:
+  update:
+    uses: rvben/upd/.github/workflows/dependency-health.yml@ecb605d32c4edc8dee4091aeb30b3d37ebdd290a # v0.10.0
+    with:
+      langs: go,rust,python,actions
+      lock: true
+      min-age: 7d
+      max-bump: minor
+      prepare-command: >-
+        rustup toolchain install stable --profile minimal --component clippy,rustfmt &&
+        rustup default stable
+      validation-command: >-
+        ./scripts/check-workflow-security.sh &&
+        go vet ./... &&
+        go test ./... -count=1 &&
+        cargo test --manifest-path sdk/rust/Cargo.toml --locked &&
+        cargo test --manifest-path examples/rust-hello/Cargo.toml --locked &&
+        python3 -m compileall sdk/python
+      fail-on-blocked: false
+      branch: deps/upd
+      commit-message: "chore(deps): weekly dependency update"
