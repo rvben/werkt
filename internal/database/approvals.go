@@ -166,6 +166,12 @@ func (s *Store) ResolveApproval(ctx context.Context, approvalID, idempotencyKey,
 	if err := insertAuditEvent(ctx, tx, "approval."+status, approval.AutomationID, actor, map[string]any{"approvalId": approval.ID, "runId": runID, "action": action}); err != nil {
 		return domain.Approval{}, false, err
 	}
+	if err := enqueueNotificationEvent(ctx, tx, "approval.resolved", approval.AutomationID, approval.ID, map[string]any{
+		"approvalId": approval.ID, "title": approval.Title, "status": status,
+		"resolvedBy": actor, "actionRunId": runID,
+	}); err != nil {
+		return domain.Approval{}, false, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.Approval{}, false, err
 	}

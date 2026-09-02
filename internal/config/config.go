@@ -65,6 +65,11 @@ type Config struct {
 	HuskerMiseVersion        string
 	HuskerMiseDigest         string
 	HuskerToolPrepareTimeout time.Duration
+	PublicURL                string
+	NotificationsFile        string
+	NotificationsJSON        string
+	NotificationPoll         time.Duration
+	NotificationExpiry       time.Duration
 }
 
 func Load() Config {
@@ -115,6 +120,11 @@ func Load() Config {
 		HuskerMiseVersion:        os.Getenv("WERKT_HUSKER_MISE_VERSION"),
 		HuskerMiseDigest:         os.Getenv("WERKT_HUSKER_MISE_DIGEST"),
 		HuskerToolPrepareTimeout: durationEnv("WERKT_HUSKER_TOOL_PREPARE_TIMEOUT", 20*time.Minute),
+		PublicURL:                env("WERKT_PUBLIC_URL", env("WERKT_API_URL", "http://127.0.0.1:8080")),
+		NotificationsFile:        os.Getenv("WERKT_NOTIFICATIONS_FILE"),
+		NotificationsJSON:        os.Getenv("WERKT_NOTIFICATIONS_JSON"),
+		NotificationPoll:         durationEnv("WERKT_NOTIFICATION_POLL", time.Second),
+		NotificationExpiry:       durationEnv("WERKT_NOTIFICATION_EXPIRY_WARNING", 24*time.Hour),
 	}
 }
 

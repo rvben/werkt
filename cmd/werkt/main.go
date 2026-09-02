@@ -22,6 +22,7 @@ import (
 	"github.com/rvben/werkt/internal/httpapi"
 	"github.com/rvben/werkt/internal/managementclient"
 	"github.com/rvben/werkt/internal/manifest"
+	"github.com/rvben/werkt/internal/notification"
 	"github.com/rvben/werkt/internal/packageio"
 	"github.com/rvben/werkt/internal/provenance"
 	"github.com/rvben/werkt/internal/runner"
@@ -424,6 +425,10 @@ func serve(arguments []string) error {
 	if err != nil {
 		return fmt.Errorf("configure secret vault: %w", err)
 	}
+	notificationConfig, err := notification.Load(configuration.NotificationsFile, configuration.NotificationsJSON)
+	if err != nil {
+		return fmt.Errorf("configure notifications: %w", err)
+	}
 	custodian := service.NewArtifactCustodian(store, attestor)
 	adopted, err := custodian.AdoptLegacy(ctx)
 	if err != nil {
@@ -462,6 +467,11 @@ func serve(arguments []string) error {
 	go service.NewDeploymentWorker(store, deployer, deploymentWorkerID, configuration.DeploymentPoll).Run(ctx)
 	go service.NewScheduler(store, configuration.SchedulerPoll).Run(ctx)
 	go service.NewNtfyReconciler(store, secretResolver).Run(ctx)
+	notificationWorkerID := fmt.Sprintf("%s-%d-notifications", hostname, os.Getpid())
+	go service.NewNotificationWorker(
+		store, notificationConfig, notification.NewSender(vault), configuration.PublicURL,
+		notificationWorkerID, configuration.NotificationPoll, configuration.NotificationExpiry,
+	).Run(ctx)
 
 	managementTokens := []string{
 		configuration.ManagementToken,

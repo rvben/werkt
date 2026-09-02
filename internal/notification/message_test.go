@@ -1,0 +1,39 @@
+package notification
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestRenderApprovalUsesWorkspaceInboxAndBoundsDescription(t *testing.T) {
+	payload, _ := json.Marshal(map[string]any{
+		"title": "Publish Sunday sermon", "description": strings.Repeat("evidence ", 100),
+		"expiresAt": time.Date(2026, 9, 8, 20, 0, 0, 0, time.UTC),
+	})
+	message, err := Render("approval.requested", "sermon-onliner", "approval_1", payload, "https://werkt.example/", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.Title != "Approval needed: Publish Sunday sermon" || message.Priority != "high" {
+		t.Fatalf("message = %#v", message)
+	}
+	if message.URL != "https://werkt.example/app/?approvalStatus=pending&view=approvals" {
+		t.Fatalf("url = %q", message.URL)
+	}
+	if len([]rune(message.Body)) > 550 || !strings.Contains(message.Body, "Expires") {
+		t.Fatalf("body = %q", message.Body)
+	}
+}
+
+func TestRenderRunFailureDoesNotExposeRuntimeError(t *testing.T) {
+	payload := json.RawMessage(`{"runId":"run_1","attempts":3,"error":"secret should never be here"}`)
+	message, err := Render("run.failed", "backup", "run_1", payload, "https://werkt.example", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(message.Body, "secret") || !strings.Contains(message.URL, "run=run_1") {
+		t.Fatalf("message = %#v", message)
+	}
+}

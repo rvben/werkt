@@ -48,6 +48,7 @@ var (
 	ErrApprovalResolved              = errors.New("approval is already resolved")
 	ErrApprovalExpired               = errors.New("approval has expired")
 	ErrApprovalInvalidResponse       = errors.New("approval response is invalid")
+	ErrNotificationLeaseLost         = errors.New("notification delivery lease ownership was lost")
 )
 
 //go:embed migrations/*.sql
@@ -777,6 +778,13 @@ func (s *Store) CompleteRun(ctx context.Context, run domain.RunnableRun, workerI
 		if err := insertAuditEvent(ctx, tx, "approval.requested", run.AutomationID, "run:"+run.ID, map[string]any{"approvalId": approvalID, "revisionId": run.RevisionID, "key": control.Approval.Key}); err != nil {
 			return err
 		}
+		if err := enqueueNotificationEvent(ctx, tx, "approval.requested", run.AutomationID, approvalID, map[string]any{
+			"approvalId": approvalID, "title": strings.TrimSpace(control.Approval.Title),
+			"description": strings.TrimSpace(control.Approval.Description),
+			"expiresAt":   control.Approval.ExpiresAt,
+		}); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
 }
@@ -826,7 +834,12 @@ func (s *Store) FailRun(ctx context.Context, run domain.Run, workerID, logs stri
 		availableAt = time.Now().Add(retryDelay(run.Attempt))
 		finishedAt = nil
 	}
-	command, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	command, err := tx.Exec(ctx, `
 		UPDATE runs SET status = $2, logs = $3, error = $4, available_at = $5,
 			finished_at = $6, lease_owner = NULL, lease_expires_at = NULL
 		WHERE id = $1 AND status = 'running' AND lease_owner = $7`,
@@ -837,7 +850,19 @@ func (s *Store) FailRun(ctx context.Context, run domain.Run, workerID, logs stri
 	if command.RowsAffected() != 1 {
 		return ErrRunLeaseLost
 	}
-	return nil
+	if status == domain.RunFailed {
+		if err := enqueueNotificationEvent(ctx, tx, "run.failed", run.AutomationID, run.ID, map[string]any{
+			"runId": run.ID, "attempts": run.Attempt,
+		}); err != nil {
+			return err
+		}
+		if err := insertAuditEvent(ctx, tx, "run.failed", run.AutomationID, "run:"+run.ID, map[string]any{
+			"runId": run.ID, "attempts": run.Attempt,
+		}); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) ListAutomations(ctx context.Context, filter AutomationFilter) ([]AutomationSummary, error) {
