@@ -236,10 +236,14 @@ func pushoverRequest(ctx context.Context, destination Destination, message Messa
 }
 
 func pushoverPriority(priority string) string {
-	if priority == "high" {
+	switch priority {
+	case "high":
 		return "1"
+	case "low":
+		return "-1"
+	default:
+		return "0"
 	}
-	return "0"
 }
 
 func webhookRequest(ctx context.Context, destination Destination, message Message, deliveryID string, secrets map[string]string) (*http.Request, error) {

@@ -1,6 +1,7 @@
 # Control-plane notifications
 
-Werkt emits durable control-plane events for decisions and terminal failures.
+Werkt emits durable operator events for automation messages, decisions, and
+terminal failures.
 Routes fan each event out to one or more operator-managed destinations without
 giving provider credentials to automation code or making delivery part of an
 automation transaction.
@@ -8,6 +9,7 @@ automation transaction.
 Supported events:
 
 - `notification.test` (operator-generated with `werkt notification test`)
+- `automation.notification` (requested by a successful automation run)
 - `approval.requested`
 - `approval.expiring`
 - `approval.resolved`
@@ -64,7 +66,7 @@ values.
   ],
   "routes": [
     {
-      "events": ["approval.requested", "approval.expiring"],
+      "events": ["automation.notification", "approval.requested", "approval.expiring"],
       "destinations": ["operator-phone", "operator-chat"]
     },
     {
@@ -105,7 +107,23 @@ Delivery results are recorded as `notification.delivered` and
 values, runtime logs, and exception text. Provider credentials are resolved
 only immediately before a request and are never stored in the outbox.
 
+Automations request `automation.notification` through the language-neutral run
+control contract or the Python SDK's `context.notify()`. Each message has an
+idempotency key scoped to the run, a title, a body, and `low`, `default`, or
+`high` priority. Werkt validates and commits at most eight messages with the
+successful run, attaches the run URL, and handles routing and delivery. An
+automation cannot select a provider, destination, credential, or arbitrary
+link. Automation authors must still avoid including secrets or sensitive input
+in message text.
+
 After configuring a route for `notification.test`, exercise the complete
 durable path with `werkt notification test`. It queues an ordinary outbox event
 and records `notification.test_enqueued`; the worker's usual delivered or
 failed audit event is the authoritative result.
+
+If a pending approval's original prompt was missed, an operator can queue a
+fresh, audited prompt without altering the decision or expiry:
+
+```sh
+werkt notification resend-approval approval_...
+```

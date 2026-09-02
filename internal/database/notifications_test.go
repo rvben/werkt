@@ -61,12 +61,16 @@ func TestNotificationOutboxIntegration(t *testing.T) {
 			Fields:  []domain.ApprovalField{},
 			Actions: []domain.ApprovalAction{{ID: "approve", Label: "Approve"}, {ID: "reject", Label: "Reject"}},
 		},
+		Notifications: []domain.NotificationRequest{{Key: "ready", Title: "Result ready", Body: "The result is ready for review.", Priority: "default"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	approvals, err := store.ListApprovalsPage(ctx, manifest.Metadata.Name, "pending", ListCursor{}, 10)
 	if err != nil || len(approvals) != 1 {
 		t.Fatalf("approvals=%#v err=%v", approvals, err)
+	}
+	if _, err := store.ResendPendingApprovalNotification(ctx, approvals[0].ID, "operator:test"); err != nil {
+		t.Fatal(err)
 	}
 	if count, err := store.EnqueueExpiringApprovalNotifications(ctx, time.Now().UTC().Add(2*time.Hour), 10); err != nil || count != 1 {
 		t.Fatalf("expiring count=%d err=%v", count, err)
@@ -82,8 +86,8 @@ func TestNotificationOutboxIntegration(t *testing.T) {
 	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM notification_events WHERE automation_id = $1`, manifest.Metadata.Name).Scan(&eventCount); err != nil {
 		t.Fatal(err)
 	}
-	if eventCount != 3 {
-		t.Fatalf("notification event count=%d, want requested, expiring, resolved", eventCount)
+	if eventCount != 5 {
+		t.Fatalf("notification event count=%d, want requested, automation, resend, expiring, resolved", eventCount)
 	}
 
 	for index := 0; index < eventCount; index++ {

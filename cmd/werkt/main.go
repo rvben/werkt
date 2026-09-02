@@ -368,8 +368,11 @@ func secretCommand(arguments []string) error {
 }
 
 func notificationCommand(arguments []string) error {
-	if len(arguments) != 1 || arguments[0] != "test" {
-		return errors.New("usage: werkt notification test")
+	if len(arguments) == 0 || (arguments[0] == "test" && len(arguments) != 1) || (arguments[0] == "resend-approval" && len(arguments) != 2) {
+		return errors.New("usage: werkt notification test | resend-approval APPROVAL_ID")
+	}
+	if arguments[0] != "test" && arguments[0] != "resend-approval" {
+		return fmt.Errorf("unknown notification command %q", arguments[0])
 	}
 	configuration := config.Load()
 	ctx, cancel := context.WithTimeout(context.Background(), configuration.DeployTimeout)
@@ -379,7 +382,13 @@ func notificationCommand(arguments []string) error {
 		return err
 	}
 	defer store.Close()
-	eventID, err := store.EnqueueNotificationTest(ctx, "cli")
+	var eventID string
+	switch arguments[0] {
+	case "test":
+		eventID, err = store.EnqueueNotificationTest(ctx, "cli")
+	case "resend-approval":
+		eventID, err = store.ResendPendingApprovalNotification(ctx, arguments[1], "cli")
+	}
 	if err != nil {
 		return err
 	}
@@ -679,7 +688,7 @@ func usage() {
   %s rollback AUTOMATION_ID REVISION_ID
   %s retention plan|get|apply [PLAN_ID]
   %s secret list|get|set|delete [NAME]
-  %s notification test
+  %s notification test | resend-approval APPROVAL_ID
   %s recovery verify
   %s serve [-workers N]
   %s automations

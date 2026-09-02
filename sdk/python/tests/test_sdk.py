@@ -81,6 +81,25 @@ class SDKTest(unittest.TestCase):
             self.assertEqual(value["approval"]["key"], "publish-42")
             self.assertEqual(value["defer"]["data"]["step"], "expiry")
 
+    def test_context_accumulates_provider_neutral_notifications(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            control_path = Path(directory) / "control.json"
+            context = Context("recording", "rev_test", "run_test", control_path)
+            context.notify(
+                key="recording.started",
+                title="Recording started",
+                body="The Sunday service recording has started.",
+            )
+            context.notify(
+                key="recording.stopped",
+                title="Recording stopped",
+                body="Media processing can begin.",
+                priority="high",
+            )
+            value = json.loads(control_path.read_text())
+            self.assertEqual(value["notifications"][0]["priority"], "default")
+            self.assertEqual(value["notifications"][1]["key"], "recording.stopped")
+
     def test_durable_workflow_deduplicates_and_rejects_stale_steps(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             context = Context("example", "rev", "run", Path(directory) / "control.json", state={})

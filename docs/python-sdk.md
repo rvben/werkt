@@ -59,6 +59,20 @@ context.request_approval(
 workflow.defer(job, "approval-expiry", expires_at)
 ```
 
+Operator notifications stay independent of ntfy, Pushover, or any other
+provider configured by the Werkt operator:
+
+```python
+context.notify(
+    key=f"{job.key}.recording-started",
+    title="Recording started",
+    body="The Sunday service recording has started.",
+)
+```
+
+The request is committed only after the run succeeds. Werkt supplies the run
+link, routing, provider credentials, retries, and delivery audit.
+
 Use `execution.state.enabled: true` and `execution.concurrency: forbid` for a
 durable workflow. External mutations still need idempotency keys or upsert
 semantics because state and a remote service cannot share one transaction.

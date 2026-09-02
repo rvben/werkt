@@ -135,6 +135,14 @@ func TestSenderBuildsPushoverContract(t *testing.T) {
 	}
 }
 
+func TestPushoverPriorityPreservesGenericLevels(t *testing.T) {
+	for priority, expected := range map[string]string{"low": "-1", "default": "0", "high": "1"} {
+		if actual := pushoverPriority(priority); actual != expected {
+			t.Fatalf("pushoverPriority(%q) = %q, want %q", priority, actual, expected)
+		}
+	}
+}
+
 func TestSenderRejectsPushoverFailureInSuccessfulHTTPResponse(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return responseBody(http.StatusOK, `{"status":0,"errors":["invalid"]}`), nil

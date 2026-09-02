@@ -40,6 +40,20 @@ func TestRenderNotificationTest(t *testing.T) {
 	}
 }
 
+func TestRenderAutomationNotificationUsesRunLinkAndDeclaredPriority(t *testing.T) {
+	payload := json.RawMessage(`{"runId":"run_42","title":"Recording started","body":"Sunday service is now recording.","priority":"low"}`)
+	message, err := Render("automation.notification", "sermon-onliner", "run_42:started", payload, "https://werkt.example/", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.Title != "Recording started" || message.Body != "Sunday service is now recording." || message.Priority != "low" {
+		t.Fatalf("message = %#v", message)
+	}
+	if message.URL != "https://werkt.example/app/?run=run_42&view=runs" {
+		t.Fatalf("url = %q", message.URL)
+	}
+}
+
 func TestRenderRunFailureDoesNotExposeRuntimeError(t *testing.T) {
 	payload := json.RawMessage(`{"runId":"run_1","attempts":3,"error":"secret should never be here"}`)
 	message, err := Render("run.failed", "backup", "run_1", payload, "https://werkt.example", time.Now())

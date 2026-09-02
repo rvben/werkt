@@ -16,11 +16,12 @@ import (
 var destinationIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 var supportedEvents = map[string]bool{
-	"notification.test":  true,
-	"approval.requested": true,
-	"approval.expiring":  true,
-	"approval.resolved":  true,
-	"run.failed":         true,
+	"notification.test":       true,
+	"automation.notification": true,
+	"approval.requested":      true,
+	"approval.expiring":       true,
+	"approval.resolved":       true,
+	"run.failed":              true,
 }
 
 type Config struct {

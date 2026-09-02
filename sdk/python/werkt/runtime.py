@@ -47,6 +47,7 @@ class Event:
 class RunControl:
     defer: dict[str, Any] | None = None
     approval: dict[str, Any] | None = None
+    notifications: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         value: dict[str, Any] = {}
@@ -54,6 +55,8 @@ class RunControl:
             value["defer"] = self.defer
         if self.approval is not None:
             value["approval"] = self.approval
+        if self.notifications:
+            value["notifications"] = self.notifications
         return value
 
 
@@ -108,6 +111,20 @@ class Context:
             "fields": fields,
             "actions": actions,
         }
+        self._write_control()
+
+    def notify(
+        self,
+        *,
+        key: str,
+        title: str,
+        body: str,
+        priority: str = "default",
+    ) -> None:
+        """Queue an operator notification after this run commits successfully."""
+        self.control.notifications.append(
+            {"key": key, "title": title, "body": body, "priority": priority}
+        )
         self._write_control()
 
     def commit(self, result: Any) -> None:

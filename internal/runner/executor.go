@@ -58,6 +58,7 @@ type Result struct {
 const MaxAutomationStateBytes = 64 * 1024
 const MaxRunControlBytes = 64 * 1024
 const maxContinuationDelay = 30 * 24 * time.Hour
+const maxNotificationsPerRun = 8
 
 var controlIdentifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$`)
 
@@ -90,6 +91,36 @@ func validateRunControl(value []byte, now time.Time) (domain.RunControl, error) 
 	if control.Approval != nil {
 		if err := validateApprovalRequest(*control.Approval, now); err != nil {
 			return domain.RunControl{}, err
+		}
+	}
+	if len(control.Notifications) > maxNotificationsPerRun {
+		return domain.RunControl{}, fmt.Errorf("notifications accepts at most %d messages", maxNotificationsPerRun)
+	}
+	notificationKeys := make(map[string]struct{}, len(control.Notifications))
+	for index := range control.Notifications {
+		notification := &control.Notifications[index]
+		if !controlIdentifier.MatchString(notification.Key) {
+			return domain.RunControl{}, errors.New("notification.key is invalid")
+		}
+		if _, exists := notificationKeys[notification.Key]; exists {
+			return domain.RunControl{}, errors.New("notification keys must be unique")
+		}
+		notificationKeys[notification.Key] = struct{}{}
+		notification.Title = strings.TrimSpace(notification.Title)
+		notification.Body = strings.TrimSpace(notification.Body)
+		if notification.Title == "" || len([]rune(notification.Title)) > 120 {
+			return domain.RunControl{}, errors.New("notification.title must contain at most 120 characters")
+		}
+		if notification.Body == "" || len([]rune(notification.Body)) > 1000 {
+			return domain.RunControl{}, errors.New("notification.body must contain at most 1000 characters")
+		}
+		if notification.Priority == "" {
+			notification.Priority = "default"
+		}
+		switch notification.Priority {
+		case "low", "default", "high":
+		default:
+			return domain.RunControl{}, errors.New("notification.priority must be low, default, or high")
 		}
 	}
 	return control, nil

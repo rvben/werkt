@@ -15,6 +15,7 @@ func TestConfigRoutesFanOutOnceAndRespectAutomationScope(t *testing.T) {
 		},
 		Routes: []Route{
 			{Events: []string{"notification.test"}, Destinations: []string{"push"}},
+			{Events: []string{"automation.notification"}, Automations: []string{"sermon"}, Destinations: []string{"push"}},
 			{Events: []string{"approval.requested"}, Destinations: []string{"phone"}},
 			{Events: []string{"approval.requested"}, Automations: []string{"sermon"}, Destinations: []string{"phone", "chat"}},
 		},
@@ -29,6 +30,10 @@ func TestConfigRoutesFanOutOnceAndRespectAutomationScope(t *testing.T) {
 	got = config.DestinationsFor("run.failed", "sermon")
 	if len(got) != 0 {
 		t.Fatalf("unexpected run failure destinations = %#v", got)
+	}
+	got = config.DestinationsFor("automation.notification", "sermon")
+	if len(got) != 1 || got[0].ID != "push" {
+		t.Fatalf("automation notification destinations = %#v", got)
 	}
 }
 

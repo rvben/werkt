@@ -26,6 +26,8 @@ func Render(eventType, automationID, subjectID string, payload json.RawMessage, 
 		ApprovalID  string    `json:"approvalId"`
 		RunID       string    `json:"runId"`
 		Title       string    `json:"title"`
+		Body        string    `json:"body"`
+		Priority    string    `json:"priority"`
 		Description string    `json:"description"`
 		Status      string    `json:"status"`
 		ResolvedBy  string    `json:"resolvedBy"`
@@ -45,6 +47,12 @@ func Render(eventType, automationID, subjectID string, payload json.RawMessage, 
 		message.Body = "The durable notification delivery path is working."
 		message.URL = strings.TrimRight(publicURL, "/") + "/app/"
 		message.Tags = []string{"white_check_mark"}
+	case "automation.notification":
+		message.Title = fallback(data.Title, automationID)
+		message.Body = compactBody(data.Body, "Open Werkt to inspect this automation run.")
+		message.URL = runURL(publicURL, fallback(data.RunID, subjectID))
+		message.Priority = fallback(data.Priority, "default")
+		message.Tags = []string{"automation"}
 	case "approval.requested":
 		message.Title = "Approval needed: " + fallback(data.Title, automationID)
 		message.Body = compactBody(data.Description, "Open Werkt to review this request.")

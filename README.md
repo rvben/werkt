@@ -274,9 +274,9 @@ The runner sets these variables for every run:
 
 The program reads the event envelope from `WERKT_EVENT_PATH`, writes a JSON result to `WERKT_RESULT_PATH`, logs to stdout/stderr, and exits non-zero on failure. If it produces no result file, the result defaults to `{}`.
 
-`WERKT_CONTROL_PATH` enables durable, transactional continuation after a
-successful run: a time-based `defer`, a typed operator `approval`, or both when
-an approval needs a state-aware expiry continuation.
+`WERKT_CONTROL_PATH` enables durable, transactional actions after a successful
+run: a time-based `defer`, a typed operator `approval`, provider-neutral
+operator `notifications`, or combinations of these.
 Continuations remain pinned to the requesting immutable revision. See
 [docs/execution.md](docs/execution.md) for the language-neutral shapes and
 [docs/management-api.md](docs/management-api.md) for approval resolution.
@@ -300,7 +300,7 @@ The event envelope is stable across every trigger and runtime:
 
 Python automations can use the injected `werkt` package instead of handling
 protocol files directly. It includes typed events and context, transactional
-job helpers, combined approval/expiry control, reusable service connectors, and
+job helpers, combined approval/expiry control, provider-neutral notifications, reusable service connectors, and
 a socket-free connector test harness. The SDK is embedded in the immutable
 artifact and its digest is part of the revision identity. See
 [docs/python-sdk.md](docs/python-sdk.md) for the authoring model and examples.

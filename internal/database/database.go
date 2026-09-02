@@ -786,6 +786,20 @@ func (s *Store) CompleteRun(ctx context.Context, run domain.RunnableRun, workerI
 			return err
 		}
 	}
+	for _, notification := range control.Notifications {
+		subjectID := run.ID + ":" + notification.Key
+		if err := enqueueNotificationEvent(ctx, tx, "automation.notification", run.AutomationID, subjectID, map[string]any{
+			"runId": run.ID, "key": notification.Key, "title": notification.Title,
+			"body": notification.Body, "priority": notification.Priority,
+		}); err != nil {
+			return err
+		}
+		if err := insertAuditEvent(ctx, tx, "notification.requested", run.AutomationID, "run:"+run.ID, map[string]any{
+			"runId": run.ID, "key": notification.Key,
+		}); err != nil {
+			return err
+		}
+	}
 	return tx.Commit(ctx)
 }
 

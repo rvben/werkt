@@ -81,6 +81,63 @@ func (s *Store) EnqueueNotificationTest(ctx context.Context, actor string) (stri
 	return eventID, nil
 }
 
+// ResendPendingApprovalNotification queues a fresh delivery attempt for an
+// existing approval without changing the approval or its original event. This
+// is an audited operator recovery action, not an approval decision.
+func (s *Store) ResendPendingApprovalNotification(ctx context.Context, approvalID, actor string) (string, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	var automationID, status, title, description string
+	var expiresAt time.Time
+	err = tx.QueryRow(ctx, `
+		SELECT automation_id, status, title, description, expires_at
+		FROM approvals WHERE id = $1 FOR UPDATE`, approvalID,
+	).Scan(&automationID, &status, &title, &description, &expiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrApprovalNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	if status != "pending" {
+		return "", ErrApprovalResolved
+	}
+	if !expiresAt.After(time.Now()) {
+		if _, err := tx.Exec(ctx, `UPDATE approvals SET status = 'expired' WHERE id = $1`, approvalID); err != nil {
+			return "", err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return "", err
+		}
+		return "", ErrApprovalExpired
+	}
+	eventID := newID("notification")
+	subjectID := approvalID + ":resend:" + eventID
+	payload, err := json.Marshal(map[string]any{
+		"approvalId": approvalID, "title": title, "description": description, "expiresAt": expiresAt,
+	})
+	if err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO notification_events (id, event_type, automation_id, subject_id, payload)
+		VALUES ($1, 'approval.requested', $2, $3, $4)`, eventID, automationID, subjectID, payload); err != nil {
+		return "", err
+	}
+	if err := insertAuditEvent(ctx, tx, "approval.notification_resent", automationID, actor, map[string]any{
+		"approvalId": approvalID, "eventId": eventID,
+	}); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return eventID, nil
+}
+
 // AcquireNotificationEvent locks one unexpanded event. Expansion snapshots the
 // currently configured routes into durable deliveries before the event is
 // acknowledged, so restarts and later route changes cannot lose or redirect it.

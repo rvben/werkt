@@ -96,9 +96,19 @@ same control object. This is intended for a durable expiry or escalation step:
 the approval and timer are inserted atomically, and the deferred run must treat
 an already-resolved approval as a stale no-op.
 
+An automation may also request up to eight provider-neutral operator messages.
+Keys must be unique within the run, text is bounded, and priority is `low`,
+`default`, or `high`. Werkt, rather than automation code, selects destinations,
+holds provider credentials, attaches the run link, retries delivery, and audits
+the outcome:
+
+```json
+{"notifications":[{"key":"recording.started","title":"Recording started","body":"The Sunday service recording has started.","priority":"default"}]}
+```
+
 Control is read and persisted only after a zero exit, in the same database
 transaction as the run result and state commit. A failed attempt therefore
-cannot leave behind a timer or approval. Malformed data, past or overly distant
+cannot leave behind a timer, approval, or notification. Malformed data, past or overly distant
 times, duplicate fields, or undeclared action shapes fail the attempt instead
 of guessing intent.
 

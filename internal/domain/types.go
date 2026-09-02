@@ -226,8 +226,19 @@ type Run struct {
 // RunControl is a bounded, language-neutral request for Werkt to continue an
 // automation after the current attempt and its state commit succeed.
 type RunControl struct {
-	Defer    *DeferredRunRequest `json:"defer,omitempty"`
-	Approval *ApprovalRequest    `json:"approval,omitempty"`
+	Defer         *DeferredRunRequest   `json:"defer,omitempty"`
+	Approval      *ApprovalRequest      `json:"approval,omitempty"`
+	Notifications []NotificationRequest `json:"notifications,omitempty"`
+}
+
+// NotificationRequest describes an operator-facing message without exposing a
+// delivery provider or its credentials to automation code. Key is idempotent
+// within a run; Werkt supplies the run URL, routing, retries, and audit trail.
+type NotificationRequest struct {
+	Key      string `json:"key"`
+	Title    string `json:"title"`
+	Body     string `json:"body"`
+	Priority string `json:"priority,omitempty"`
 }
 
 type DeferredRunRequest struct {

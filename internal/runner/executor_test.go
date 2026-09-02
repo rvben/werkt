@@ -119,3 +119,22 @@ func TestValidateRunControlAcceptsApprovalWithExpiryContinuation(t *testing.T) {
 		t.Fatalf("control=%#v", control)
 	}
 }
+
+func TestValidateRunControlAcceptsBoundedProviderNeutralNotifications(t *testing.T) {
+	control, err := validateRunControl([]byte(`{"notifications":[{"key":"recording.started","title":"Recording started","body":"The Sunday service recording has started."},{"key":"recording.stopped","title":"Recording stopped","body":"Media processing can begin.","priority":"high"}]}`), time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(control.Notifications) != 2 || control.Notifications[0].Priority != "default" {
+		t.Fatalf("control=%#v", control)
+	}
+	for _, value := range []string{
+		`{"notifications":[{"key":"same","title":"One","body":"Body"},{"key":"same","title":"Two","body":"Body"}]}`,
+		`{"notifications":[{"key":"message","title":"Title","body":"Body","priority":"urgent"}]}`,
+		`{"notifications":[{"key":"message","title":" ","body":"Body"}]}`,
+	} {
+		if _, err := validateRunControl([]byte(value), time.Now().UTC()); err == nil {
+			t.Fatalf("invalid notification control was accepted: %s", value)
+		}
+	}
+}
