@@ -54,7 +54,15 @@ func TestWorkspaceBrowserKeyboardFocusAndResponsiveModality(t *testing.T) {
 		"diagnosisFocused",
 		"diagnosisModal",
 		"diagnosisRouted",
+		"flowExactLedger",
+		"flowExactChronology",
+		"flowAsyncFocus",
+		"flowLiveEvidence",
+		"flowLedgerPrecedesJourney",
+		"flowReadOnly",
+		"flowTabPanelsResolve",
 		"helpShortcut",
+		"journeyAccessible",
 		"logsDirect",
 		"mobileSearchEscape",
 		"operatorScopeVisible",
@@ -123,12 +131,12 @@ func workspaceBrowserFixture(response http.ResponseWriter, request *http.Request
 			"id":"test-automation","project":"Operations","folder":"Tests","description":"Browser contract fixture","labels":[],"enabled":true,"activeRevisionId":"rev_test",
 			"latestRun":{"id":"run_test","status":"failed","createdAt":"2026-08-23T18:42:00Z"},
 			"manifest":{"runtime":{"language":"Go","image":"local"},"execution":{"concurrency":"forbid","timeout":"5m"}},
-			"triggers":[],"revisions":[{"id":"rev_test","contentHash":"sha256:test","createdAt":"2026-08-23T18:42:00Z","active":true,"provenance":{"artifactDigest":"sha256:artifact"}}]
+			"triggers":[{"id":"recording-complete","type":"webhook","enabled":true,"config":{"provider":"zoom"}}],"revisions":[{"id":"rev_test","contentHash":"sha256:test","createdAt":"2026-08-23T18:42:00Z","active":true,"provenance":{"artifactDigest":"sha256:artifact"}}]
 		}`)
 	case "/api/v1/runs":
 		writeBrowserJSON(response, `[{"id":"run_test","automationId":"test-automation","revisionId":"rev_test","eventId":"evt_test","status":"failed","attempt":2,"maxAttempts":2,"createdAt":"2026-08-23T18:42:00Z","startedAt":"2026-08-23T18:42:00Z","finishedAt":"2026-08-23T18:42:01Z","error":"fixture failure","logs":"fixture log"}]`)
 	case "/api/v1/runs/run_test":
-		writeBrowserJSON(response, `{"id":"run_test","automationId":"test-automation","revisionId":"rev_test","eventId":"evt_test","status":"failed","attempt":2,"maxAttempts":2,"createdAt":"2026-08-23T18:42:00Z","startedAt":"2026-08-23T18:42:00Z","finishedAt":"2026-08-23T18:42:01Z","error":"fixture failure","logs":"fixture log"}`)
+		writeBrowserJSON(response, `{"id":"run_test","automationId":"test-automation","revisionId":"rev_test","eventId":"evt_test","status":"failed","attempt":2,"maxAttempts":2,"createdAt":"2026-08-23T18:42:00Z","startedAt":"2026-08-23T18:42:00Z","finishedAt":"2026-08-23T18:42:01Z","error":"fixture failure","logs":"fixture log","event":{"id":"evt_test","occurredAt":"2026-08-23T18:41:59Z","receivedAt":"2026-08-23T18:42:00Z","trigger":{"automation":"test-automation","id":"recording-complete","type":"webhook"},"metadata":{"source":"webhook"}}}`)
 	case "/api/v1/approvals":
 		writeBrowserJSON(response, `[{"id":"apr_test","automationId":"test-automation","revisionId":"rev_test","requestedByRunId":"run_test","key":"publish","status":"pending","title":"Publish recording?","description":"Confirm the final title.","fields":[{"id":"title","label":"Title","type":"text","required":true,"value":"Sunday service"}],"actions":[{"id":"approve","label":"Publish","style":"primary","requiresFields":true},{"id":"reject","label":"Skip","style":"neutral"}],"expiresAt":"2026-08-31T18:42:00Z","createdAt":"2026-08-30T18:42:00Z"}]`)
 	case "/api/v1/approvals/apr_test":
@@ -189,6 +197,23 @@ const workspaceBrowserDriver = `
         && document.querySelector(".automation-technical").open === false
         && document.querySelector("[data-open-run]").textContent.includes("Test run")
         && document.querySelector(".revision-table").textContent.includes("Current");
+      document.querySelector('[data-automation-tab="flow"]').click();
+      await waitFor(() => document.querySelector(".flow-map"));
+      results.flowReadOnly = !document.querySelector(".flow-view input") && !document.querySelector("[contenteditable]");
+      results.flowTabPanelsResolve = [...document.querySelectorAll("[data-automation-tab]")].every((tab) => document.getElementById(tab.getAttribute("aria-controls")));
+      results.flowExactLedger = document.querySelector(".flow-ledger").textContent.includes("Definition facts")
+        && document.querySelector(".flow-ledger").textContent.includes("recording-complete");
+      document.querySelector('[data-flow-layer="live"]').click();
+      await waitFor(() => document.querySelector(".flow-source.is-observed"));
+      results.flowLiveEvidence = document.querySelector(".flow-map").getAttribute("aria-label").includes("run_test")
+        && document.querySelector(".flow-source.is-observed").textContent.includes("recording-complete");
+      results.flowAsyncFocus = Boolean(document.activeElement?.dataset.flowLayer === "live"
+        && document.querySelector('[data-flow-focus="diagnosis"]')
+        && document.querySelector('[data-flow-focus="ledger-summary"]'));
+      results.flowExactLedger = results.flowExactLedger && document.querySelector(".flow-ledger time")?.textContent.includes("2026-08-23T");
+      results.flowExactChronology = ["Event occurred", "Event received", "Run created", "Revision started"].every((label) => document.querySelector(".flow-ledger").textContent.includes(label));
+      results.flowLedgerPrecedesJourney = Boolean(document.querySelector(".flow-ledger").compareDocumentPosition(document.querySelector(".actor-journey")) & Node.DOCUMENT_POSITION_FOLLOWING);
+      document.querySelector('[data-automation-tab="overview"]').click();
       document.dispatchEvent(new KeyboardEvent("keydown", {key: "r", bubbles: true}));
       await waitFor(() => document.querySelector("#run-dialog").open);
       results.runShortcutReviews = document.querySelector("#run-dialog").open;
@@ -199,6 +224,12 @@ const workspaceBrowserDriver = `
         && document.querySelector("#run-target-instance").textContent.length > 0
         && document.querySelector("#run-target-actor").textContent === "workspace:local";
       document.querySelector("#run-dialog").close();
+      document.querySelector("[data-run]").click();
+      await waitFor(() => document.querySelector('[data-diagnosis-tab="journey"]'));
+      document.querySelector('[data-diagnosis-tab="journey"]').click();
+      results.journeyAccessible = document.querySelector("#diagnosis-panel-journey").textContent.includes("Approval requested")
+        && document.querySelector("#diagnosis-panel-journey").textContent.includes("Operator");
+      document.querySelector("[data-close-diagnosis]").click();
       document.dispatchEvent(new KeyboardEvent("keydown", {key: "?", bubbles: true}));
       results.helpShortcut = document.querySelector("#help-dialog").open;
       document.querySelector("#help-dialog").close();

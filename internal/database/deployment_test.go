@@ -18,7 +18,8 @@ func TestDeploymentLifecycleIntegration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	store, err := Open(ctx, databaseURL)
+	dataDir := t.TempDir()
+	store, err := Open(ctx, databaseURL, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,15 +35,15 @@ func TestDeploymentLifecycleIntegration(t *testing.T) {
 	}()
 
 	packageDigest := strings.Repeat("a", 64)
-	deployment, created, err := store.CreateDeployment(ctx, "dep_success", "deployment-key", packageDigest, t.TempDir(), "agent:builder")
+	deployment, created, err := store.CreateDeployment(ctx, "dep_success", "deployment-key", packageDigest, testStorageFixture(t, dataDir, "deployment-sources", "dep_success"), "agent:builder")
 	if err != nil || !created || deployment.Status != domain.DeploymentQueued {
 		t.Fatalf("deployment=%#v created=%v err=%v", deployment, created, err)
 	}
-	duplicate, created, err := store.CreateDeployment(ctx, "dep_ignored", "deployment-key", packageDigest, t.TempDir(), "agent:other")
+	duplicate, created, err := store.CreateDeployment(ctx, "dep_ignored", "deployment-key", packageDigest, testStorageFixture(t, dataDir, "deployment-sources", "dep_ignored"), "agent:other")
 	if err != nil || created || duplicate.ID != deployment.ID {
 		t.Fatalf("duplicate=%#v created=%v err=%v", duplicate, created, err)
 	}
-	if _, _, err := store.CreateDeployment(ctx, "dep_conflict", "deployment-key", strings.Repeat("b", 64), t.TempDir(), "agent:builder"); !errors.Is(err, ErrDeploymentIdempotencyConflict) {
+	if _, _, err := store.CreateDeployment(ctx, "dep_conflict", "deployment-key", strings.Repeat("b", 64), testStorageFixture(t, dataDir, "deployment-sources", "dep_conflict"), "agent:builder"); !errors.Is(err, ErrDeploymentIdempotencyConflict) {
 		t.Fatalf("conflict error=%v", err)
 	}
 
@@ -78,7 +79,7 @@ func TestDeploymentLifecycleIntegration(t *testing.T) {
 		AutomationID: value.Metadata.Name, Algorithm: "ed25519", SigningKeyID: "sha256:" + strings.Repeat("1", 64),
 		PublicKey: "public", Signature: "signature",
 	}
-	revisionID, err := store.ActivateDeployment(ctx, deployment.ID, "worker-1", value, contentHash, t.TempDir(), attestation, "agent:builder")
+	revisionID, err := store.ActivateDeployment(ctx, deployment.ID, "worker-1", value, contentHash, testStorageFixture(t, dataDir, "artifacts", contentHash), attestation, "agent:builder")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +94,7 @@ func TestDeploymentLifecycleIntegration(t *testing.T) {
 		t.Fatalf("completed deployment accepted stage update: %v", err)
 	}
 
-	failed, created, err := store.CreateDeployment(ctx, "dep_failure", "failure-key", strings.Repeat("d", 64), t.TempDir(), "agent:builder")
+	failed, created, err := store.CreateDeployment(ctx, "dep_failure", "failure-key", strings.Repeat("d", 64), testStorageFixture(t, dataDir, "deployment-sources", "dep_failure"), "agent:builder")
 	if err != nil || !created {
 		t.Fatalf("failed setup=%#v created=%v err=%v", failed, created, err)
 	}
@@ -156,7 +157,7 @@ func TestDeploymentLifecycleIntegration(t *testing.T) {
 	}
 
 	secondHash := strings.Repeat("f", 64)
-	secondRevision, err := store.DeployAs(ctx, value, secondHash, t.TempDir(), testArtifactProvenance(value, secondHash), "agent:builder")
+	secondRevision, err := store.DeployAs(ctx, value, secondHash, testStorageFixture(t, dataDir, "artifacts", secondHash), testArtifactProvenance(value, secondHash), "agent:builder")
 	if err != nil || secondRevision == revisionID {
 		t.Fatalf("second revision=%q err=%v", secondRevision, err)
 	}

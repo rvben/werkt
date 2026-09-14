@@ -658,7 +658,7 @@ func openStore(ctx context.Context, configuration config.Config) (*database.Stor
 	if err := os.MkdirAll(configuration.DataDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
 	}
-	store, err := database.Open(ctx, configuration.DatabaseURL)
+	store, err := database.Open(ctx, configuration.DatabaseURL, configuration.DataDir)
 	if err != nil {
 		return nil, err
 	}

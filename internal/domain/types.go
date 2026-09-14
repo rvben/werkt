@@ -221,6 +221,17 @@ type Run struct {
 	Logs         string          `json:"logs,omitempty"`
 	Error        string          `json:"error,omitempty"`
 	Result       json.RawMessage `json:"result,omitempty"`
+	Event        *RunEvent       `json:"event,omitempty"`
+}
+
+// RunEvent exposes the provenance needed to explain a run without returning
+// the event payload itself, which may contain sensitive trigger data.
+type RunEvent struct {
+	ID         string         `json:"id"`
+	OccurredAt time.Time      `json:"occurredAt"`
+	ReceivedAt time.Time      `json:"receivedAt"`
+	Trigger    EventTrigger   `json:"trigger"`
+	Metadata   map[string]any `json:"metadata,omitempty"`
 }
 
 // RunControl is a bounded, language-neutral request for Werkt to continue an

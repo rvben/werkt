@@ -11,6 +11,20 @@ import (
 	"github.com/rvben/werkt/internal/domain"
 )
 
+func TestRunEventMetadataAllowlist(t *testing.T) {
+	value := runEventMetadata(map[string]any{
+		"source": "webhook", "actor": "agent:test", "approvalId": "apr_test",
+		"parentRunId": "run_parent", "continuationKey": "later",
+		"userAgent": "private-client", "deliveryId": "external-account-id",
+	})
+	if len(value) != 5 || value["source"] != "webhook" || value["actor"] != "agent:test" || value["approvalId"] != "apr_test" || value["parentRunId"] != "run_parent" || value["continuationKey"] != "later" {
+		t.Fatalf("allowlisted metadata = %#v", value)
+	}
+	if value["userAgent"] != nil || value["deliveryId"] != nil {
+		t.Fatalf("private metadata escaped allowlist: %#v", value)
+	}
+}
+
 func TestManagementLifecycleIntegration(t *testing.T) {
 	const runtimeSecretValue = "integration-runtime-secret-value-never-persist"
 	databaseURL := os.Getenv("WERKT_TEST_DATABASE_URL")
@@ -19,7 +33,8 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	store, err := Open(ctx, databaseURL)
+	dataDir := t.TempDir()
+	store, err := Open(ctx, databaseURL, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +74,7 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 		Execution: domain.Execution{Retries: 1, Concurrency: "forbid"},
 	}
 	hash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	revisionID, err := store.Deploy(ctx, value, hash, t.TempDir(), testArtifactProvenance(value, hash))
+	revisionID, err := store.Deploy(ctx, value, hash, testStorageFixture(t, dataDir, "artifacts", hash), testArtifactProvenance(value, hash))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,6 +148,12 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 	manual, err := store.GetRun(ctx, manualID)
 	if err != nil || manual.Status != domain.RunQueued {
 		t.Fatalf("manual run = %#v err=%v", manual, err)
+	}
+	if manual.Event == nil || manual.Event.Trigger.Type != "manual" || manual.Event.Trigger.ID != "manual" || manual.Event.Metadata["source"] != "manual" {
+		t.Fatalf("manual run event = %#v", manual.Event)
+	}
+	if manual.Event.Metadata["actor"] != "agent:test" || manual.Event.Metadata["userAgent"] != nil {
+		t.Fatalf("manual run event metadata = %#v", manual.Event.Metadata)
 	}
 
 	changed, err = store.SetAutomationEnabled(ctx, value.Metadata.Name, true, "agent:test")

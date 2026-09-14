@@ -19,7 +19,8 @@ func TestNotificationOutboxIntegration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	store, err := Open(ctx, databaseURL)
+	dataDir := t.TempDir()
+	store, err := Open(ctx, databaseURL, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +43,7 @@ func TestNotificationOutboxIntegration(t *testing.T) {
 		Execution: domain.Execution{Concurrency: "forbid"},
 	}
 	contentHash := strings.Repeat("b", 64)
-	revisionID, err := store.Deploy(ctx, manifest, contentHash, t.TempDir(), testArtifactProvenance(manifest, contentHash))
+	revisionID, err := store.Deploy(ctx, manifest, contentHash, testStorageFixture(t, dataDir, "artifacts", contentHash), testArtifactProvenance(manifest, contentHash))
 	if err != nil {
 		t.Fatal(err)
 	}

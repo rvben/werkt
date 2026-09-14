@@ -89,6 +89,8 @@
   let deploymentPollController = null;
   let runPollRequest = 0;
   let runPollController = null;
+  let flowPollRequest = 0;
+  let flowPollController = null;
   const feedRequests = {approvals: 0, runs: 0, deployments: 0, audit: 0};
   const feedControllers = {approvals: null, runs: null, deployments: null, audit: null};
   const diagnosisModalQuery = window.matchMedia("(max-width: 74rem)");
@@ -116,6 +118,14 @@
     audit: [],
     detail: null,
     detailRuns: [],
+    detailApprovals: [],
+    automationTab: "overview",
+    flowLayer: "definition",
+    flowRunID: "",
+    flowRunDetails: {},
+    flowRunLoading: {},
+    flowRunErrors: {},
+    flowEvidence: "revision",
     selectedAutomation: "",
     selectedRun: null,
     selectedDeployment: null,
@@ -137,6 +147,7 @@
     feedLoading: {approvals: true, runs: true, deployments: true, audit: true},
     feedNextCursor: {approvals: "", runs: "", deployments: "", audit: ""},
     detailRunsError: "",
+    detailApprovalsError: "",
   };
 
   const icons = {
@@ -222,7 +233,7 @@
   function openDiagnosisRoute() {
     const route = readDiagnosisRoute();
     if (!route) return;
-    if (route.kind === "run") openRun(route.id, ["summary", "logs", "output"].includes(route.tab) ? route.tab : "summary", false);
+    if (route.kind === "run") openRun(route.id, ["summary", "journey", "logs", "output"].includes(route.tab) ? route.tab : "summary", false);
     else if (route.kind === "deployment") openDeployment(route.id, false);
     else openAudit(route.id, false);
   }
@@ -261,6 +272,11 @@
   function detailRunsMessage(error) {
     const retained = state.detailRuns.length ? " Previous automation runs remain visible." : "";
     return `Run history for this automation could not be refreshed.${retained} ${recoveryGuidance(error)}`;
+  }
+
+  function detailApprovalsMessage(error) {
+    const retained = state.detailApprovals.length ? " Previous approval evidence remains visible." : "";
+    return `Approval evidence for this automation could not be refreshed.${retained} ${recoveryGuidance(error)}`;
   }
 
   function recoveryGuidance(error) {
@@ -477,9 +493,10 @@
     detailController = new AbortController();
     const {signal} = detailController;
     const encoded = encodeURIComponent(automationID);
-    const [detailResult, runsResult] = await Promise.allSettled([
+    const [detailResult, runsResult, approvalsResult] = await Promise.allSettled([
       api(`/api/v1/automations/${encoded}`, {signal}),
       api(`/api/v1/runs?automation=${encoded}&limit=${HISTORY_LIMIT}`, {signal, page: true}),
+      api(`/api/v1/approvals?automation=${encoded}&limit=${HISTORY_LIMIT}`, {signal, page: true}),
     ]);
     if (request !== detailRequest || automationID !== state.selectedAutomation) return;
     if (detailResult.status === "rejected") throw detailResult.reason;
@@ -492,7 +509,14 @@
     } else if (!isAbort(runsResult.reason)) {
       state.detailRunsError = detailRunsMessage(runsResult.reason);
     }
+    if (approvalsResult.status === "fulfilled") {
+      state.detailApprovals = approvalsResult.value.items;
+      state.detailApprovalsError = "";
+    } else if (!isAbort(approvalsResult.reason)) {
+      state.detailApprovalsError = detailApprovalsMessage(approvalsResult.reason);
+    }
     if (rerender || state.detail) render();
+    if (state.automationTab === "flow" && state.flowLayer === "live" && state.flowRunID) loadFlowRun(state.flowRunID, {force: true});
   }
 
   async function selectAutomation(automationID) {
@@ -505,6 +529,15 @@
     state.selectedAutomation = automationID;
     state.detail = null;
     state.detailRuns = [];
+    state.detailApprovals = [];
+    state.automationTab = "overview";
+    state.flowLayer = "definition";
+    state.flowRunID = "";
+    state.flowRunDetails = {};
+    state.flowRunLoading = {};
+    state.flowRunErrors = {};
+    state.flowEvidence = "revision";
+    state.detailApprovalsError = "";
     state.detailRunsError = "";
     shell.classList.add("has-selection");
     writeRoute("push");
@@ -732,7 +765,17 @@
           </div>
         </div>
       </header>
-      <div class="detail-body">
+      <nav class="detail-tabs" role="tablist" aria-label="Automation detail">
+        <button id="automation-tab-overview" class="tab-button" type="button" role="tab" data-automation-tab="overview" aria-controls="automation-panel-overview" aria-selected="${state.automationTab === "overview"}" tabindex="${state.automationTab === "overview" ? "0" : "-1"}">Overview</button>
+        <button id="automation-tab-flow" class="tab-button" type="button" role="tab" data-automation-tab="flow" aria-controls="automation-panel-flow" aria-selected="${state.automationTab === "flow"}" tabindex="${state.automationTab === "flow" ? "0" : "-1"}">Flow</button>
+      </nav>
+      <div class="detail-body" id="automation-panel-overview" role="tabpanel" aria-labelledby="automation-tab-overview" tabindex="0" ${state.automationTab === "overview" ? "" : "hidden"}>${state.automationTab === "overview" ? renderAutomationOverview(detail, runtime, execution, activeRevision, triggers, recentRuns, health) : ""}</div>
+      <div class="detail-body" id="automation-panel-flow" role="tabpanel" aria-labelledby="automation-tab-flow" tabindex="0" ${state.automationTab === "flow" ? "" : "hidden"}>${state.automationTab === "flow" ? renderAutomationFlow(detail, activeRevision, triggers) : ""}</div>
+    </article>`;
+  }
+
+  function renderAutomationOverview(detail, runtime, execution, activeRevision, triggers, recentRuns, health) {
+    return `
         <dl class="facts">
           <div class="fact"><dt>Latest outcome</dt><dd class="${health.className}">${health.htmlLabel}</dd></div>
           <div class="fact"><dt>Next event</dt><dd>${nextEventSummary(triggers, detail.enabled)}</dd></div>
@@ -756,8 +799,242 @@
           <div class="section-heading"><div><h3 id="revisions-heading">Version history</h3><p>${revisionCountLabel(Math.min(detail.revisions?.length || 0, 5))}</p></div></div>
           ${renderRevisions(detail.revisions || [])}
         </section>
+    `;
+  }
+
+  function renderAutomationFlow(detail, activeRevision, triggers) {
+    if (!state.flowRunID && state.detailRuns.length) state.flowRunID = state.detailRuns[0].id;
+    const runSummary = state.detailRuns.find((run) => run.id === state.flowRunID) || state.detailRuns[0] || null;
+    const runDetail = runSummary ? state.flowRunDetails[runSummary.id] : null;
+    const run = runDetail || runSummary;
+    const live = state.flowLayer === "live";
+    const evidenceLoading = Boolean(live && run && state.flowRunLoading[run.id]);
+    const evidenceError = live && run ? state.flowRunErrors[run.id] : "";
+    const evidenceReady = Boolean(!live || runDetail);
+    const observedTrigger = evidenceReady ? runDetail?.event?.trigger || null : null;
+    const runRevision = live && run ? detail.revisions?.find((revision) => revision.id === run.revisionId) || null : activeRevision;
+    const historical = Boolean(live && run && run.revisionId !== detail.activeRevisionId);
+    const sourceModel = flowSources(triggers, observedTrigger, runDetail?.event?.metadata || {}, historical);
+    const evidence = flowEvidence(detail, runRevision, sourceModel, live ? run : null, {historical, evidenceReady});
+    const runOptions = state.detailRuns.map((item) => `<option value="${escapeHTML(item.id)}"${item.id === run?.id ? " selected" : ""}>${escapeHTML(shortID(item.id, 26))} · ${escapeHTML(capitalize(item.status))} · ${escapeHTML(formatDate(item.createdAt))}</option>`).join("");
+    return `<section class="flow-view" aria-labelledby="flow-heading">
+      <header class="flow-heading">
+        <div><h3 id="flow-heading">Automation flow</h3><p>The code and manifest stay authoritative. This view projects their stable shape and overlays recorded evidence.</p></div>
+        <div class="flow-controls">
+          <div class="segmented-control" role="group" aria-label="Flow layer">
+            <button type="button" data-flow-layer="definition" aria-pressed="${!live}" class="${!live ? "is-active" : ""}">Definition</button>
+            <button type="button" data-flow-layer="live" aria-pressed="${live}" class="${live ? "is-active" : ""}" ${state.detailRuns.length ? "" : "disabled"}>Live run</button>
+          </div>
+          ${live ? `<label class="flow-run-picker"><span>Recorded run</span><select id="flow-run-select" data-flow-run ${state.detailRuns.length ? "" : "disabled"}>${runOptions}</select></label>` : ""}
+          ${live && run ? `<button class="button button-quiet button-compact flow-diagnosis-action" type="button" data-flow-focus="diagnosis" data-run="${escapeHTML(run.id)}">Open run diagnosis</button>` : ""}
+        </div>
+      </header>
+      ${live && evidenceLoading ? '<div class="inline-notice" role="status"><span>Loading the selected run’s event, logs, output, and continuation provenance…</span></div>' : ""}
+      ${live && evidenceError ? `<div class="inline-notice is-error" role="status"><span>${escapeHTML(evidenceError)}</span><button class="button button-quiet button-compact" type="button" data-flow-focus="retry-run" data-retry-flow-run="${escapeHTML(run.id)}">Retry run evidence</button></div>` : ""}
+      ${live && state.detailApprovalsError ? `<div class="inline-notice is-error" role="status"><span>${escapeHTML(state.detailApprovalsError)}</span><button class="button button-quiet button-compact" type="button" data-flow-focus="retry-approvals" data-retry-detail-approvals>Retry approval evidence</button></div>` : ""}
+      ${historical ? `<div class="inline-notice flow-history-notice" role="status"><span>This run used revision <code>${escapeHTML(run.revisionId)}</code>. The topology still reflects the active manifest; unavailable historical manifest fields are labeled below.</span></div>` : ""}
+      ${live && !run ? `<div class="empty-state flow-empty"><div class="empty-state-inner"><h2>No recorded run to overlay</h2><p>Trigger this automation to connect its definition to runtime evidence.</p></div></div>` : `
+      <div class="flow-map${live && evidenceReady ? " has-recorded-path" : ""}" aria-label="${escapeHTML(live && run ? `${evidenceReady ? "Recorded path" : "Run evidence loading"} for run ${run.id}` : `Definition map for ${detail.id}`)}">
+        <section class="flow-stage flow-sources" aria-labelledby="flow-sources-title">
+          <div class="flow-stage-title"><h4 id="flow-sources-title">Event sources</h4><span>${triggers.length} ${triggers.length === 1 ? "declaration" : "declarations"} in active manifest</span></div>
+          <div class="flow-node-stack">${sourceModel.length ? sourceModel.map((source) => `<button class="flow-node flow-source${source.observed ? " is-observed" : ""}" type="button" data-flow-evidence="${escapeHTML(source.key)}" aria-pressed="${state.flowEvidence === source.key}"><span class="flow-node-icon">${icon(icons[source.type] || "code")}</span><span><strong>${escapeHTML(source.id)}</strong><small>${escapeHTML(source.detail)}</small></span>${source.observed ? '<span class="observed-mark">Observed</span>' : ""}</button>`).join("") : `<div class="flow-node is-muted"><span><strong>No manifest triggers</strong><small>Manual runs remain available</small></span></div>`}</div>
+        </section>
+        <div class="flow-connector" aria-hidden="true"><span></span></div>
+        <section class="flow-stage flow-runtime" aria-labelledby="flow-runtime-title">
+          <div class="flow-stage-title"><h4 id="flow-runtime-title">Code revision</h4><span>${live ? "Pinned for run" : "Active definition"}</span></div>
+          <button class="flow-node flow-core${live ? ` status-${statusClass(run.status)}` : ""}" type="button" data-flow-evidence="revision" aria-pressed="${state.flowEvidence === "revision"}">
+            <span class="flow-core-top"><span class="flow-node-icon">${icon("code")}</span><span class="status-badge status-${live ? statusClass(run.status) : (detail.enabled ? "active" : "paused")}">${live ? escapeHTML(capitalize(run.status)) : (detail.enabled ? "Active" : "Paused")}</span></span>
+            <strong>${escapeHTML(shortID(live ? run.revisionId : detail.activeRevisionId, 22))}</strong>
+            <small>${historical ? "Historical runtime manifest unavailable" : `${escapeHTML(detail.manifest?.runtime?.language || "Executable")} · ${escapeHTML(detail.manifest?.execution?.concurrency || "allow")} concurrency`}</small>
+            ${live ? `<span class="flow-run-id mono">${escapeHTML(run.id)}</span>` : `<span class="flow-run-id">Immutable deployed code</span>`}
+          </button>
+        </section>
+        <div class="flow-connector" aria-hidden="true"><span></span></div>
+        <section class="flow-stage flow-evidence" aria-labelledby="flow-evidence-title">
+          <div class="flow-stage-title"><h4 id="flow-evidence-title">Recorded evidence</h4><span>${live ? "This run" : "On every run"}</span></div>
+          <div class="flow-node-stack">
+            <button class="flow-node${live ? " is-observed" : ""}" type="button" data-flow-evidence="record" aria-pressed="${state.flowEvidence === "record"}"><span class="flow-node-icon">${icon("runs")}</span><span><strong>Run record</strong><small>Status, attempts, and duration</small></span></button>
+            <button class="flow-node${live && evidenceReady && run?.logs ? " is-observed" : ""}" type="button" data-flow-evidence="logs" aria-pressed="${state.flowEvidence === "logs"}"><span class="flow-node-icon">${icon("code")}</span><span><strong>Execution logs</strong><small>${live ? (!evidenceReady ? (evidenceError ? "Evidence unavailable" : "Loading run detail…") : (run?.logs ? "Recorded output available" : "No output recorded")) : "stdout and stderr"}</small></span></button>
+            <button class="flow-node${live && evidenceReady && run?.result != null ? " is-observed" : ""}" type="button" data-flow-evidence="output" aria-pressed="${state.flowEvidence === "output"}"><span class="flow-node-icon">${icon("package")}</span><span><strong>Structured result</strong><small>${live ? (!evidenceReady ? (evidenceError ? "Evidence unavailable" : "Loading run detail…") : (run?.result != null ? "Recorded result available" : "No result recorded")) : "JSON result when emitted"}</small></span></button>
+          </div>
+        </section>
       </div>
-    </article>`;
+      <aside class="flow-inspector" aria-live="polite"><div><span class="flow-inspector-label">Selected evidence</span><h4>${escapeHTML(evidence.title)}</h4><p>${escapeHTML(evidence.description)}</p></div><dl>${evidence.facts.map(([label, value]) => `<div><dt>${escapeHTML(label)}</dt><dd class="${label.includes("ID") || label === "Revision" ? "mono" : ""}">${escapeHTML(value)}</dd></div>`).join("")}</dl></aside>
+      ${live && run && !evidenceReady ? renderUnavailableLedger(run, evidenceError ? "unavailable" : "loading") : renderFlowLedger(detail, runRevision, triggers, live ? runDetail : null)}
+      ${live && run && evidenceReady && !state.detailApprovalsError ? renderActorJourney(runDetail, state.detailApprovals, "automation-flow-journey") : ""}
+      `}
+    </section>`;
+  }
+
+  function flowSources(triggers, observedTrigger, metadata, historical) {
+    const systemSource = ["manual", "approval", "deferred"].includes(metadata.source) || ["manual", "approval", "deferred"].includes(observedTrigger?.type);
+    const activeObserved = Boolean(observedTrigger && !historical && !systemSource && triggers.some((trigger) => trigger.id === observedTrigger.id && trigger.type === observedTrigger.type));
+    const values = triggers.map((trigger) => ({
+      key: `trigger:${trigger.id}`,
+      id: trigger.id,
+      type: trigger.type,
+      trigger,
+      observed: Boolean(activeObserved && observedTrigger.id === trigger.id),
+      detail: `${trigger.type} · ${triggerConfiguration(trigger)}`,
+    }));
+    if (observedTrigger && !activeObserved) {
+      const label = systemSource ? `${observedTrigger.type} · recorded system or operator source` : `${observedTrigger.type} · historical configuration unavailable`;
+      values.push({key: "recorded-source", id: observedTrigger.id, type: observedTrigger.type, observed: true, recorded: true, systemSource, detail: label});
+    }
+    return values;
+  }
+
+  function flowEvidence(detail, revision, sources, run, options = {}) {
+    const {historical = false, evidenceReady = false} = options;
+    const key = state.flowEvidence;
+    if (key === "recorded-source" || key.startsWith("trigger:")) {
+      const source = sources.find((item) => item.key === key);
+      if (source?.recorded) return {title: source.id, description: source.systemSource ? "Recorded by Werkt’s management or continuation machinery, not declared as a manifest trigger." : "Recorded on the selected historical run. Its original trigger configuration is not retained in this view.", facts: [["Type", source.type], ["Configuration", "Unavailable for this run"], ["Evidence", "Recorded event source"]]};
+      if (source) return {title: source.id, description: source.observed ? "Declared by the active manifest and recorded as this run’s source." : "Declared in the active manifest. No claim is made that the selected historical run used this configuration.", facts: [["Type", source.type], ["Configuration", triggerConfiguration(source.trigger)], ["State", detail.enabled && source.trigger.enabled ? "Enabled" : "Paused"]]};
+    }
+    if (key === "record") return {title: "Run record", description: run ? "The durable execution record selected for this overlay." : "Werkt creates a durable run record for each accepted event.", facts: [["Run ID", run?.id || "Created at runtime"], ["Status", run ? capitalize(run.status) : "Recorded at runtime"], ["Attempt", run ? `${run.attempt}/${run.maxAttempts}` : "Bounded by the manifest"]]};
+    if (key === "logs") return {title: "Execution logs", description: !evidenceReady && run ? "Run detail is still loading or unavailable; absence is not inferred." : (run?.logs ? "The selected run produced captured stdout or stderr." : "Logs stay attached to the exact run and revision that produced them."), facts: [["Availability", !evidenceReady && run ? "Loading or unavailable" : (run?.logs ? "Recorded" : "None recorded")], ["Run ID", run?.id || "Created at runtime"]]};
+    if (key === "output") return {title: "Structured result", description: !evidenceReady && run ? "Run detail is still loading or unavailable; absence is not inferred." : (run?.result != null ? "The selected run returned a structured result." : "Code may return a JSON result; Werkt stores it on the exact run."), facts: [["Availability", !evidenceReady && run ? "Loading or unavailable" : (run?.result != null ? "Recorded" : "None recorded")], ["Run ID", run?.id || "Created at runtime"]]};
+    return {title: "Immutable code revision", description: run ? "The run summary pins this revision identity; detail evidence augments it without changing the active topology." : "The deployed package remains the source of execution behavior; the map does not replace or rewrite it.", facts: [["Revision", run?.revisionId || detail.activeRevisionId], ["Content hash", revision?.contentHash || "Unavailable for this revision"], ["Runtime", historical ? "Historical manifest unavailable" : (detail.manifest?.runtime?.image || "Local process")]]};
+  }
+
+  function approvalForRun(run, approvals) {
+    return approvals.find((approval) => approval.requestedByRunId === run.id || approval.actionRunId === run.id || approval.id === run.event?.metadata?.approvalId) || null;
+  }
+
+  function journeySteps(run, approvals) {
+    const metadata = run.event?.metadata || {};
+    const approval = approvalForRun(run, approvals);
+    const steps = [];
+    if (metadata.source === "deferred") steps.push({time: run.event?.receivedAt, actor: "Werkt", kind: "timer", title: "Continuation scheduled", detail: `${run.event?.id || run.eventId} · available ${exactTimestamp(run.event?.occurredAt)} · parent ${metadata.parentRunId || "unavailable"}`, state: "scheduled"});
+    else if (metadata.source === "approval") steps.push({time: run.event?.receivedAt, actor: metadata.actor || "Operator", kind: "human", title: "Decision recorded; continuation queued", detail: `${run.event?.id || run.eventId} · ${metadata.approvalId || approval?.id || "approval unavailable"}`, state: "queued"});
+    else if (metadata.source === "manual") steps.push({time: run.event?.receivedAt, actor: metadata.actor || "Operator or agent", kind: "actor", title: "Manual run requested", detail: `${run.event?.id || run.eventId} · ${run.event?.trigger?.id || "manual"}`, state: "recorded"});
+    else steps.push({time: run.event?.receivedAt || run.createdAt, actor: "Werkt", kind: "system", title: "Event received", detail: run.event ? `${run.event.id} · ${run.event.trigger.type} · ${run.event.trigger.id}` : run.eventId || "Event identity available in run detail", state: "durable"});
+    steps.push({time: run.startedAt || run.createdAt, actor: run.startedAt ? "Code" : "Werkt", kind: run.startedAt ? "code" : "system", title: run.startedAt ? "Revision started" : "Run created", detail: `${run.id} · ${run.revisionId} · attempt ${run.attempt}/${run.maxAttempts}`, state: run.startedAt ? "running" : "queued"});
+    if (approval?.requestedByRunId === run.id) {
+      steps.push({time: approval.createdAt, actor: "Werkt", kind: "system", title: "Approval requested for Operator", detail: `${approval.id} · ${approval.title}`, state: approval.status === "pending" ? "waiting" : approval.status});
+      if (approval.resolvedAt) steps.push({time: approval.resolvedAt, actor: approval.resolvedBy || "Operator", kind: "human", title: `Decision ${approval.status}`, detail: approval.actionRunId ? `Continuation ${approval.actionRunId}` : approval.id, state: "recorded"});
+    }
+    if (run.finishedAt) steps.push({time: run.finishedAt, actor: "Werkt", kind: "system", title: `Run ${run.status}`, detail: `${run.id} · ${run.error || (run.result != null ? "structured result recorded" : "terminal state recorded")}`, state: run.status});
+    return steps.sort((left, right) => new Date(left.time || "9999-12-31").getTime() - new Date(right.time || "9999-12-31").getTime());
+  }
+
+  function renderActorJourney(run, approvals, id) {
+    const steps = journeySteps(run, approvals);
+    const hasBoundary = Boolean(approvalForRun(run, approvals)) || steps.some((step) => ["human", "timer", "actor"].includes(step.kind));
+    if (!hasBoundary) return "";
+    return `<section class="actor-journey" aria-labelledby="${id}-title"><div class="section-heading"><div><h4 id="${id}-title">Continuation journey</h4><p>Actor lanes appear because this run crosses a human or timed boundary.</p></div></div><ol>${steps.map((step) => `<li class="journey-step is-${step.kind}"><span class="journey-actor">${escapeHTML(step.actor)}</span><span class="journey-line" aria-hidden="true"><i></i></span><span class="journey-event"><strong>${escapeHTML(step.title)}</strong><small>${escapeHTML(step.detail)}</small></span><span class="journey-state">${escapeHTML(step.state)}</span></li>`).join("")}</ol></section>`;
+  }
+
+  function renderFlowLedger(detail, activeRevision, triggers, run) {
+    const definitionRows = [
+      ...triggers.map((trigger) => ({time: null, actor: "Manifest", kind: "code", title: "Event source declaration", detail: `${trigger.type} · ${trigger.id} · ${triggerConfiguration(trigger)}`, state: detail.enabled && trigger.enabled ? "enabled" : "paused"})),
+      {time: null, actor: "Manifest", kind: "code", title: "Immutable revision", detail: `${run?.revisionId || detail.activeRevisionId} · content ${activeRevision?.contentHash || "unavailable"}`, state: run?.revisionId === detail.activeRevisionId || !run ? "active context" : "historical context"},
+      {time: null, actor: "Manifest", kind: "code", title: "Runtime definition", detail: run && run.revisionId !== detail.activeRevisionId ? "historical runtime manifest unavailable" : `${detail.manifest?.runtime?.image || "local process"} · ${detail.manifest?.execution?.concurrency || "allow"} concurrency`, state: "definition"},
+    ];
+    const rows = run ? [...definitionRows, ...recordedLedgerRows(run, state.detailApprovals)] : definitionRows;
+    const title = run ? "Exact flow ledger" : "Definition facts";
+    return `<details class="flow-ledger" open><summary data-flow-focus="ledger-summary">${title} <span>${rows.length} ${rows.length === 1 ? "record" : "records"}</span></summary><div class="flow-ledger-table" role="table" aria-label="${title}"><div class="flow-ledger-head" role="row"><span role="columnheader">Time</span><span role="columnheader">Actor</span><span role="columnheader">Recorded change</span><span role="columnheader">State</span></div>${rows.map((row) => `<div class="flow-ledger-row" role="row">${exactTimeCell(row.time)}<span role="cell" data-label="Actor" class="ledger-actor is-${escapeHTML(row.kind)}">${escapeHTML(row.actor)}</span><span role="cell" data-label="Recorded change"><strong>${escapeHTML(row.title)}</strong><code>${escapeHTML(row.detail)}</code></span><span role="cell" data-label="State">${escapeHTML(row.state)}</span></div>`).join("")}</div></details>`;
+  }
+
+  function recordedLedgerRows(run, approvals) {
+    const event = run.event;
+    const metadata = event?.metadata || {};
+    const approval = approvalForRun(run, approvals);
+    const sourceActor = metadata.source === "manual" || metadata.source === "approval" ? (metadata.actor || "Operator or agent") : (event?.trigger?.type ? capitalize(event.trigger.type) : "Event source");
+    const occurredTitle = metadata.source === "deferred" ? "Scheduled availability" : (metadata.source === "approval" ? "Approval decision occurred" : "Event occurred");
+    const receivedTitle = metadata.source === "deferred" ? "Continuation request recorded" : (metadata.source === "approval" ? "Approval decision received" : "Event received");
+    const rows = [];
+    if (event?.occurredAt) rows.push({time: event.occurredAt, actor: sourceActor, kind: metadata.source === "deferred" ? "timer" : (metadata.actor ? "actor" : "system"), title: occurredTitle, detail: `${event.id} · ${event.trigger.type} · ${event.trigger.id}`, state: metadata.source === "deferred" ? "scheduled" : "occurred"});
+    if (event?.receivedAt) rows.push({time: event.receivedAt, actor: "Werkt", kind: "system", title: receivedTitle, detail: `${event.id} · source ${metadata.source || event.trigger.type}`, state: "durable"});
+    rows.push({time: run.createdAt, actor: "Werkt", kind: "system", title: "Run created", detail: `${run.id} · ${run.revisionId} · attempt ${run.attempt}/${run.maxAttempts}`, state: "queued"});
+    if (run.startedAt) rows.push({time: run.startedAt, actor: "Code", kind: "code", title: "Revision started", detail: `${run.id} · ${run.revisionId}`, state: "running"});
+    if (approval?.requestedByRunId === run.id) {
+      rows.push({time: approval.createdAt, actor: "Werkt", kind: "system", title: "Approval requested for Operator", detail: `${approval.id} · ${approval.title}`, state: approval.status === "pending" ? "waiting" : approval.status});
+      if (approval.resolvedAt) rows.push({time: approval.resolvedAt, actor: approval.resolvedBy || "Operator", kind: "human", title: `Decision ${approval.status}`, detail: `${approval.id}${approval.actionRunId ? ` · continuation ${approval.actionRunId}` : ""}`, state: "recorded"});
+    }
+    if (run.finishedAt) rows.push({time: run.finishedAt, actor: "Werkt", kind: "system", title: `Run ${run.status}`, detail: `${run.id} · logs ${run.logs ? "recorded" : "absent"} · result ${run.result != null ? "recorded" : "absent"}${run.error ? ` · ${run.error}` : ""}`, state: run.status});
+    return rows.map((row, index) => ({...row, index})).sort((left, right) => new Date(left.time).getTime() - new Date(right.time).getTime() || left.index - right.index);
+  }
+
+  function exactTimeCell(value) {
+    if (!value) return '<span role="cell" data-label="Time" class="tabular">Definition</span>';
+    const date = new Date(value);
+    const exact = Number.isNaN(date.valueOf()) ? String(value) : date.toISOString();
+    return `<time role="cell" data-label="Time" class="tabular" datetime="${escapeHTML(exact)}">${escapeHTML(exact)}</time>`;
+  }
+
+  function exactTimestamp(value) {
+    if (!value) return "unavailable";
+    const date = new Date(value);
+    return Number.isNaN(date.valueOf()) ? String(value) : date.toISOString();
+  }
+
+  function renderUnavailableLedger(run, status) {
+    const label = status === "loading" ? "Loading exact run evidence" : "Exact run evidence unavailable";
+    return `<details class="flow-ledger" open><summary data-flow-focus="ledger-summary">Exact flow ledger <span>${escapeHTML(status)}</span></summary><div class="flow-ledger-table" role="table" aria-label="Exact flow ledger"><div class="flow-ledger-head" role="row"><span role="columnheader">Time</span><span role="columnheader">Actor</span><span role="columnheader">Recorded change</span><span role="columnheader">State</span></div><div class="flow-ledger-row" role="row">${exactTimeCell(run.createdAt)}<span role="cell" data-label="Actor" class="ledger-actor is-system">Werkt</span><span role="cell" data-label="Recorded change"><strong>${escapeHTML(label)}</strong><code>${escapeHTML(run.id)} · revision ${escapeHTML(run.revisionId)} · status ${escapeHTML(run.status)}</code></span><span role="cell" data-label="State">${escapeHTML(status)}</span></div></div></details>`;
+  }
+
+  async function selectAutomationTab(tab, moveFocus = true) {
+    if (!["overview", "flow"].includes(tab)) return;
+    state.automationTab = tab;
+    if (tab === "flow" && state.flowLayer === "live" && !state.flowRunID) state.flowRunID = state.detailRuns[0]?.id || "";
+    renderAutomationDetail();
+    if (tab === "flow" && state.flowLayer === "live") await loadFlowRun(state.flowRunID);
+    if (moveFocus) workspaceContent.querySelector(`[data-automation-tab="${tab}"]`)?.focus();
+  }
+
+  function currentFlowFocusSelector(preferred = "") {
+    if (preferred) return preferred;
+    const active = document.activeElement;
+    if (active?.dataset?.flowFocus) return `[data-flow-focus="${CSS.escape(active.dataset.flowFocus)}"]`;
+    if (active?.matches?.("[data-flow-run]")) return "[data-flow-run]";
+    if (active?.dataset?.flowLayer) return `[data-flow-layer="${CSS.escape(active.dataset.flowLayer)}"]`;
+    if (active?.dataset?.flowEvidence) return `[data-flow-evidence="${CSS.escape(active.dataset.flowEvidence)}"]`;
+    if (active?.dataset?.automationTab) return `[data-automation-tab="${CSS.escape(active.dataset.automationTab)}"]`;
+    return "";
+  }
+
+  function renderAutomationDetailPreservingFocus(preferred = "") {
+    const selector = currentFlowFocusSelector(preferred);
+    renderAutomationDetail();
+    if (selector) (workspaceContent.querySelector(selector) || workspaceContent.querySelector('[data-flow-layer="live"]'))?.focus();
+  }
+
+  async function retryFlowApprovals() {
+    if (!state.selectedAutomation) return;
+    const selector = '[data-flow-focus="retry-approvals"]';
+    state.detailApprovalsError = "";
+    renderAutomationDetailPreservingFocus(selector);
+    try {
+      const approvals = await api(`/api/v1/approvals?automation=${encodeURIComponent(state.selectedAutomation)}&limit=${HISTORY_LIMIT}`, {page: true});
+      state.detailApprovals = approvals.items;
+    } catch (error) {
+      if (!isAbort(error) && !(error instanceof AuthenticationRequired)) state.detailApprovalsError = detailApprovalsMessage(error);
+    } finally {
+      if (state.automationTab === "flow") renderAutomationDetailPreservingFocus(selector);
+    }
+  }
+
+  async function loadFlowRun(runID, {force = false, focusSelector = ""} = {}) {
+    if (!runID) return;
+    if (state.flowRunDetails[runID] && !force) {
+      renderAutomationDetailPreservingFocus(focusSelector);
+      return;
+    }
+    state.flowRunLoading[runID] = true;
+    delete state.flowRunErrors[runID];
+    if (state.automationTab === "flow") renderAutomationDetailPreservingFocus(focusSelector);
+    try {
+      const run = await api(`/api/v1/runs/${encodeURIComponent(runID)}`);
+      if (state.flowRunID !== runID || state.automationTab !== "flow") return;
+      state.flowRunDetails[runID] = run;
+    } catch (error) {
+      if (!(error instanceof AuthenticationRequired)) state.flowRunErrors[runID] = `Run evidence could not be loaded. ${recoveryGuidance(error)}`;
+    } finally {
+      delete state.flowRunLoading[runID];
+      if (state.flowRunID === runID && state.automationTab === "flow") renderAutomationDetailPreservingFocus(focusSelector);
+    }
   }
 
   function renderTriggers(triggers, automationEnabled) {
@@ -986,7 +1263,7 @@
   function renderDiagnosis(focusPanel = false) {
     const run = state.selectedRun;
     if (!run) return;
-    const tabs = ["summary", "logs", "output"];
+    const tabs = ["summary", "journey", "logs", "output"];
     const activeTab = state.diagnosisTab;
     diagnosisContent.innerHTML = `<div class="diagnosis-header"><div class="diagnosis-header-top"><h2 id="diagnosis-title">Run details</h2><button class="icon-button" type="button" data-close-diagnosis aria-label="Close run details">${icon("close")}</button></div><div class="diagnosis-run"><span class="status-badge status-${statusClass(run.status)}" data-run-status>${escapeHTML(capitalize(run.status))}</span><strong>${escapeHTML(run.automationId)}</strong></div><p class="diagnosis-meta"><span>${relativeTimeElement(run.startedAt || run.createdAt)}</span><span data-run-duration>${escapeHTML(runDuration(run))}</span><span>attempt <span data-run-attempt>${escapeHTML(`${run.attempt}/${run.maxAttempts}`)}</span></span></p><div class="diagnosis-tabs" role="tablist" aria-label="Run detail">${tabs.map((tab) => `<button id="diagnosis-tab-${tab}" class="tab-button" type="button" role="tab" data-diagnosis-tab="${tab}" aria-controls="diagnosis-panel-${tab}" aria-selected="${activeTab === tab}" tabindex="${activeTab === tab ? "0" : "-1"}">${capitalize(tab)}</button>`).join("")}</div></div><div class="diagnosis-body">${renderRunFailure(run)}${tabs.map((tab) => `<div id="diagnosis-panel-${tab}" role="tabpanel" aria-labelledby="diagnosis-tab-${tab}" tabindex="0" ${activeTab === tab ? "" : "hidden"}>${activeTab === tab ? diagnosisTabContent(run) : ""}</div>`).join("")}</div>`;
     if (focusPanel) diagnosisContent.querySelector("[data-close-diagnosis]").focus();
@@ -1010,7 +1287,7 @@
     diagnosisContent.querySelector("[data-run-duration]").textContent = runDuration(run);
     diagnosisContent.querySelector("[data-run-attempt]").textContent = `${run.attempt}/${run.maxAttempts}`;
     const body = diagnosisContent.querySelector(".diagnosis-body");
-    if (!body.contains(document.activeElement)) body.innerHTML = `${renderRunFailure(run)}${["summary", "logs", "output"].map((tab) => `<div id="diagnosis-panel-${tab}" role="tabpanel" aria-labelledby="diagnosis-tab-${tab}" tabindex="0" ${state.diagnosisTab === tab ? "" : "hidden"}>${state.diagnosisTab === tab ? diagnosisTabContent(run) : ""}</div>`).join("")}`;
+    if (!body.contains(document.activeElement)) body.innerHTML = `${renderRunFailure(run)}${["summary", "journey", "logs", "output"].map((tab) => `<div id="diagnosis-panel-${tab}" role="tabpanel" aria-labelledby="diagnosis-tab-${tab}" tabindex="0" ${state.diagnosisTab === tab ? "" : "hidden"}>${state.diagnosisTab === tab ? diagnosisTabContent(run) : ""}</div>`).join("")}`;
   }
 
   function deploymentActions(deployment) {
@@ -1060,6 +1337,11 @@
   }
 
   function diagnosisTabContent(run) {
+    if (state.diagnosisTab === "journey") {
+      const approvals = state.approvals.filter((approval) => approval.automationId === run.automationId);
+      const journey = renderActorJourney(run, approvals, "diagnosis-journey");
+      return journey || `<section class="journey-empty"><h3>Single execution boundary</h3><p>This run has no recorded human or timed continuation. Its exact event and execution timestamps remain available below.</p>${renderFlowLedger({activeRevisionId: run.revisionId, enabled: true}, null, [], run)}</section>`;
+    }
     if (state.diagnosisTab === "logs") {
       return `<div class="copy-row"><button class="button button-quiet" type="button" data-copy="logs">${icon("copy")}Copy logs</button></div><pre class="code-block">${escapeHTML(run.logs || "This run produced no stdout or stderr output.")}</pre>`;
     }
@@ -1765,6 +2047,27 @@
     if (diagnosisTab) { selectDiagnosisTab(diagnosisTab.dataset.diagnosisTab); return; }
     const diagnosisTabAction = event.target.closest("[data-diagnosis-tab-action]");
     if (diagnosisTabAction) { selectDiagnosisTab(diagnosisTabAction.dataset.diagnosisTabAction); return; }
+    const automationTab = event.target.closest("[data-automation-tab]");
+    if (automationTab) { selectAutomationTab(automationTab.dataset.automationTab); return; }
+    const flowLayer = event.target.closest("[data-flow-layer]");
+    if (flowLayer) {
+      state.flowLayer = flowLayer.dataset.flowLayer;
+      if (state.flowLayer === "live") state.flowRunID = state.flowRunID || state.detailRuns[0]?.id || "";
+      renderAutomationDetail();
+      if (state.flowLayer === "live") loadFlowRun(state.flowRunID);
+      workspaceContent.querySelector(`[data-flow-layer="${state.flowLayer}"]`)?.focus();
+      return;
+    }
+    const flowEvidence = event.target.closest("[data-flow-evidence]");
+    if (flowEvidence) {
+      state.flowEvidence = flowEvidence.dataset.flowEvidence;
+      renderAutomationDetail();
+      workspaceContent.querySelector(`[data-flow-evidence="${CSS.escape(state.flowEvidence)}"]`)?.focus();
+      return;
+    }
+    const retryFlowRun = event.target.closest("[data-retry-flow-run]");
+    if (retryFlowRun) { loadFlowRun(retryFlowRun.dataset.retryFlowRun, {force: true, focusSelector: '[data-flow-focus="retry-run"]'}); return; }
+    if (event.target.closest("[data-retry-detail-approvals]") && state.selectedAutomation) { retryFlowApprovals(); return; }
     if (event.target.closest("[data-copy-diagnostic]") && state.selectedRun) {
       navigator.clipboard.writeText(diagnosticBundle(state.selectedRun)).then(() => showToast("Diagnostic bundle copied."), () => showToast("Clipboard access was unavailable.", true));
       return;
@@ -1879,6 +2182,12 @@
   });
 
   document.addEventListener("change", (event) => {
+    if (event.target.matches("[data-flow-run]")) {
+      state.flowRunID = event.target.value;
+      state.flowEvidence = "revision";
+      loadFlowRun(state.flowRunID, {focusSelector: "[data-flow-run]"});
+      return;
+    }
     if (event.target.id === "run-status-filter") {
       state.runStatusFilter = event.target.value;
       writeRoute();
@@ -1986,10 +2295,19 @@
     const diagnosisTab = event.target.closest?.("[data-diagnosis-tab]");
     if (diagnosisTab && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
       event.preventDefault();
-      const tabs = ["summary", "logs", "output"];
+      const tabs = ["summary", "journey", "logs", "output"];
       const current = tabs.indexOf(diagnosisTab.dataset.diagnosisTab);
       const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
       selectDiagnosisTab(tabs[next]);
+      return;
+    }
+    const automationTab = event.target.closest?.("[data-automation-tab]");
+    if (automationTab && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      const tabs = ["overview", "flow"];
+      const current = tabs.indexOf(automationTab.dataset.automationTab);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+      selectAutomationTab(tabs[next]);
       return;
     }
     if (event.key === "Tab" && !diagnosisPane.hidden && diagnosisModalQuery.matches && !nativeDialogOpen) {
@@ -2065,6 +2383,43 @@
   }
 
   window.setTimeout(pollSelectedRun, 2000);
+
+  async function pollFlowRun() {
+    const runID = state.automationTab === "flow" && state.flowLayer === "live" ? state.flowRunID : "";
+    const run = runID ? state.flowRunDetails[runID] : null;
+    if (run && !state.mutating && !["succeeded", "failed"].includes(run.status)) {
+      const request = ++flowPollRequest;
+      flowPollController?.abort();
+      flowPollController = new AbortController();
+      try {
+        const refreshed = await api(`/api/v1/runs/${encodeURIComponent(runID)}`, {signal: flowPollController.signal});
+        if (request === flowPollRequest && state.automationTab === "flow" && state.flowLayer === "live" && state.flowRunID === runID) {
+          const becameTerminal = !["succeeded", "failed"].includes(run.status) && ["succeeded", "failed"].includes(refreshed.status);
+          state.flowRunDetails[runID] = refreshed;
+          const summary = state.detailRuns.find((item) => item.id === runID);
+          if (summary) Object.assign(summary, refreshed);
+          if (becameTerminal && state.detail) {
+            try {
+              const approvals = await api(`/api/v1/approvals?automation=${encodeURIComponent(state.detail.id)}&limit=${HISTORY_LIMIT}`, {page: true});
+              state.detailApprovals = approvals.items;
+              state.detailApprovalsError = "";
+            } catch (error) {
+              if (!isAbort(error) && !(error instanceof AuthenticationRequired)) state.detailApprovalsError = detailApprovalsMessage(error);
+            }
+          }
+          renderAutomationDetailPreservingFocus();
+        }
+      } catch (error) {
+        if (request === flowPollRequest && !isAbort(error) && !(error instanceof AuthenticationRequired)) {
+          state.flowRunErrors[runID] = `Live run refresh failed. ${recoveryGuidance(error)}`;
+          renderAutomationDetailPreservingFocus();
+        }
+      }
+    }
+    window.setTimeout(pollFlowRun, 2000);
+  }
+
+  window.setTimeout(pollFlowRun, 2000);
 
   window.setInterval(refreshTemporalValues, 30000);
   document.addEventListener("visibilitychange", refreshTemporalValues);

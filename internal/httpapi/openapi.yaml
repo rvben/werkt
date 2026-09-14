@@ -543,7 +543,7 @@ paths:
         - {$ref: "#/components/parameters/Cursor"}
       responses:
         "200":
-          description: Log-free run summaries newest first. Fetch one run for logs, errors, event data, and structured output.
+          description: Log-free run summaries newest first. Fetch one run for logs, errors, minimized event provenance, and structured output.
           headers:
             X-Werkt-Next-Cursor: {$ref: "#/components/headers/NextCursor"}
             Link: {$ref: "#/components/headers/NextLink"}
@@ -890,10 +890,33 @@ components:
         - type: object
           properties:
             eventId: {type: string}
+            event:
+              type: object
+              properties:
+                id: {type: string}
+                occurredAt: {type: string, format: date-time}
+                receivedAt: {type: string, format: date-time}
+                trigger:
+                  type: object
+                  properties:
+                    automation: {type: string}
+                    id: {type: string}
+                    type: {type: string}
+                  required: [automation, id, type]
+                metadata:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    source: {type: string}
+                    actor: {type: string}
+                    approvalId: {type: string}
+                    parentRunId: {type: string}
+                    continuationKey: {type: string}
+              required: [id, occurredAt, receivedAt, trigger]
             logs: {type: string}
             error: {type: string}
             result: {}
-          required: [eventId]
+          required: [eventId, event]
     ApprovalField:
       type: object
       additionalProperties: false

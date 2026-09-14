@@ -18,7 +18,8 @@ func TestRetentionLifecycleIntegration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	store, err := Open(ctx, databaseURL)
+	dataDir := t.TempDir()
+	store, err := Open(ctx, databaseURL, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,14 +40,14 @@ func TestRetentionLifecycleIntegration(t *testing.T) {
 		Metadata: domain.Metadata{Name: "retention-example", Project: "integration"},
 		Runtime:  domain.Runtime{Language: "go", Command: []string{"./automation"}},
 	}
-	inactivePath := t.TempDir()
 	inactiveHash := strings.Repeat("a", 64)
+	inactivePath := testStorageFixture(t, dataDir, "artifacts", inactiveHash)
 	inactiveRevision, err := store.Deploy(ctx, manifest, inactiveHash, inactivePath, testArtifactProvenance(manifest, inactiveHash))
 	if err != nil {
 		t.Fatal(err)
 	}
-	activePath := t.TempDir()
 	activeHash := strings.Repeat("b", 64)
+	activePath := testStorageFixture(t, dataDir, "artifacts", activeHash)
 	activeRevision, err := store.Deploy(ctx, manifest, activeHash, activePath, testArtifactProvenance(manifest, activeHash))
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +55,7 @@ func TestRetentionLifecycleIntegration(t *testing.T) {
 	if detached, err := store.DetachRetentionItem(ctx, domain.RetentionKindArtifact, activePath); err != nil || detached {
 		t.Fatalf("active artifact detached=%v err=%v", detached, err)
 	}
-	deploying, created, err := store.CreateDeployment(ctx, "dep_existing_artifact", "existing-artifact", strings.Repeat("d", 64), t.TempDir(), "agent:test")
+	deploying, created, err := store.CreateDeployment(ctx, "dep_existing_artifact", "existing-artifact", strings.Repeat("d", 64), testStorageFixture(t, dataDir, "deployment-sources", "dep_existing_artifact"), "agent:test")
 	if err != nil || !created {
 		t.Fatalf("deploying=%#v created=%v err=%v", deploying, created, err)
 	}
@@ -85,7 +86,7 @@ func TestRetentionLifecycleIntegration(t *testing.T) {
 		t.Fatalf("artifact records = %#v, err = %v", artifactRecords, err)
 	}
 
-	sourcePath := t.TempDir()
+	sourcePath := testStorageFixture(t, dataDir, "deployment-sources", "dep_retention")
 	deployment, created, err := store.CreateDeployment(ctx, "dep_retention", "retention-source", strings.Repeat("c", 64), sourcePath, "agent:test")
 	if err != nil || !created {
 		t.Fatalf("deployment=%#v created=%v err=%v", deployment, created, err)

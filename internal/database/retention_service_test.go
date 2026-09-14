@@ -21,7 +21,8 @@ func TestRetentionManagerRevalidatesPlanBeforeDeleting(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	store, err := database.Open(ctx, databaseURL)
+	dataDir := t.TempDir()
+	store, err := database.Open(ctx, databaseURL, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +43,6 @@ func TestRetentionManagerRevalidatesPlanBeforeDeleting(t *testing.T) {
 	reset()
 	defer reset()
 
-	dataDir := t.TempDir()
 	deletedSource := filepath.Join(dataDir, "deployment-sources", "dep_delete")
 	protectedSource := filepath.Join(dataDir, "deployment-sources", "dep_protect")
 	writeRetentionFixture(t, deletedSource)
