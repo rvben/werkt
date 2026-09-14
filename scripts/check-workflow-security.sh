@@ -13,7 +13,9 @@ while IFS= read -r match; do
     if [[ $action == ./* || $action == docker://* ]]; then
       continue
     fi
-    if [[ ! $action =~ ^[^/@[:space:]]+/[^/@[:space:]]+@[0-9a-f]{40}$ ]]; then
+    # An action is owner/repo@sha; a reusable workflow names its file in
+    # between, as owner/repo/.github/workflows/name.yml@sha.
+    if [[ ! $action =~ ^[^/@[:space:]]+/[^/@[:space:]]+(/[^@[:space:]]+)?@[0-9a-f]{40}$ ]]; then
       echo "workflow-security: $file:$line does not pin $action to a full commit SHA" >&2
       failed=true
     fi
