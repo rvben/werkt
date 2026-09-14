@@ -234,6 +234,8 @@ func (s *Server) createDeployment(response http.ResponseWriter, request *http.Re
 			writeError(response, http.StatusUnprocessableEntity, err.Error())
 		case errors.Is(err, database.ErrDeploymentIdempotencyConflict):
 			writeProblem(response, http.StatusConflict, "idempotency_conflict", err.Error(), false, map[string]any{"header": "Idempotency-Key"})
+		case errors.Is(err, database.ErrDeploymentContentUnverifiable):
+			writeProblem(response, http.StatusConflict, "idempotency_unverifiable", err.Error(), false, map[string]any{"header": "Idempotency-Key"})
 		case errors.Is(err, packageio.ErrCompressedLimit), errors.Is(err, packageio.ErrExpandedLimit), errors.Is(err, packageio.ErrEntryLimit):
 			writeError(response, http.StatusRequestEntityTooLarge, err.Error())
 		case errors.Is(err, packageio.ErrUnsafeArchive), errors.Is(err, packageio.ErrInvalidArchive):

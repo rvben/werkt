@@ -72,7 +72,9 @@ Idempotency-Key: <stable key for this intended deployment>
 X-Werkt-Actor: agent:deployer
 ```
 
-A new upload returns `202 Accepted`; an idempotent retry returns `200 OK` and the original deployment. The response includes `Location` for `GET /api/v1/deployments/{id}` and `Retry-After: 1` while the deployment is not terminal. Reusing an idempotency key for different package bytes returns `409 Conflict`.
+A new upload returns `202 Accepted`; an idempotent retry returns `200 OK` and the original deployment. The response includes `Location` for `GET /api/v1/deployments/{id}` and `Retry-After: 1` while the deployment is not terminal.
+
+An idempotency key names the package, not the archive that carried it. `packageDigest` is the digest of the exact compressed body and stays the integrity check for the upload, while `contentDigest` covers the extracted tree: paths, permission bits, sizes, and contents. The same package compressed a second time can produce different bytes, so it is `contentDigest` the key promises is unchanged. Reusing a key for different package contents returns `409 Conflict`; reusing it for the same contents replays the original deployment. A key recorded before deployments carried a content digest is answered from the source it retained, and a key whose retained source has since been pruned returns `409 Conflict` as unverifiable rather than being treated as a match.
 
 The lifecycle is `queued` → `validating` → optional `building` → optional `checking` → `activating` → `succeeded`. Any active stage can become `failed` or `cancelled`. The deployment detail includes ordered validation, build, check, and activation steps with bounded logs, errors, and timings. A successful response includes the automation, source content hash, immutable revision, and `provenance`: the signed artifact digest, effective digest-pinned images or resolved tool environment, signature algorithm, public key, and installation signing-key fingerprint. Revision activation, provenance persistence, and the transition to `succeeded` commit in the same database transaction.
 

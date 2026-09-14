@@ -295,7 +295,7 @@ paths:
         - name: Idempotency-Key
           in: header
           required: true
-          description: Replay key for this deployment request. Reuse with a different package digest returns 409.
+          description: Replay key for this deployment request. A key names package contents, not the archive that carried them, so the same package compressed differently replays the original deployment and different contents return 409.
           schema: {type: string, minLength: 1, maxLength: 255}
         - name: X-Werkt-Content-SHA256
           in: header
@@ -971,6 +971,7 @@ components:
         status: {type: string, enum: [queued, validating, building, checking, activating, succeeded, failed, cancelled]}
         automationId: {type: string}
         packageDigest: {type: string, pattern: "^[a-f0-9]{64}$"}
+        contentDigest: {type: string, pattern: "^sha256:[a-f0-9]{64}$"}
         contentHash: {type: string, pattern: "^[a-f0-9]{64}$"}
         revisionId: {type: string}
         retryOf: {type: string}

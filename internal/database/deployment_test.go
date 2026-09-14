@@ -35,15 +35,19 @@ func TestDeploymentLifecycleIntegration(t *testing.T) {
 	}()
 
 	packageDigest := strings.Repeat("a", 64)
-	deployment, created, err := store.CreateDeployment(ctx, "dep_success", "deployment-key", packageDigest, testStorageFixture(t, dataDir, "deployment-sources", "dep_success"), "agent:builder")
+	contentDigest := "sha256:" + strings.Repeat("1", 64)
+	deployment, created, err := store.CreateDeployment(ctx, "dep_success", "deployment-key", packageDigest, contentDigest, testStorageFixture(t, dataDir, "deployment-sources", "dep_success"), "agent:builder")
 	if err != nil || !created || deployment.Status != domain.DeploymentQueued {
 		t.Fatalf("deployment=%#v created=%v err=%v", deployment, created, err)
 	}
-	duplicate, created, err := store.CreateDeployment(ctx, "dep_ignored", "deployment-key", packageDigest, testStorageFixture(t, dataDir, "deployment-sources", "dep_ignored"), "agent:other")
+	// An idempotency key promises the package has not changed, not that the
+	// archive encoder produced the same bytes, so the same contents arriving in a
+	// differently compressed stream replay the original deployment.
+	duplicate, created, err := store.CreateDeployment(ctx, "dep_ignored", "deployment-key", strings.Repeat("b", 64), contentDigest, testStorageFixture(t, dataDir, "deployment-sources", "dep_ignored"), "agent:other")
 	if err != nil || created || duplicate.ID != deployment.ID {
 		t.Fatalf("duplicate=%#v created=%v err=%v", duplicate, created, err)
 	}
-	if _, _, err := store.CreateDeployment(ctx, "dep_conflict", "deployment-key", strings.Repeat("b", 64), testStorageFixture(t, dataDir, "deployment-sources", "dep_conflict"), "agent:builder"); !errors.Is(err, ErrDeploymentIdempotencyConflict) {
+	if _, _, err := store.CreateDeployment(ctx, "dep_conflict", "deployment-key", packageDigest, "sha256:"+strings.Repeat("2", 64), testStorageFixture(t, dataDir, "deployment-sources", "dep_conflict"), "agent:builder"); !errors.Is(err, ErrDeploymentIdempotencyConflict) {
 		t.Fatalf("conflict error=%v", err)
 	}
 
@@ -94,7 +98,7 @@ func TestDeploymentLifecycleIntegration(t *testing.T) {
 		t.Fatalf("completed deployment accepted stage update: %v", err)
 	}
 
-	failed, created, err := store.CreateDeployment(ctx, "dep_failure", "failure-key", strings.Repeat("d", 64), testStorageFixture(t, dataDir, "deployment-sources", "dep_failure"), "agent:builder")
+	failed, created, err := store.CreateDeployment(ctx, "dep_failure", "failure-key", strings.Repeat("d", 64), "sha256:"+strings.Repeat("3", 64), testStorageFixture(t, dataDir, "deployment-sources", "dep_failure"), "agent:builder")
 	if err != nil || !created {
 		t.Fatalf("failed setup=%#v created=%v err=%v", failed, created, err)
 	}

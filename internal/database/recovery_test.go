@@ -246,7 +246,7 @@ func TestMigrationRelativizesStorageLocationsWrittenAsAbsolutePaths(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	deployment, created, err := store.CreateDeployment(ctx, "dep_migrated", "migration-key", strings.Repeat("e", 64), storage("deployment-sources", "dep_migrated"), "agent:test")
+	deployment, created, err := store.CreateDeployment(ctx, "dep_migrated", "migration-key", strings.Repeat("e", 64), "sha256:"+strings.Repeat("6", 64), storage("deployment-sources", "dep_migrated"), "agent:test")
 	if err != nil || !created {
 		t.Fatalf("CreateDeployment() created=%v err=%v", created, err)
 	}

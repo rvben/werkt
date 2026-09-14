@@ -15,6 +15,7 @@ import (
 	"github.com/rvben/werkt/internal/database"
 	"github.com/rvben/werkt/internal/domain"
 	"github.com/rvben/werkt/internal/packageio"
+	"github.com/rvben/werkt/internal/provenance"
 )
 
 var (
@@ -89,13 +90,21 @@ func (i *DeploymentIntake) Accept(ctx context.Context, packageReader io.Reader, 
 	if err := packageio.Extract(uploadPath, temporarySource, i.limits); err != nil {
 		return domain.Deployment{}, false, err
 	}
+	// The deployment's identity is the package content, normalized by extraction,
+	// rather than the compressed bytes it travelled in: the same package archived
+	// twice can produce different streams, and an idempotency key promises that
+	// the package has not changed, not that the encoder has not.
+	contentDigest, err := provenance.DigestDirectory(temporarySource)
+	if err != nil {
+		return domain.Deployment{}, false, fmt.Errorf("digest package contents: %w", err)
+	}
 	finalSource := filepath.Join(sourcesDirectory, deploymentID)
 	if err := os.Rename(temporarySource, finalSource); err != nil {
 		return domain.Deployment{}, false, err
 	}
 	temporarySource = finalSource
 	value, created, err := i.store.CreateDeployment(
-		ctx, deploymentID, idempotencyKey, packageDigest, finalSource, actor,
+		ctx, deploymentID, idempotencyKey, packageDigest, contentDigest, finalSource, actor,
 	)
 	if err != nil {
 		return domain.Deployment{}, false, err

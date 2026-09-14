@@ -27,6 +27,7 @@ var (
 	ErrRunLeaseLost                  = errors.New("run lease ownership was lost")
 	ErrDeploymentLeaseLost           = errors.New("deployment lease ownership was lost")
 	ErrDeploymentIdempotencyConflict = errors.New("deployment idempotency key was already used for another package")
+	ErrDeploymentContentUnverifiable = errors.New("deployment idempotency key predates content digests and the package it recorded is no longer readable")
 	ErrDeploymentNotRetryable        = errors.New("deployment is not failed or cancelled")
 	ErrDeploymentSourceUnavailable   = errors.New("deployment source is unavailable")
 	ErrDeploymentNotCancellable      = errors.New("deployment is already terminal")
@@ -1340,27 +1341,68 @@ func (s *Store) EnqueueManualRun(ctx context.Context, automationID, externalID, 
 	return runID, true, nil
 }
 
-func (s *Store) CreateDeployment(ctx context.Context, deploymentID, idempotencyKey, packageDigest, sourcePath, actor string) (domain.Deployment, bool, error) {
+func (s *Store) CreateDeployment(ctx context.Context, deploymentID, idempotencyKey, packageDigest, contentDigest, sourcePath, actor string) (domain.Deployment, bool, error) {
 	recordedSourcePath, err := s.relativeStorageLocation(sourcePath)
 	if err != nil {
 		return domain.Deployment{}, false, err
 	}
 	command, err := s.pool.Exec(ctx, `
-		INSERT INTO deployments (id, idempotency_key, package_digest, source_path, status, actor)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO deployments (id, idempotency_key, package_digest, content_digest, source_path, status, actor)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (idempotency_key) DO NOTHING`,
-		deploymentID, idempotencyKey, packageDigest, recordedSourcePath, domain.DeploymentQueued, actor)
+		deploymentID, idempotencyKey, packageDigest, contentDigest, recordedSourcePath,
+		domain.DeploymentQueued, actor)
 	if err != nil {
 		return domain.Deployment{}, false, err
+	}
+	if command.RowsAffected() != 1 {
+		recorded, err := s.deploymentContentDigest(ctx, idempotencyKey)
+		if err != nil {
+			return domain.Deployment{}, false, err
+		}
+		if recorded != contentDigest {
+			return domain.Deployment{}, false, ErrDeploymentIdempotencyConflict
+		}
 	}
 	value, err := s.getDeploymentByIdempotencyKey(ctx, idempotencyKey)
 	if err != nil {
 		return domain.Deployment{}, false, err
 	}
-	if value.PackageDigest != packageDigest {
-		return domain.Deployment{}, false, ErrDeploymentIdempotencyConflict
-	}
 	return value, command.RowsAffected() == 1, nil
+}
+
+// deploymentContentDigest reports the package content already recorded under an
+// idempotency key. Rows written before deployments carried a content digest are
+// digested from the source tree they kept and the answer is stored, so a key
+// stays usable across the upgrade. A row whose source is gone is unverifiable
+// rather than equal: the package it named cannot be compared to anything.
+func (s *Store) deploymentContentDigest(ctx context.Context, idempotencyKey string) (string, error) {
+	var recorded, sourcePath string
+	if err := s.pool.QueryRow(ctx, `
+		SELECT content_digest, source_path FROM deployments WHERE idempotency_key = $1`,
+		idempotencyKey).Scan(&recorded, &sourcePath); err != nil {
+		return "", err
+	}
+	if recorded != "" {
+		return recorded, nil
+	}
+	if sourcePath == "" {
+		return "", ErrDeploymentContentUnverifiable
+	}
+	resolvedSourcePath, err := s.resolveStorageLocation(sourcePath)
+	if err != nil {
+		return "", err
+	}
+	digest, err := provenancepkg.DigestDirectory(resolvedSourcePath)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", ErrDeploymentContentUnverifiable, err)
+	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE deployments SET content_digest = $2
+		WHERE idempotency_key = $1 AND content_digest = ''`, idempotencyKey, digest); err != nil {
+		return "", err
+	}
+	return digest, nil
 }
 
 func (s *Store) ListDeploymentsFiltered(ctx context.Context, automationID, status string, limit int) ([]domain.Deployment, error) {
@@ -1368,7 +1410,7 @@ func (s *Store) ListDeploymentsFiltered(ctx context.Context, automationID, statu
 		limit = 100
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, status, automation_id, package_digest, content_hash,
+		SELECT id, status, automation_id, package_digest, content_digest, content_hash,
 			COALESCE(revision_id, ''), COALESCE(retry_of, ''), actor, error, provenance,
 			created_at, updated_at, started_at, finished_at, cancel_requested_at
 		FROM deployments
@@ -1394,7 +1436,7 @@ func (s *Store) ListDeploymentsPage(ctx context.Context, automationID, status st
 		limit = 101
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, status, automation_id, package_digest, content_hash,
+		SELECT id, status, automation_id, package_digest, content_digest, content_hash,
 			COALESCE(revision_id, ''), COALESCE(retry_of, ''), actor, error, provenance,
 			created_at, updated_at, started_at, finished_at, cancel_requested_at
 		FROM deployments
@@ -1419,7 +1461,7 @@ func (s *Store) ListDeploymentsPage(ctx context.Context, automationID, status st
 func (s *Store) GetDeployment(ctx context.Context, deploymentID string) (domain.Deployment, error) {
 	var value domain.Deployment
 	err := scanDeployment(s.pool.QueryRow(ctx, `
-		SELECT id, status, automation_id, package_digest, content_hash,
+		SELECT id, status, automation_id, package_digest, content_digest, content_hash,
 			COALESCE(revision_id, ''), COALESCE(retry_of, ''), actor, error, provenance,
 			created_at, updated_at, started_at, finished_at, cancel_requested_at
 		FROM deployments WHERE id = $1`, deploymentID), &value)
@@ -1450,7 +1492,7 @@ func (s *Store) GetDeployment(ctx context.Context, deploymentID string) (domain.
 func (s *Store) getDeploymentByIdempotencyKey(ctx context.Context, idempotencyKey string) (domain.Deployment, error) {
 	var value domain.Deployment
 	err := scanDeployment(s.pool.QueryRow(ctx, `
-		SELECT id, status, automation_id, package_digest, content_hash,
+		SELECT id, status, automation_id, package_digest, content_digest, content_hash,
 			COALESCE(revision_id, ''), COALESCE(retry_of, ''), actor, error, provenance,
 			created_at, updated_at, started_at, finished_at, cancel_requested_at
 		FROM deployments WHERE idempotency_key = $1`, idempotencyKey), &value)
@@ -1476,13 +1518,13 @@ func (s *Store) AcquireDeployment(ctx context.Context, workerID string, leaseDur
 			FROM candidate WHERE d.id = candidate.id
 			RETURNING d.*
 		)
-		SELECT id, status, automation_id, package_digest, content_hash,
+		SELECT id, status, automation_id, package_digest, content_digest, content_hash,
 			COALESCE(revision_id, ''), COALESCE(retry_of, ''), actor, error, provenance,
 			created_at, updated_at, started_at, finished_at, cancel_requested_at,
 			source_path
 		FROM claimed`, workerID, leaseDuration.String(), domain.DeploymentQueued,
 		domain.DeploymentValidating, domain.DeploymentBuilding, domain.DeploymentChecking, domain.DeploymentActivating).Scan(
-		&value.ID, &value.Status, &value.AutomationID, &value.PackageDigest, &value.ContentHash,
+		&value.ID, &value.Status, &value.AutomationID, &value.PackageDigest, &value.ContentDigest, &value.ContentHash,
 		&value.RevisionID, &value.RetryOf, &value.Actor, &value.Error, &provenanceJSON, &value.CreatedAt, &value.UpdatedAt,
 		&value.StartedAt, &value.FinishedAt, &value.CancelRequestedAt, &value.SourcePath)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1738,8 +1780,8 @@ func (s *Store) RetryDeployment(ctx context.Context, originalID, deploymentID, i
 		return domain.Deployment{}, false, ErrDeploymentSourceUnavailable
 	}
 	command, err := s.pool.Exec(ctx, `
-		INSERT INTO deployments (id, idempotency_key, package_digest, source_path, status, actor, retry_of)
-		SELECT $2, $3, package_digest, source_path, $4, $5, id
+		INSERT INTO deployments (id, idempotency_key, package_digest, content_digest, source_path, status, actor, retry_of)
+		SELECT $2, $3, package_digest, content_digest, source_path, $4, $5, id
 		FROM deployments
 		WHERE id = $1 AND status IN ($6, $7) AND source_path <> ''
 		ON CONFLICT (idempotency_key) DO NOTHING`,
@@ -1804,7 +1846,7 @@ type rowScanner interface {
 func scanDeployment(row rowScanner, value *domain.Deployment) error {
 	var provenanceJSON []byte
 	if err := row.Scan(&value.ID, &value.Status, &value.AutomationID, &value.PackageDigest,
-		&value.ContentHash, &value.RevisionID, &value.RetryOf, &value.Actor, &value.Error,
+		&value.ContentDigest, &value.ContentHash, &value.RevisionID, &value.RetryOf, &value.Actor, &value.Error,
 		&provenanceJSON, &value.CreatedAt, &value.UpdatedAt, &value.StartedAt, &value.FinishedAt,
 		&value.CancelRequestedAt); err != nil {
 		return err

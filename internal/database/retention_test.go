@@ -55,7 +55,7 @@ func TestRetentionLifecycleIntegration(t *testing.T) {
 	if detached, err := store.DetachRetentionItem(ctx, domain.RetentionKindArtifact, activePath); err != nil || detached {
 		t.Fatalf("active artifact detached=%v err=%v", detached, err)
 	}
-	deploying, created, err := store.CreateDeployment(ctx, "dep_existing_artifact", "existing-artifact", strings.Repeat("d", 64), testStorageFixture(t, dataDir, "deployment-sources", "dep_existing_artifact"), "agent:test")
+	deploying, created, err := store.CreateDeployment(ctx, "dep_existing_artifact", "existing-artifact", strings.Repeat("d", 64), "sha256:"+strings.Repeat("4", 64), testStorageFixture(t, dataDir, "deployment-sources", "dep_existing_artifact"), "agent:test")
 	if err != nil || !created {
 		t.Fatalf("deploying=%#v created=%v err=%v", deploying, created, err)
 	}
@@ -87,7 +87,7 @@ func TestRetentionLifecycleIntegration(t *testing.T) {
 	}
 
 	sourcePath := testStorageFixture(t, dataDir, "deployment-sources", "dep_retention")
-	deployment, created, err := store.CreateDeployment(ctx, "dep_retention", "retention-source", strings.Repeat("c", 64), sourcePath, "agent:test")
+	deployment, created, err := store.CreateDeployment(ctx, "dep_retention", "retention-source", strings.Repeat("c", 64), "sha256:"+strings.Repeat("5", 64), sourcePath, "agent:test")
 	if err != nil || !created {
 		t.Fatalf("deployment=%#v created=%v err=%v", deployment, created, err)
 	}

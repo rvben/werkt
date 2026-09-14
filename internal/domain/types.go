@@ -352,6 +352,7 @@ type Deployment struct {
 	Status            string              `json:"status"`
 	AutomationID      string              `json:"automationId,omitempty"`
 	PackageDigest     string              `json:"packageDigest"`
+	ContentDigest     string              `json:"contentDigest,omitempty"`
 	ContentHash       string              `json:"contentHash,omitempty"`
 	RevisionID        string              `json:"revisionId,omitempty"`
 	RetryOf           string              `json:"retryOf,omitempty"`

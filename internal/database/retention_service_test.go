@@ -2,6 +2,8 @@ package database_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,7 +123,8 @@ func retentionArtifactProvenance(value domain.Manifest, contentHash string) doma
 
 func createFailedDeployment(t *testing.T, ctx context.Context, store *database.Store, id, key, sourcePath, worker string) {
 	t.Helper()
-	if _, created, err := store.CreateDeployment(ctx, id, key, strings.Repeat("f", 64), sourcePath, "agent:test"); err != nil || !created {
+	contentDigest := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(id)))
+	if _, created, err := store.CreateDeployment(ctx, id, key, strings.Repeat("f", 64), contentDigest, sourcePath, "agent:test"); err != nil || !created {
 		t.Fatalf("create %s: created=%v err=%v", id, created, err)
 	}
 	claimed, err := store.AcquireDeployment(ctx, worker, time.Minute)
