@@ -33,7 +33,8 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	store, err := Open(ctx, databaseURL)
+	dataDir := t.TempDir()
+	store, err := Open(ctx, databaseURL, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +74,7 @@ func TestManagementLifecycleIntegration(t *testing.T) {
 		Execution: domain.Execution{Retries: 1, Concurrency: "forbid"},
 	}
 	hash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	revisionID, err := store.Deploy(ctx, value, hash, t.TempDir(), testArtifactProvenance(value, hash))
+	revisionID, err := store.Deploy(ctx, value, hash, testStorageFixture(t, dataDir, "artifacts", hash), testArtifactProvenance(value, hash))
 	if err != nil {
 		t.Fatal(err)
 	}

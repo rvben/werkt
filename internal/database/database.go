@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -53,6 +54,9 @@ var migrationFiles embed.FS
 
 type Store struct {
 	pool *pgxpool.Pool
+	// dataDir is the root every recorded storage location is relative to. See
+	// paths.go for why the store, rather than each caller, owns the join.
+	dataDir string
 }
 
 type AutomationSummary struct {
@@ -139,7 +143,19 @@ type TriggerIngressPolicy struct {
 	Config json.RawMessage
 }
 
-func Open(ctx context.Context, databaseURL string) (*Store, error) {
+// Open connects the control plane to its database and binds it to the data
+// directory holding artifacts and deployment sources. The directory is
+// required: recorded storage locations are relative to it, and resolving them
+// against an empty string would silently produce paths relative to the process
+// working directory.
+func Open(ctx context.Context, databaseURL, dataDir string) (*Store, error) {
+	if strings.TrimSpace(dataDir) == "" {
+		return nil, errors.New("data directory is required to resolve stored artifact and deployment source locations")
+	}
+	absoluteDataDir, err := filepath.Abs(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve data directory %q: %w", dataDir, err)
+	}
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("create database pool: %w", err)
@@ -148,7 +164,12 @@ func Open(ctx context.Context, databaseURL string) (*Store, error) {
 		pool.Close()
 		return nil, fmt.Errorf("connect to database: %w", err)
 	}
-	return &Store{pool: pool}, nil
+	return &Store{pool: pool, dataDir: absoluteDataDir}, nil
+}
+
+// DataDir reports the directory recorded storage locations resolve against.
+func (s *Store) DataDir() string {
+	return s.dataDir
 }
 
 func (s *Store) Close() {
@@ -236,6 +257,10 @@ func (s *Store) deploy(ctx context.Context, value domain.Manifest, contentHash, 
 	if err != nil {
 		return "", fmt.Errorf("encode labels: %w", err)
 	}
+	recordedArtifactPath, err := s.relativeStorageLocation(artifactPath)
+	if err != nil {
+		return "", err
+	}
 	provenanceJSON, err := json.Marshal(provenance)
 	if err != nil {
 		return "", fmt.Errorf("encode artifact provenance: %w", err)
@@ -267,7 +292,7 @@ func (s *Store) deploy(ctx context.Context, value domain.Manifest, contentHash, 
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (automation_id, content_hash) DO UPDATE SET
 			artifact_path = EXCLUDED.artifact_path, provenance = EXCLUDED.provenance`,
-		revisionID, value.Metadata.Name, contentHash, manifestJSON, artifactPath, provenanceJSON)
+		revisionID, value.Metadata.Name, contentHash, manifestJSON, recordedArtifactPath, provenanceJSON)
 	if err != nil {
 		return "", fmt.Errorf("insert revision: %w", err)
 	}
@@ -672,6 +697,10 @@ func (s *Store) AcquireRun(ctx context.Context, workerID string, leaseDuration t
 	if err != nil {
 		return nil, err
 	}
+	// The executor runs the automation with this as its working directory.
+	if run.ArtifactPath, err = s.resolveStorageLocation(run.ArtifactPath); err != nil {
+		return nil, err
+	}
 	if err := json.Unmarshal(manifestJSON, &run.Manifest); err != nil {
 		return nil, err
 	}
@@ -986,6 +1015,9 @@ func (s *Store) GetRevisionArtifact(ctx context.Context, automationID, revisionI
 	if value.Path == "" {
 		return RevisionArtifact{}, ErrRevisionArtifactUnavailable
 	}
+	if value.Path, err = s.resolveStorageLocation(value.Path); err != nil {
+		return RevisionArtifact{}, err
+	}
 	if err := json.Unmarshal(manifestJSON, &value.Manifest); err != nil {
 		return RevisionArtifact{}, err
 	}
@@ -1008,6 +1040,9 @@ func (s *Store) ListRevisionArtifacts(ctx context.Context) ([]RevisionArtifact, 
 		var value RevisionArtifact
 		var manifestJSON, provenanceJSON []byte
 		if err := rows.Scan(&value.AutomationID, &value.RevisionID, &value.ContentHash, &value.Path, &manifestJSON, &provenanceJSON); err != nil {
+			return nil, err
+		}
+		if value.Path, err = s.resolveStorageLocation(value.Path); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(manifestJSON, &value.Manifest); err != nil {
@@ -1261,11 +1296,15 @@ func (s *Store) EnqueueManualRun(ctx context.Context, automationID, externalID, 
 }
 
 func (s *Store) CreateDeployment(ctx context.Context, deploymentID, idempotencyKey, packageDigest, sourcePath, actor string) (domain.Deployment, bool, error) {
+	recordedSourcePath, err := s.relativeStorageLocation(sourcePath)
+	if err != nil {
+		return domain.Deployment{}, false, err
+	}
 	command, err := s.pool.Exec(ctx, `
 		INSERT INTO deployments (id, idempotency_key, package_digest, source_path, status, actor)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (idempotency_key) DO NOTHING`,
-		deploymentID, idempotencyKey, packageDigest, sourcePath, domain.DeploymentQueued, actor)
+		deploymentID, idempotencyKey, packageDigest, recordedSourcePath, domain.DeploymentQueued, actor)
 	if err != nil {
 		return domain.Deployment{}, false, err
 	}
@@ -1405,6 +1444,10 @@ func (s *Store) AcquireDeployment(ctx context.Context, workerID string, leaseDur
 		return nil, nil
 	}
 	if err != nil {
+		return nil, err
+	}
+	// The deployment worker builds the artifact from this directory.
+	if value.SourcePath, err = s.resolveStorageLocation(value.SourcePath); err != nil {
 		return nil, err
 	}
 	if err := setDeploymentProvenance(&value.Deployment, provenanceJSON); err != nil {
@@ -1642,7 +1685,11 @@ func (s *Store) RetryDeployment(ctx context.Context, originalID, deploymentID, i
 	if originalStatus != domain.DeploymentFailed && originalStatus != domain.DeploymentCancelled {
 		return domain.Deployment{}, false, ErrDeploymentNotRetryable
 	}
-	if info, err := os.Stat(sourcePath); err != nil || !info.IsDir() {
+	resolvedSourcePath, err := s.resolveStorageLocation(sourcePath)
+	if err != nil {
+		return domain.Deployment{}, false, err
+	}
+	if info, err := os.Stat(resolvedSourcePath); err != nil || !info.IsDir() {
 		return domain.Deployment{}, false, ErrDeploymentSourceUnavailable
 	}
 	command, err := s.pool.Exec(ctx, `

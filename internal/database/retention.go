@@ -43,6 +43,9 @@ func (s *Store) ListDeploymentSourceRecords(ctx context.Context) ([]DeploymentSo
 		if err := rows.Scan(&value.ID, &value.Status, &value.AutomationID, &value.Path, &value.CreatedAt); err != nil {
 			return nil, err
 		}
+		if value.Path, err = s.resolveStorageLocation(value.Path); err != nil {
+			return nil, err
+		}
 		values = append(values, value)
 	}
 	return values, rows.Err()
@@ -75,6 +78,9 @@ func (s *Store) ListRevisionArtifactRecords(ctx context.Context) ([]RevisionArti
 			&value.ReferencedByRun, &value.ReferencedByDeployment); err != nil {
 			return nil, err
 		}
+		if value.Path, err = s.resolveStorageLocation(value.Path); err != nil {
+			return nil, err
+		}
 		values = append(values, value)
 	}
 	return values, rows.Err()
@@ -104,12 +110,16 @@ func (s *Store) CreateRetentionPlan(ctx context.Context, value domain.RetentionP
 		if err != nil {
 			return err
 		}
+		recordedStoragePath, err := s.relativeStorageLocation(item.StoragePath)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO retention_items (
 				plan_id, position, kind, storage_key, storage_path, resource_ids,
 				automation_ids, reason, estimated_bytes, status
 			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-			value.ID, item.Position, item.Kind, item.StorageKey, item.StoragePath,
+			value.ID, item.Position, item.Kind, item.StorageKey, recordedStoragePath,
 			resourceIDs, automationIDs, item.Reason, item.EstimatedBytes, domain.RetentionItemPlanned); err != nil {
 			return err
 		}
@@ -154,6 +164,9 @@ func (s *Store) GetRetentionPlan(ctx context.Context, planID string) (domain.Ret
 		if err := rows.Scan(&item.Position, &item.Kind, &item.StorageKey, &item.StoragePath,
 			&resourceIDs, &automationIDs, &item.Reason, &item.EstimatedBytes, &item.Status,
 			&item.Error, &item.CreatedAt, &item.DeletedAt); err != nil {
+			return domain.RetentionPlan{}, err
+		}
+		if item.StoragePath, err = s.resolveStorageLocation(item.StoragePath); err != nil {
 			return domain.RetentionPlan{}, err
 		}
 		if err := json.Unmarshal(resourceIDs, &item.ResourceIDs); err != nil {
@@ -269,6 +282,12 @@ func (s *Store) CompleteRetentionPlan(ctx context.Context, planID, actor string)
 // still unused. SQL rechecks the invariant at the mutation point, closing the
 // race between plan creation and execution.
 func (s *Store) DetachRetentionItem(ctx context.Context, kind, path string) (bool, error) {
+	// Rows hold locations relative to the data directory, so the caller's
+	// absolute path has to be put back into that form before it can match.
+	path, err := s.relativeStorageLocation(path)
+	if err != nil {
+		return false, err
+	}
 	switch kind {
 	case domain.RetentionKindSource:
 		command, err := s.pool.Exec(ctx, `

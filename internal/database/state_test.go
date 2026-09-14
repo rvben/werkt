@@ -19,7 +19,8 @@ func TestTransactionalAutomationStateIntegration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	store, err := Open(ctx, databaseURL)
+	dataDir := t.TempDir()
+	store, err := Open(ctx, databaseURL, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +49,7 @@ func TestTransactionalAutomationStateIntegration(t *testing.T) {
 		},
 	}
 	contentHash := strings.Repeat("a", 64)
-	if _, err := store.Deploy(ctx, manifest, contentHash, t.TempDir(), testArtifactProvenance(manifest, contentHash)); err != nil {
+	if _, err := store.Deploy(ctx, manifest, contentHash, testStorageFixture(t, dataDir, "artifacts", contentHash), testArtifactProvenance(manifest, contentHash)); err != nil {
 		t.Fatal(err)
 	}
 
