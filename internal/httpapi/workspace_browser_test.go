@@ -160,7 +160,7 @@ const workspaceBrowserDriver = `
   const waitFor = async (test) => {
     const deadline = Date.now() + 1800;
     while (!test() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
-    if (!test()) throw new Error("browser contract timed out");
+    if (!test()) throw new Error("browser contract timed out waiting for " + String(test));
   };
   window.addEventListener("load", async () => {
     const results = {};
