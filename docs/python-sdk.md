@@ -105,6 +105,17 @@ zoom = Zoom(
 )
 ```
 
+Every request that transport makes says who it is: `Werkt-Automation/1.0`.
+Sending nothing leaves urllib to name Python and its version, which the edges
+in front of ordinary websites answer with 403 while serving any client that
+identifies itself, and a connector reading a public page cannot tell that
+refusal apart from a page that is not published yet. The agent names the
+platform and nothing else, because an automation id is free text and
+disclosing it would tell every destination something about the operator that
+answering the request never required. Pass a `User-Agent` header, or
+`UrllibTransport(hosts, user_agent=...)`, when a host expects a particular
+name; either one is sent exactly as given, empty included.
+
 Built-in connectors expose declarative `ConnectorSpec` metadata through
 `BUILTIN_CONNECTORS`. The metadata identifies configuration, secret fields, and
 fixed hosts, when applicable, without coupling connector behavior to one

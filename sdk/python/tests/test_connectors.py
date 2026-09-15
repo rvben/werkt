@@ -1,16 +1,28 @@
 from __future__ import annotations
 
 import json
+import os
 import unittest
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.request import Request
 
-from werkt.connectors import BUILTIN_CONNECTORS, ConnectorError, GoogleServiceAccount, HTTPClient, HTTPResponse, Ntfy, OAuth2ClientCredentials, OpenAI, Zoom
+from werkt.connectors import BUILTIN_CONNECTORS, ConnectorError, GoogleServiceAccount, HTTPClient, HTTPResponse, Ntfy, OAuth2ClientCredentials, OpenAI, UrllibTransport, Zoom
 from werkt.connectors.testing import ScriptedTransport
 
 
 def response(value, status: int = 200) -> HTTPResponse:
     return HTTPResponse(status, {"Content-Type": "application/json"}, json.dumps(value).encode())
+
+
+def capture_request(headers: dict[str, str] | None = None, *, transport: UrllibTransport | None = None) -> Request:
+    """The urllib request a transport would put on the wire, without a socket."""
+    answer = SimpleNamespace(status=200, headers=SimpleNamespace(items=lambda: []), read=lambda: b"{}")
+    with patch("werkt.connectors.base.urlopen") as urlopen:
+        urlopen.return_value = nullcontext(answer)
+        (transport or UrllibTransport()).request("GET", "https://site.example/published.json", headers=headers)
+    return urlopen.call_args.args[0]
 
 
 class ConnectorContractTest(unittest.TestCase):
@@ -91,6 +103,43 @@ class ConnectorContractTest(unittest.TestCase):
         audio = SimpleNamespace(name="opening.m4a", read_bytes=lambda: b"audio")
         with self.assertRaisesRegex(ConnectorError, "language or languages"):
             openai.transcribe(audio, language="nl", languages=["nl"])
+
+    def test_urllib_transport_names_werkt_when_a_connector_names_nothing(self) -> None:
+        """urllib's own default names Python and its version, and edges in front
+        of ordinary websites answer that with 403 while serving any client that
+        says who it is. A connector reading a public page would fail exactly
+        like a page that is not published yet."""
+        sent = capture_request()
+        self.assertEqual(sent.get_header("User-agent"), "Werkt-Automation/1.0")
+        self.assertNotIn("Python-urllib", sent.get_header("User-agent"))
+
+    def test_urllib_transport_tells_a_destination_nothing_about_the_run(self) -> None:
+        """The default names the platform and nothing else. An automation id is
+        free text somebody chose, so it can carry a person, a customer or a
+        project, and every host an automation reads from would be told it."""
+        with patch.dict(os.environ, {"WERKT_AUTOMATION_ID": "alice-smith-payroll"}):
+            sent = capture_request()
+        self.assertEqual(sent.get_header("User-agent"), "Werkt-Automation/1.0")
+        self.assertNotIn("alice", " ".join(value for _, value in sent.header_items()).lower())
+
+    def test_urllib_transport_leaves_a_connectors_own_agent_alone(self) -> None:
+        """A connector naming itself for a host with its own expectations is
+        the more specific answer, and a header name is case-insensitive: adding
+        the default beside it would send two."""
+        sent = capture_request({"user-agent": "sermon-onliner (+https://werkt.example)"})
+        agents = [value for name, value in sent.header_items() if name.lower() == "user-agent"]
+        self.assertEqual(agents, ["sermon-onliner (+https://werkt.example)"])
+
+    def test_urllib_transport_accepts_an_agent_chosen_for_the_whole_transport(self) -> None:
+        sent = capture_request(transport=UrllibTransport(user_agent="Werkt-Probe/1.0"))
+        self.assertEqual(sent.get_header("User-agent"), "Werkt-Probe/1.0")
+
+    def test_urllib_transport_sends_a_transport_agent_that_is_deliberately_empty(self) -> None:
+        """Spelling out an empty agent is how a caller asks to send one, and it
+        is the one answer a fallback would quietly refuse while honouring the
+        same value passed per request."""
+        sent = capture_request(transport=UrllibTransport(user_agent=""))
+        self.assertEqual(sent.get_header("User-agent"), "")
 
     def test_http_client_fails_closed_on_unexpected_status(self) -> None:
         client = HTTPClient(ScriptedTransport([response({"error": "no"}, status=503)]))
