@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.1](https://github.com/rvben/werkt/compare/v0.4.0...v0.4.1) - 2026-09-16
+
+### Fixed
+
+- **sdk**: say who a connector request is from ([d8bc7d3](https://github.com/rvben/werkt/commit/d8bc7d31dd0193d86380cb219bc6accc6bd9c68b))
+
 ## [0.4.0](https://github.com/rvben/werkt/compare/v0.3.2...v0.4.0) - 2026-09-14
 
 ### Added
