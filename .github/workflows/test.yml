@@ -40,6 +40,8 @@ jobs:
         env:
           PYTHONPATH: sdk/python
         run: python3 -m unittest discover -s sdk/python/tests -v
+      - name: Test supervised investigation adapter
+        run: python3 -m unittest discover -s scripts -p 'test_investigation.py' -v
       - name: Vet
         run: go vet ./...
       - name: Test

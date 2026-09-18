@@ -528,6 +528,7 @@ func serve(arguments []string) error {
 		instance = configuration.ListenAddress
 	}
 	apiOptions := []httpapi.Option{
+		httpapi.WithInvestigationRegistry(store),
 		httpapi.WithDeploymentIntake(intake),
 		httpapi.WithRetentionManager(retention),
 		httpapi.WithArtifactVerifier(custodian),

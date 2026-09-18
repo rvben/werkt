@@ -46,6 +46,7 @@ const webhookSignatureTolerance = 5 * time.Minute
 var openAPIFS embed.FS
 
 type Server struct {
+	investigations   InvestigationRegistry
 	store            Store
 	deploymentIntake DeploymentIntake
 	retention        RetentionManager
@@ -166,6 +167,10 @@ func New(store Store, address, managementToken string, options ...Option) *Serve
 		option(value)
 	}
 	mux := http.NewServeMux()
+	mux.Handle("GET /api/v1/investigations", value.requireManagementAuth(ScopeRead, http.HandlerFunc(value.listInvestigations)))
+	mux.Handle("GET /api/v1/investigations/{investigation}", value.requireManagementAuth(ScopeRead, http.HandlerFunc(value.getInvestigation)))
+	mux.Handle("POST /api/v1/investigations", value.requireManagementAuth(ScopeOperate, http.HandlerFunc(value.reserveInvestigation)))
+	mux.Handle("PUT /api/v1/investigations/{investigation}", value.requireManagementAuth(ScopeOperate, http.HandlerFunc(value.updateInvestigation)))
 	mux.HandleFunc("GET /{$}", value.workspaceRoot)
 	mux.HandleFunc("GET /app", value.workspaceRoot)
 	mux.HandleFunc("GET /app/", value.workspace)

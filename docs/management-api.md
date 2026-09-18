@@ -40,6 +40,14 @@ The embedded workspace may instead use the OIDC session cookie. Configure all of
 
 Health checks and trigger ingress (`/hooks/...` and `/email/...`) do not accept the management token as authority and remain outside this middleware. Trigger ingress has independent per-trigger credentials described in [security.md](security.md).
 
+## Investigation registry
+
+Issue investigations have a read-scoped lookup and operate-scoped reservation
+and versioned update API. Records retain cloud task identity, starting revision,
+findings and patch references independently of automation state and run
+retention. See [supervised investigations](investigations.md) for commands,
+state transitions, failure recovery, authorization and storage limits.
+
 ## Secrets
 
 The management surface exposes encrypted-secret lifecycle without a reveal operation:

@@ -1,12 +1,113 @@
 openapi: 3.1.0
 info:
   title: Werkt API
-  version: 1.3.0
+  version: 1.4.0
   description: Agent-facing management API and trigger ingress for Werkt automations. Management bearer tokens may be full-access or scoped to read, operate, deploy, secrets, or retention operations.
 servers:
   - url: /
     description: The Werkt instance that served this contract.
 paths:
+  /api/v1/investigations:
+    get:
+      operationId: listInvestigations
+      description: Read-scoped issue lookup. Unavailability returns 503, never an empty success. Follow all pages; records are retained independently of automation state.
+      security: [{BearerAuth: []}]
+      parameters:
+        - name: repositoryId
+          in: query
+          required: true
+          schema: {type: string, pattern: '^[1-9][0-9]{0,19}$'}
+        - name: issueNumber
+          in: query
+          required: true
+          schema: {type: integer, minimum: 1}
+        - {$ref: "#/components/parameters/Limit"}
+        - {$ref: "#/components/parameters/Cursor"}
+      responses:
+        "200":
+          description: A page of investigations, newest first; none means this page is empty.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, items, nextCursor]
+                properties:
+                  status: {type: string, enum: [found, none]}
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/Investigation"}
+                  nextCursor: {type: string}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+    post:
+      operationId: reserveInvestigation
+      description: Operate scope. Reserve immutable intent; exact requestId replays return created=false and must never authorize another launch.
+      security: [{BearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Actor"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/InvestigationSpec"}
+      responses:
+        "201": {$ref: "#/components/responses/InvestigationReservation"}
+        "200": {$ref: "#/components/responses/InvestigationReservation"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /api/v1/investigations/{investigation}:
+    parameters:
+      - name: investigation
+        in: path
+        required: true
+        schema: {type: string}
+    get:
+      operationId: getInvestigation
+      security: [{BearerAuth: []}]
+      responses:
+        "200":
+          description: Complete saved investigation. Requires read scope.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Investigation"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+    put:
+      operationId: updateInvestigation
+      description: Operate scope. Atomically replace state at expectedVersion. Task identity and actual base are immutable; terminal records cannot be reopened.
+      security: [{BearerAuth: []}]
+      parameters:
+        - {$ref: "#/components/parameters/Actor"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion, state]
+              properties:
+                expectedVersion: {type: integer, minimum: 1}
+                state: {$ref: "#/components/schemas/InvestigationState"}
+      responses:
+        "200":
+          description: Updated record and incremented version.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Investigation"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
   /healthz:
     get:
       operationId: health
@@ -761,6 +862,16 @@ components:
       description: Relative URL for the next older page with rel=next. Omitted when there is no next page.
       schema: {type: string}
   responses:
+    InvestigationReservation:
+      description: New reservation or exact immutable-spec replay.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [created, investigation]
+            properties:
+              created: {type: boolean}
+              investigation: {$ref: "#/components/schemas/Investigation"}
     Error:
       description: Request failed.
       content:
@@ -792,6 +903,46 @@ components:
               created: {type: boolean}
             required: [deployment, created]
   schemas:
+    InvestigationSpec:
+      type: object
+      required: [requestId, repositoryId, repository, issueNumber, issueFingerprint, environmentId, branch, expectedBaseSha]
+      properties:
+        requestId: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        repositoryId: {type: string, pattern: '^[1-9][0-9]{0,19}$'}
+        repository: {type: string, maxLength: 256, description: Repository name at reservation time; identity uses the stable numeric GitHub ID.}
+        issueNumber: {type: integer, minimum: 1}
+        issueFingerprint: {type: string, pattern: '^[a-f0-9]{64}$'}
+        environmentId: {type: string, maxLength: 256}
+        branch: {type: string, maxLength: 256}
+        expectedBaseSha: {type: string, pattern: '^([a-f0-9]{40}|[a-f0-9]{64})$'}
+    InvestigationState:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: {type: string, enum: [reserved, submission_unknown, running, needs_input, failed, review, local, completed, abandoned]}
+        taskId: {type: string, maxLength: 128}
+        taskUrl: {type: string, format: uri, maxLength: 2048, description: HTTPS URL without credentials. Immutable once attached.}
+        attempt: {type: integer, minimum: 1, maximum: 100}
+        actualBaseSha: {type: string, pattern: '^([a-f0-9]{40}|[a-f0-9]{64})$'}
+        cloudStatus: {type: string, maxLength: 128}
+        cloudUpdatedAt: {type: string, format: date-time}
+        observedAt: {type: string, format: date-time}
+        handoff: {type: string, description: Written findings and verification; maximum 65536 UTF-8 bytes.}
+        patchRef: {type: string, maxLength: 2048}
+        patchSha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+        deliveryEvidence: {type: string, description: Required for completion; maximum 8192 UTF-8 bytes.}
+        reason: {type: string, description: Required for abandonment; maximum 4096 UTF-8 bytes.}
+    Investigation:
+      allOf:
+        - {$ref: "#/components/schemas/InvestigationSpec"}
+        - type: object
+          required: [state, version, createdAt, updatedAt]
+          properties:
+            state: {$ref: "#/components/schemas/InvestigationState"}
+            version: {type: integer, minimum: 1}
+            createdAt: {type: string, format: date-time}
+            updatedAt: {type: string, format: date-time}
     BrowserSession:
       type: object
       properties:
