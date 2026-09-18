@@ -43,6 +43,38 @@ matches the current state, and `Job.transition` records a timestamped state
 change. Catch `StaleContinuation` only when an obsolete timer should complete as
 a successful no-op.
 
+The registry retains **all** records, including completed jobs: forgetting a
+completed key would allow a repeated event to start its work again. The default
+`limit=128` caps admission of new jobs. At capacity, `start` raises
+`WorkflowCapacityError` before changing state. Looking up, deduplicating, and
+advancing existing jobs still work, even when a restored registry exceeds a
+lowered limit. Increase the limit or implement an explicit archival policy;
+nothing is automatically evicted. Archiving a key also removes its deduplication
+protection, so preserve a completion marker elsewhere if events can replay.
+
+```python
+from werkt import DurableWorkflow, WorkflowCapacityError
+
+workflow = DurableWorkflow(context, limit=256)
+try:
+    job, created = workflow.start(event.id, "queued", now)
+except WorkflowCapacityError:
+    # No existing job was removed. Fail before doing external work so that the
+    # event is not acknowledged as processed; resolve capacity before retrying.
+    context.log("Workflow capacity reached", limit=workflow.limit)
+    raise
+```
+
+Workflow handles sharing a context and namespace share the same registry.
+Transitions update `context.state` directly; `workflow.commit()` remains
+available, while `Context.commit` (called by `execute`) writes the run's state.
+Malformed registries are rejected rather than silently reset or filtered.
+Namespace and job keys must be non-empty strings, and the limit must be a
+positive integer. Do not replace a namespace while holding a workflow handle.
+
+`workflow.defer` accepts only a job belonging to that registry. Its optional
+`data` cannot contain the reserved routing fields `jobId` or `step`.
+
 An approval and its expiry continuation can be requested in the same run:
 
 ```python
@@ -59,6 +91,12 @@ context.request_approval(
 workflow.defer(job, "approval-expiry", expires_at)
 ```
 
+The run protocol has one continuation slot and one approval slot. Repeating the
+same request is a no-op; requesting a different continuation or approval raises
+`ValueError` and preserves the original request. Poll multiple jobs with one
+batch continuation, or use separate runs. Request arguments are snapshotted so
+later changes to a caller's dictionaries or lists do not alter queued work.
+
 Operator notifications stay independent of ntfy, Pushover, or any other
 provider configured by the Werkt operator:
 
@@ -72,6 +110,12 @@ context.notify(
 
 The request is committed only after the run succeeds. Werkt supplies the run
 link, routing, provider credentials, retries, and delivery audit.
+
+The SDK rejects duplicate notification keys and more than eight notifications
+before altering queued messages. Keys are unique within a run, including for
+identical messages. Control requests must be JSON-serializable; failed request
+serialization does not leave an invalid request queued in the context. The
+runner remains responsible for validating the full control schema and timing.
 
 Use `execution.state.enabled: true` and `execution.concurrency: forbid` for a
 durable workflow. External mutations still need idempotency keys or upsert

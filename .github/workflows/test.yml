@@ -36,6 +36,10 @@ jobs:
           cache: true
       - name: Check workflow security
         run: ./scripts/check-workflow-security.sh
+      - name: Test Python SDK
+        env:
+          PYTHONPATH: sdk/python
+        run: python3 -m unittest discover -s sdk/python/tests -v
       - name: Vet
         run: go vet ./...
       - name: Test

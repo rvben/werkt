@@ -1,7 +1,7 @@
 """Code-first authoring SDK for Werkt automations."""
 
 from .runtime import Context, Event, RunControl, automation, execute
-from .workflow import DurableWorkflow, Job, StaleContinuation
+from .workflow import DurableWorkflow, Job, StaleContinuation, WorkflowCapacityError
 
 __all__ = [
     "Context",
@@ -10,6 +10,7 @@ __all__ = [
     "Job",
     "RunControl",
     "StaleContinuation",
+    "WorkflowCapacityError",
     "automation",
     "execute",
 ]

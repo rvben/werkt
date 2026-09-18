@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
+from copy import deepcopy
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, MutableMapping
@@ -89,8 +90,12 @@ class Context:
 
     def defer(self, *, key: str, until: datetime | str, data: Any = None) -> None:
         timestamp = until.isoformat() if isinstance(until, datetime) else until
-        self.control.defer = {"key": key, "until": timestamp, "data": {} if data is None else data}
-        self._write_control()
+        request = {"key": key, "until": timestamp, "data": {} if data is None else data}
+        if self.control.defer is not None:
+            if self.control.defer == request:
+                return
+            raise ValueError("a run can request only one deferred continuation")
+        self._update_control(defer=request)
 
     def request_approval(
         self,
@@ -103,7 +108,7 @@ class Context:
         description: str = "",
     ) -> None:
         timestamp = expires_at.isoformat() if isinstance(expires_at, datetime) else expires_at
-        self.control.approval = {
+        request = {
             "key": key,
             "title": title,
             "description": description,
@@ -111,7 +116,11 @@ class Context:
             "fields": fields,
             "actions": actions,
         }
-        self._write_control()
+        if self.control.approval is not None:
+            if self.control.approval == request:
+                return
+            raise ValueError("a run can request only one approval")
+        self._update_control(approval=request)
 
     def notify(
         self,
@@ -122,10 +131,16 @@ class Context:
         priority: str = "default",
     ) -> None:
         """Queue an operator notification after this run commits successfully."""
-        self.control.notifications.append(
-            {"key": key, "title": title, "body": body, "priority": priority}
+        if any(message["key"] == key for message in self.control.notifications):
+            raise ValueError("notification keys must be unique within a run")
+        if len(self.control.notifications) >= 8:
+            raise ValueError("a run can request at most eight notifications")
+        self._update_control(
+            notifications=[
+                *self.control.notifications,
+                {"key": key, "title": title, "body": body, "priority": priority},
+            ]
         )
-        self._write_control()
 
     def commit(self, result: Any) -> None:
         if self.state_path is not None:
@@ -135,7 +150,15 @@ class Context:
             self.result_path.write_text(json.dumps(result, separators=(",", ":")), encoding="utf-8")
 
     def _write_control(self) -> None:
-        self.control_path.write_text(json.dumps(self.control.as_dict(), separators=(",", ":")), encoding="utf-8")
+        self.control_path.write_text(json.dumps(self.control.as_dict(), separators=(",", ":"), allow_nan=False), encoding="utf-8")
+
+    def _update_control(self, **updates: Any) -> None:
+        # Snapshot caller-owned data and validate serialization before changing
+        # queued work. A caught encoding/I/O error must not poison a later commit.
+        candidate = replace(self.control, **deepcopy(updates))
+        encoded = json.dumps(candidate.as_dict(), separators=(",", ":"), allow_nan=False)
+        self.control_path.write_text(encoded, encoding="utf-8")
+        self.control = candidate
 
 
 Handler = Callable[[Event, Context], Any]
