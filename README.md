@@ -337,6 +337,7 @@ artifact and its digest is part of the revision identity. See
 | `WERKT_MAX_PACKAGE_BYTES` | `67108864` (64 MiB compressed) |
 | `WERKT_MAX_EXPANDED_PACKAGE_BYTES` | `268435456` (256 MiB extracted) |
 | `WERKT_MAX_PACKAGE_ENTRIES` | `10000` |
+| `WERKT_MAX_AUTOMATION_STATE_BYTES` | `1048576` (1 MiB per automation snapshot) |
 | `WERKT_EXECUTOR` | `process` |
 | `WERKT_HUSKER_URL` | `http://127.0.0.1:8081` |
 | `WERKT_HUSKER_TOKEN` | empty |

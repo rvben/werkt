@@ -74,6 +74,23 @@ func serveTestHuskerImageImport(t *testing.T, response http.ResponseWriter, requ
 }
 
 func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		limit, input, output int
+		wantError            string
+	}{
+		{"default large snapshot", 0, 1 << 20, 1 << 20, ""},
+		{"custom larger snapshot", 2 << 20, 2 << 20, 2 << 20, ""},
+		{"custom smaller snapshot", 128 << 10, 128 << 10, 128 << 10, ""},
+		{"input too large", 128 << 10, (128 << 10) + 1, 128 << 10, "initialize automation state"},
+		{"output too large", 128 << 10, 128 << 10, (128 << 10) + 1, "read automation state"},
+	} {
+		t.Run(tc.name, func(t *testing.T) { testHuskerStateContract(t, tc.limit, tc.input, tc.output, tc.wantError) })
+	}
+}
+
+func testHuskerStateContract(t *testing.T, limit, inputSize, outputSize int, wantError string) {
+	inputState, outputState := stateOfSize(inputSize), stateOfSize(outputSize)
 	directory := t.TempDir()
 	if err := os.WriteFile(filepath.Join(directory, "main.py"), []byte("print('hello')\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -138,6 +155,9 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 				if body.WorkingDir == "" || !strings.HasSuffix(body.WorkingDir, "/work") {
 					t.Errorf("working dir = %q", body.WorkingDir)
 				}
+				if body.Environment["WERKT_STATE_MAX_BYTES"] != fmt.Sprint(automationStateLimit(limit)) {
+					t.Errorf("wrong runtime state limit: %s", body.Environment["WERKT_STATE_MAX_BYTES"])
+				}
 				if body.Environment["WERKT_RUN_ID"] != "run_test" {
 					t.Errorf("WERKT_RUN_ID = %q", body.Environment["WERKT_RUN_ID"])
 				}
@@ -159,13 +179,15 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 			}
 			contents := []byte(`{"ok":true}`)
 			if strings.HasSuffix(fmt.Sprint(body["path"]), "/state.json") {
-				contents = []byte(`{"count":2}`)
+				contents = outputState
 			} else if strings.HasSuffix(fmt.Sprint(body["path"]), "/control.json") {
 				contents = []byte(`{}`)
 			}
+			offset, length := int(body["offset"].(float64)), int(body["len"].(float64))
+			end := min(offset+length, len(contents))
+			chunk := contents[offset:end]
 			writeJSON(t, response, map[string]any{
-				"data": base64.StdEncoding.EncodeToString(contents),
-				"size": len(contents),
+				"data": base64.StdEncoding.EncodeToString(chunk), "size": len(chunk), "total_size": len(contents),
 			})
 		case request.Method == http.MethodDelete && strings.HasPrefix(request.URL.Path, "/v1/vms/werkt-"):
 			deleted = true
@@ -177,13 +199,14 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 	defer server.Close()
 
 	executor, err := NewHuskerRunner(HuskerConfig{
-		URL:              server.URL,
-		Token:            "test-token",
-		ProvisionTimeout: time.Second,
-		CleanupTimeout:   time.Second,
-		UploadChunkSize:  16,
-		HTTPClient:       server.Client(),
-		Secrets:          testSecretResolver{"ops/guest-token": "guest-secret-value"},
+		MaxAutomationStateBytes: limit,
+		URL:                     server.URL,
+		Token:                   "test-token",
+		ProvisionTimeout:        time.Second,
+		CleanupTimeout:          time.Second,
+		UploadChunkSize:         128 * 1024,
+		HTTPClient:              server.Client(),
+		Secrets:                 testSecretResolver{"ops/guest-token": "guest-secret-value"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -206,11 +229,20 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 			Execution: domain.Execution{Timeout: "5s", Concurrency: "forbid", State: domain.StatePolicy{Enabled: true}},
 		},
 		Event:        domain.EventEnvelope{ID: "evt_test", Data: json.RawMessage(`{"message":"hello"}`)},
-		State:        json.RawMessage(`{"count":1}`),
+		State:        inputState,
 		StateVersion: 7,
 	}
 
 	result, err := executor.Execute(context.Background(), run)
+	if wantError != "" {
+		if err == nil || !strings.Contains(err.Error(), wantError) {
+			t.Fatalf("error = %v, want %s", err, wantError)
+		}
+		if !deleted {
+			t.Fatal("VM was not cleaned up")
+		}
+		return
+	}
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -220,8 +252,8 @@ func TestHuskerRunnerExecutesLanguageNeutralContractAndCleansUp(t *testing.T) {
 	if result.Logs != "[stdout]\nrunning [REDACTED]\n" {
 		t.Fatalf("logs = %q", result.Logs)
 	}
-	if string(result.State) != `{"count":2}` {
-		t.Fatalf("state = %s", result.State)
+	if string(result.State) != string(outputState) {
+		t.Fatal("state did not round trip")
 	}
 	if createNetwork != "filtered" {
 		t.Fatalf("network = %q", createNetwork)

@@ -19,15 +19,20 @@ import (
 const maxLogs = 1 << 20
 
 type ProcessRunner struct {
-	secrets SecretResolver
+	secrets       SecretResolver
+	maxStateBytes int
 }
 
 func NewProcessRunner(resolvers ...SecretResolver) *ProcessRunner {
+	return NewProcessRunnerWithStateLimit(0, resolvers...)
+}
+
+func NewProcessRunnerWithStateLimit(maxBytes int, resolvers ...SecretResolver) *ProcessRunner {
 	var resolver SecretResolver
 	if len(resolvers) > 0 {
 		resolver = resolvers[0]
 	}
-	return &ProcessRunner{secrets: resolver}
+	return &ProcessRunner{secrets: resolver, maxStateBytes: automationStateLimit(maxBytes)}
 }
 
 func (r *ProcessRunner) Build(ctx context.Context, directory string, value domain.Manifest, reporter domain.DeploymentStepReporter) error {
@@ -152,7 +157,7 @@ func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) 
 		if len(state) == 0 {
 			state = json.RawMessage(`{}`)
 		}
-		if _, err := validateAutomationState(state); err != nil {
+		if _, err := validateAutomationState(state, r.maxStateBytes); err != nil {
 			return Result{}, fmt.Errorf("initialize automation state: %w", err)
 		}
 		if err := os.WriteFile(statePath, state, 0o600); err != nil {
@@ -162,6 +167,7 @@ func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) 
 
 	command := exec.CommandContext(ctx, run.Manifest.Runtime.Command[0], run.Manifest.Runtime.Command[1:]...)
 	command.Dir = run.ArtifactPath
+	resolved.values["WERKT_STATE_MAX_BYTES"] = fmt.Sprint(r.maxStateBytes)
 	command.Env = append(inheritedRuntimeEnvironment(), runtimeEnvironment(run, eventPath, resultPath, controlPath, statePath, resolved.values)...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
@@ -194,11 +200,11 @@ func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) 
 		return Result{Logs: logs}, err
 	}
 	if statePath != "" {
-		stateJSON, err := readBoundedFile(statePath, MaxAutomationStateBytes)
+		stateJSON, err := readBoundedFile(statePath, r.maxStateBytes)
 		if err != nil {
 			return Result{Logs: logs}, fmt.Errorf("read automation state: %w", err)
 		}
-		result.State, err = validateAutomationState(stateJSON)
+		result.State, err = validateAutomationState(stateJSON, r.maxStateBytes)
 		if err != nil {
 			return Result{Logs: logs}, err
 		}

@@ -27,8 +27,8 @@ import (
 )
 
 const (
-	defaultProvisionTimeout  = 2 * time.Minute
-	defaultCleanupTimeout    = 30 * time.Second
+	defaultProvisionTimeout = 2 * time.Minute
+	defaultCleanupTimeout   = 30 * time.Second
 	// Husker permits 1 MiB decoded writes and 120 sensitive writes/minute.
 	// Using the full bounded write avoids exhausting that limit while staging a
 	// checksum-pinned installer such as mise; base64 still fits below Husker's
@@ -41,27 +41,28 @@ const (
 )
 
 type HuskerConfig struct {
-	URL                string
-	Token              string
-	RootFS             string
-	Kernel             string
-	VCPUs              uint32
-	MemoryMiB          uint32
-	BuildNetwork       string
-	BuildTimeout       time.Duration
-	ProvisionTimeout   time.Duration
-	CleanupTimeout     time.Duration
-	UploadChunkSize    int
-	DownloadChunkSize  int
-	HTTPClient         *http.Client
-	Secrets            SecretResolver
-	ToolBaseImage      string
-	ToolBaseDigest     string
-	ToolPlatform       string
-	MisePath           string
-	MiseVersion        string
-	MiseDigest         string
-	ToolPrepareTimeout time.Duration
+	URL                     string
+	Token                   string
+	RootFS                  string
+	Kernel                  string
+	VCPUs                   uint32
+	MemoryMiB               uint32
+	BuildNetwork            string
+	BuildTimeout            time.Duration
+	ProvisionTimeout        time.Duration
+	CleanupTimeout          time.Duration
+	UploadChunkSize         int
+	DownloadChunkSize       int
+	HTTPClient              *http.Client
+	Secrets                 SecretResolver
+	ToolBaseImage           string
+	ToolBaseDigest          string
+	ToolPlatform            string
+	MisePath                string
+	MiseVersion             string
+	MiseDigest              string
+	ToolPrepareTimeout      time.Duration
+	MaxAutomationStateBytes int
 }
 
 type HuskerRunner struct {
@@ -79,6 +80,7 @@ type HuskerRunner struct {
 	downloadChunkSize int
 	client            *http.Client
 	secrets           SecretResolver
+	maxStateBytes     int
 	imageMu           sync.Mutex
 	resolvedImages    map[string]string
 	toolConfig        toolEnvironmentConfig
@@ -134,6 +136,7 @@ func NewHuskerRunner(config HuskerConfig) (*HuskerRunner, error) {
 		downloadChunkSize: config.DownloadChunkSize,
 		client:            config.HTTPClient,
 		secrets:           config.Secrets,
+		maxStateBytes:     automationStateLimit(config.MaxAutomationStateBytes),
 		resolvedImages:    make(map[string]string),
 		toolConfig: toolEnvironmentConfig{
 			BaseImage: config.ToolBaseImage, BaseDigest: config.ToolBaseDigest,
@@ -258,7 +261,7 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 		if len(state) == 0 {
 			state = json.RawMessage(`{}`)
 		}
-		if _, err := validateAutomationState(state); err != nil {
+		if _, err := validateAutomationState(state, r.maxStateBytes); err != nil {
 			return Result{}, fmt.Errorf("initialize automation state: %w", err)
 		}
 		if err := r.uploadFile(provisionContext, vmName, statePath, state, 0o600); err != nil {
@@ -270,6 +273,7 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 	executionContext, cancelExecution := context.WithTimeout(parent, runtimeTimeout+guestCommandGrace)
 	defer cancelExecution()
 	command := run.Manifest.Runtime.Command
+	resolved.values["WERKT_STATE_MAX_BYTES"] = fmt.Sprint(r.maxStateBytes)
 	response, executeErr := r.exec(executionContext, vmName, execRequest{
 		Command:    command[0],
 		Args:       command[1:],
@@ -316,11 +320,11 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 		return Result{Logs: logs}, err
 	}
 	if statePath != "" {
-		stateJSON, err := r.readFileLimited(executionContext, vmName, statePath, MaxAutomationStateBytes)
+		stateJSON, err := r.readFileLimited(executionContext, vmName, statePath, uint64(r.maxStateBytes))
 		if err != nil {
 			return Result{Logs: logs}, fmt.Errorf("read automation state: %w", err)
 		}
-		result.State, err = validateAutomationState(stateJSON)
+		result.State, err = validateAutomationState(stateJSON, r.maxStateBytes)
 		if err != nil {
 			return Result{Logs: logs}, err
 		}

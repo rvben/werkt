@@ -57,7 +57,12 @@ When `execution.state.enabled` is true, Werkt also provides:
 - `WERKT_STATE_VERSION`, the decimal version of that snapshot
 
 The automation may replace the state file with another JSON object of at most
-64 KiB. Werkt reads it only after a zero exit and commits it in the same
+1 MiB by default. Operators can override this with the positive byte count
+`WERKT_MAX_AUTOMATION_STATE_BYTES`; each run receives the effective limit in
+`WERKT_STATE_MAX_BYTES`. Both input and output snapshots use the same limit.
+Lowering the limit below an existing snapshot prevents that automation from
+running until the limit is restored or its state is reduced.
+Werkt reads it only after a zero exit and commits it in the same
 database transaction that marks the run successful. Failed attempts never
 advance state. A compare-and-swap on the supplied version prevents a stale
 attempt from overwriting a newer transition. Stateful manifests must use
@@ -146,7 +151,7 @@ the runtime artifact boundary.
 - Build artifacts and runtime results are downloaded in bounded ranges and checked for size or modification changes between chunks.
 - Husker bearer credentials stay in the worker configuration and are never exposed to automation code.
 - Only manifest environment values, explicitly named vault values, and reserved Werkt protocol values are sent to the guest.
-- Transactional automation state is bounded to a 64 KiB JSON object, is never
+- Transactional automation state is bounded to a configurable JSON object (1 MiB by default), is never
   committed from a failed attempt, and cannot be updated by a worker that lost
   its run lease.
 - Runtime VMs are offline unless their immutable manifest contains explicit

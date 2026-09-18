@@ -573,7 +573,7 @@ func serve(arguments []string) error {
 func newExecutor(configuration config.Config, secrets runner.SecretResolver) (runner.Executor, error) {
 	switch configuration.Executor {
 	case "process":
-		return runner.NewProcessRunner(secrets), nil
+		return runner.NewProcessRunnerWithStateLimit(configuration.MaxAutomationStateBytes, secrets), nil
 	case "husker":
 		return newHuskerRunner(configuration, secrets)
 	default:
@@ -584,7 +584,7 @@ func newExecutor(configuration config.Config, secrets runner.SecretResolver) (ru
 func newBuilder(configuration config.Config) (service.Builder, error) {
 	switch configuration.Executor {
 	case "process":
-		return runner.NewProcessRunner(), nil
+		return runner.NewProcessRunnerWithStateLimit(configuration.MaxAutomationStateBytes), nil
 	case "husker":
 		return newHuskerRunner(configuration, nil)
 	default:
@@ -594,24 +594,25 @@ func newBuilder(configuration config.Config) (service.Builder, error) {
 
 func newHuskerRunner(configuration config.Config, secrets runner.SecretResolver) (*runner.HuskerRunner, error) {
 	return runner.NewHuskerRunner(runner.HuskerConfig{
-		URL:                configuration.HuskerURL,
-		Token:              configuration.HuskerToken,
-		RootFS:             configuration.HuskerRootFS,
-		Kernel:             configuration.HuskerKernel,
-		VCPUs:              configuration.HuskerVCPUs,
-		MemoryMiB:          configuration.HuskerMemory,
-		BuildNetwork:       configuration.HuskerBuildNetwork,
-		BuildTimeout:       configuration.HuskerBuildTimeout,
-		ProvisionTimeout:   configuration.HuskerProvisionTimeout,
-		CleanupTimeout:     configuration.HuskerCleanupTimeout,
-		ToolBaseImage:      configuration.HuskerToolBaseImage,
-		ToolBaseDigest:     configuration.HuskerToolBaseDigest,
-		ToolPlatform:       configuration.HuskerToolPlatform,
-		MisePath:           configuration.HuskerMisePath,
-		MiseVersion:        configuration.HuskerMiseVersion,
-		MiseDigest:         configuration.HuskerMiseDigest,
-		ToolPrepareTimeout: configuration.HuskerToolPrepareTimeout,
-		Secrets:            secrets,
+		URL:                     configuration.HuskerURL,
+		Token:                   configuration.HuskerToken,
+		RootFS:                  configuration.HuskerRootFS,
+		Kernel:                  configuration.HuskerKernel,
+		VCPUs:                   configuration.HuskerVCPUs,
+		MemoryMiB:               configuration.HuskerMemory,
+		BuildNetwork:            configuration.HuskerBuildNetwork,
+		BuildTimeout:            configuration.HuskerBuildTimeout,
+		ProvisionTimeout:        configuration.HuskerProvisionTimeout,
+		CleanupTimeout:          configuration.HuskerCleanupTimeout,
+		ToolBaseImage:           configuration.HuskerToolBaseImage,
+		ToolBaseDigest:          configuration.HuskerToolBaseDigest,
+		ToolPlatform:            configuration.HuskerToolPlatform,
+		MisePath:                configuration.HuskerMisePath,
+		MiseVersion:             configuration.HuskerMiseVersion,
+		MiseDigest:              configuration.HuskerMiseDigest,
+		ToolPrepareTimeout:      configuration.HuskerToolPrepareTimeout,
+		Secrets:                 secrets,
+		MaxAutomationStateBytes: configuration.MaxAutomationStateBytes,
 	})
 }
 

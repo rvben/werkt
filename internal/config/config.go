@@ -47,6 +47,7 @@ type Config struct {
 	MaxPackageBytes          int64
 	MaxExpandedPackageBytes  int64
 	MaxPackageEntries        int
+	MaxAutomationStateBytes  int
 	Executor                 string
 	HuskerURL                string
 	HuskerToken              string
@@ -102,6 +103,7 @@ func Load() Config {
 		MaxPackageBytes:          int64Env("WERKT_MAX_PACKAGE_BYTES", 64<<20),
 		MaxExpandedPackageBytes:  int64Env("WERKT_MAX_EXPANDED_PACKAGE_BYTES", 256<<20),
 		MaxPackageEntries:        intEnv("WERKT_MAX_PACKAGE_ENTRIES", 10_000),
+		MaxAutomationStateBytes:  intEnv("WERKT_MAX_AUTOMATION_STATE_BYTES", 1<<20),
 		Executor:                 env("WERKT_EXECUTOR", "process"),
 		HuskerURL:                env("WERKT_HUSKER_URL", "http://127.0.0.1:8081"),
 		HuskerToken:              os.Getenv("WERKT_HUSKER_TOKEN"),

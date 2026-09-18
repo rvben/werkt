@@ -55,7 +55,17 @@ type Result struct {
 	Control domain.RunControl
 }
 
-const MaxAutomationStateBytes = 64 * 1024
+// DefaultMaxAutomationStateBytes bounds snapshot memory and database writes.
+// Operators can raise it when an automation needs a larger working set.
+const DefaultMaxAutomationStateBytes = 1 << 20
+
+func automationStateLimit(configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	return DefaultMaxAutomationStateBytes
+}
+
 const MaxRunControlBytes = 64 * 1024
 const maxContinuationDelay = 30 * 24 * time.Hour
 const maxNotificationsPerRun = 8
@@ -227,9 +237,9 @@ func contains(values []string, target string) bool {
 	return false
 }
 
-func validateAutomationState(value []byte) (json.RawMessage, error) {
-	if len(value) > MaxAutomationStateBytes {
-		return nil, fmt.Errorf("automation state exceeds %d bytes", MaxAutomationStateBytes)
+func validateAutomationState(value []byte, maxBytes int) (json.RawMessage, error) {
+	if len(value) > maxBytes {
+		return nil, fmt.Errorf("automation state exceeds %d bytes", maxBytes)
 	}
 	var object map[string]any
 	if err := json.Unmarshal(value, &object); err != nil || object == nil {

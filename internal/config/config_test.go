@@ -42,3 +42,19 @@ func TestValidateDeploymentTargetRejectsConflictingRuntimeScope(t *testing.T) {
 		})
 	}
 }
+
+func TestAutomationStateLimitConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  int
+	}{
+		{"", 1 << 20}, {"2097152", 2 << 20}, {"131072", 128 << 10}, {"0", 1 << 20}, {"-1", 1 << 20}, {"invalid", 1 << 20},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			t.Setenv("WERKT_MAX_AUTOMATION_STATE_BYTES", tc.input)
+			if got := Load().MaxAutomationStateBytes; got != tc.want {
+				t.Fatalf("limit = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
