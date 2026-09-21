@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"embed"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"path"
@@ -42,6 +43,13 @@ func (s *Server) workspace(response http.ResponseWriter, request *http.Request) 
 	assetName := strings.TrimPrefix(request.URL.Path, "/app/")
 	if assetName != "" && path.Base(assetName) != assetName {
 		http.NotFound(response, request)
+		return
+	}
+	if assetName == "config.js" {
+		setWorkspaceHeaders(response)
+		response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		response.Header().Set("Cache-Control", "no-store")
+		_, _ = fmt.Fprintf(response, "window.WERKT_CONFIG = Object.freeze({draftingEnabled: %t});\n", s.authoringEnabled)
 		return
 	}
 	asset, exists := workspaceAssets[assetName]

@@ -57,6 +57,7 @@ type Server struct {
 	environment      string
 	instance         string
 	browserAuth      *BrowserAuth
+	authoringEnabled bool
 	server           *http.Server
 }
 
@@ -145,6 +146,10 @@ func WithOperatorScope(environment, instance string) Option {
 		server.environment = strings.TrimSpace(environment)
 		server.instance = strings.TrimSpace(instance)
 	}
+}
+
+func WithAuthoringEnabled(enabled bool) Option {
+	return func(server *Server) { server.authoringEnabled = enabled }
 }
 
 func WithScopedManagementToken(token string, scopes ...ManagementScope) Option {

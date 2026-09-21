@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rvben/werkt/internal/authoring"
 	"github.com/rvben/werkt/internal/buildinfo"
 	"github.com/rvben/werkt/internal/config"
 	"github.com/rvben/werkt/internal/database"
@@ -43,6 +44,8 @@ func run(arguments []string) error {
 		return errors.New("a command is required")
 	}
 	switch arguments[0] {
+	case "draft":
+		return draftCommand(arguments[1:])
 	case "validate":
 		return validate(arguments[1:])
 	case "deploy":
@@ -75,6 +78,76 @@ func run(arguments []string) error {
 		usage()
 		return fmt.Errorf("unknown command %q", arguments[0])
 	}
+}
+
+func draftCommand(arguments []string) error {
+	flags := flag.NewFlagSet("draft", flag.ContinueOnError)
+	name := flags.String("name", "", "required automation name override")
+	project := flags.String("project", "drafts", "manifest project")
+	folder := flags.String("folder", "", "optional manifest folder")
+	output := flags.String("output", "", "destination directory (defaults to the generated name)")
+	timezone := flags.String("timezone", "UTC", "default IANA timezone for inferred schedules")
+	modelDefault := os.Getenv("WERKT_DRAFT_MODEL")
+	if modelDefault == "" {
+		modelDefault = authoring.DefaultModel
+	}
+	model := flags.String("model", modelDefault, "TypeSafe System One model used for drafting")
+	apiBaseDefault := os.Getenv("WERKT_DRAFT_API_BASE")
+	if apiBaseDefault == "" {
+		apiBaseDefault = authoring.DefaultAPIBase
+	}
+	apiBase := flags.String("api-base", apiBaseDefault, "TypeSafe System One API base URL")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	apiKey := os.Getenv("TYPESAFE_API_KEY")
+	if !authoring.Enabled(apiKey) {
+		return authoring.ErrDisabled
+	}
+	intent, err := draftIntent(flags.Args(), os.Stdin)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	draft, err := (authoring.Client{APIBase: *apiBase, APIKey: apiKey, Model: *model}).Generate(ctx, intent, *name, *timezone)
+	if err != nil {
+		return err
+	}
+	destination := *output
+	if destination == "" {
+		destination = draft.Name
+	}
+	result, err := authoring.WritePackage(draft, authoring.PackageOptions{
+		OutputDirectory: destination, Project: *project, Folder: *folder,
+		Model: *model, IntentDigest: authoring.IntentDigest(intent),
+	})
+	if err != nil {
+		return err
+	}
+	return printJSON(result)
+}
+
+func draftIntent(arguments []string, input io.Reader) (string, error) {
+	if len(arguments) > 0 {
+		value := strings.TrimSpace(strings.Join(arguments, " "))
+		if value == "" {
+			return "", errors.New("automation intent is required")
+		}
+		return value, nil
+	}
+	contents, err := io.ReadAll(io.LimitReader(input, authoring.MaxIntentBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(contents) > authoring.MaxIntentBytes {
+		return "", fmt.Errorf("automation intent exceeds %d bytes", authoring.MaxIntentBytes)
+	}
+	value := strings.TrimSpace(string(contents))
+	if value == "" {
+		return "", errors.New("usage: werkt draft [flags] INTENT (or pipe the intent on stdin)")
+	}
+	return value, nil
 }
 
 func validate(arguments []string) error {
@@ -533,6 +606,7 @@ func serve(arguments []string) error {
 		httpapi.WithRetentionManager(retention),
 		httpapi.WithArtifactVerifier(custodian),
 		httpapi.WithOperatorScope(configuration.Environment, instance),
+		httpapi.WithAuthoringEnabled(authoring.Enabled(os.Getenv("TYPESAFE_API_KEY"))),
 		httpapi.WithScopedManagementToken(configuration.ManagementReadToken, httpapi.ScopeRead),
 		httpapi.WithScopedManagementToken(configuration.ManagementOperateToken, httpapi.ScopeRead, httpapi.ScopeOperate),
 		httpapi.WithScopedManagementToken(configuration.ManagementDeployToken, httpapi.ScopeRead, httpapi.ScopeDeploy),
@@ -684,6 +758,7 @@ func version() string {
 func usage() {
 	executable := filepath.Base(os.Args[0])
 	fmt.Fprintf(os.Stderr, `Usage:
+  %s draft [-name NAME] [-project PROJECT] [-output DIRECTORY] INTENT
   %s validate [directory]
   %s deploy [-api URL] [-idempotency-key KEY] [-wait=true] [directory]
   %s deployment get|cancel|retry DEPLOYMENT_ID
@@ -696,5 +771,5 @@ func usage() {
   %s automations
   %s runs [-limit N]
   %s version
-	`, executable, executable, executable, executable, executable, executable, executable, executable, executable, executable, executable, executable)
+`, executable, executable, executable, executable, executable, executable, executable, executable, executable, executable, executable, executable, executable)
 }

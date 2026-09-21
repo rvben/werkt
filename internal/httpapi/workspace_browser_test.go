@@ -80,6 +80,46 @@ func TestWorkspaceBrowserKeyboardFocusAndResponsiveModality(t *testing.T) {
 	}
 }
 
+func TestWorkspaceBrowserEmptyStateDraftHandoff(t *testing.T) {
+	if os.Getenv("WERKT_BROWSER_TESTS") == "" {
+		t.Skip("set WERKT_BROWSER_TESTS=1 to run the headless workspace contract")
+	}
+	chrome := findChrome(t)
+	server := httptest.NewServer(http.HandlerFunc(workspaceEmptyBrowserFixture))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, chrome,
+		"--headless=new",
+		"--disable-background-networking",
+		"--disable-default-apps",
+		"--disable-extensions",
+		"--disable-gpu",
+		"--no-first-run",
+		"--no-sandbox",
+		"--user-data-dir="+t.TempDir(),
+		"--virtual-time-budget=3000",
+		"--window-size=390,844",
+		"--dump-dom",
+		server.URL+"/app/",
+	)
+	output, err := command.CombinedOutput()
+	match := regexp.MustCompile(`<pre id="browser-test-results">([^<]+)</pre>`).FindSubmatch(output)
+	if len(match) != 2 {
+		t.Fatalf("empty-state browser contract did not publish results: %v\n%s", err, output)
+	}
+	var results map[string]bool
+	if err := json.Unmarshal([]byte(html.UnescapeString(string(match[1]))), &results); err != nil {
+		t.Fatalf("decode empty-state browser results: %v\n%s", err, match[1])
+	}
+	for _, contract := range []string{"draftVisible", "deployVisible", "copyActionsNamed", "reviewBoundaryVisible", "mobileSingleColumn", "noHorizontalOverflow"} {
+		if !results[contract] {
+			t.Errorf("empty-state browser contract %q failed: %#v", contract, results)
+		}
+	}
+}
+
 func findChrome(t *testing.T) string {
 	t.Helper()
 	for _, candidate := range []string{
@@ -118,6 +158,9 @@ func workspaceBrowserFixture(response http.ResponseWriter, request *http.Request
 		contents, _ := workspaceFiles.ReadFile("workspace/workspace.js")
 		response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		_, _ = response.Write(contents)
+	case "/app/config.js":
+		response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = response.Write([]byte(`window.WERKT_CONFIG = Object.freeze({draftingEnabled: true});`))
 	case "/test-driver.js":
 		response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		_, _ = response.Write([]byte(workspaceBrowserDriver))
@@ -145,6 +188,36 @@ func workspaceBrowserFixture(response http.ResponseWriter, request *http.Request
 		writeBrowserJSON(response, `[]`)
 	case "/api/v1/auth/session":
 		writeBrowserJSON(response, `{"configured":false,"authenticated":false,"scope":{"environment":"development","instance":"browser-fixture","actor":"workspace:local"}}`)
+	default:
+		http.NotFound(response, request)
+	}
+}
+
+func workspaceEmptyBrowserFixture(response http.ResponseWriter, request *http.Request) {
+	switch request.URL.Path {
+	case "/app/":
+		contents, _ := workspaceFiles.ReadFile("workspace/index.html")
+		page := strings.Replace(string(contents), "</body>", `<script src="/empty-test-driver.js" defer></script></body>`, 1)
+		response.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = response.Write([]byte(page))
+	case "/app/workspace.css":
+		contents, _ := workspaceFiles.ReadFile("workspace/workspace.css")
+		response.Header().Set("Content-Type", "text/css; charset=utf-8")
+		_, _ = response.Write(contents)
+	case "/app/workspace.js":
+		contents, _ := workspaceFiles.ReadFile("workspace/workspace.js")
+		response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = response.Write(contents)
+	case "/app/config.js":
+		response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = response.Write([]byte(`window.WERKT_CONFIG = Object.freeze({draftingEnabled: true});`))
+	case "/empty-test-driver.js":
+		response.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = response.Write([]byte(workspaceEmptyBrowserDriver))
+	case "/api/v1/auth/session":
+		writeBrowserJSON(response, `{"configured":false,"authenticated":false,"scope":{"environment":"development","instance":"browser-fixture","actor":"workspace:local"}}`)
+	case "/api/v1/automations", "/api/v1/approvals", "/api/v1/runs", "/api/v1/deployments", "/api/v1/audit":
+		writeBrowserJSON(response, `[]`)
 	default:
 		http.NotFound(response, request)
 	}
@@ -240,6 +313,32 @@ const workspaceBrowserDriver = `
       results.driverCompleted = false;
       results.driverError = String(error);
     }
+    const output = document.createElement("pre");
+    output.id = "browser-test-results";
+    output.textContent = JSON.stringify(results);
+    document.body.append(output);
+  });
+})();
+`
+
+const workspaceEmptyBrowserDriver = `
+(() => {
+  window.addEventListener("load", async () => {
+    const deadline = Date.now() + 1800;
+    while (!document.querySelector(".command-stack") && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const text = document.querySelector("#workspace-content")?.textContent || "";
+    const buttons = [...document.querySelectorAll(".command-stack button")].map((button) => button.getAttribute("aria-label"));
+    const columns = getComputedStyle(document.querySelector(".onboarding-flow")).gridTemplateColumns.split(" ").filter(Boolean);
+    const results = {
+      draftVisible: text.includes("werkt draft") && text.includes("Draft"),
+      deployVisible: text.includes("werkt deploy") && text.includes("Deploy"),
+      copyActionsNamed: buttons.includes("Copy draft command") && buttons.includes("Copy deployment command"),
+      reviewBoundaryVisible: text.includes("Inspect permissions, side effects, and assumptions") && text.includes("Nothing becomes active"),
+      mobileSingleColumn: columns.length === 1,
+      noHorizontalOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+    };
     const output = document.createElement("pre");
     output.id = "browser-test-results";
     output.textContent = JSON.stringify(results);

@@ -389,7 +389,7 @@ func TestWorkspaceServesEmbeddedAssetsWithoutExposingManagementToken(t *testing.
 		}
 	}
 	contents := response.Body.String()
-	for _, marker := range []string{"Werkt workspace", "Skip to workspace", "/app/workspace.css", "/app/workspace.js"} {
+	for _, marker := range []string{"Werkt workspace", "Skip to workspace", "/app/workspace.css", "/app/config.js", "/app/workspace.js"} {
 		if !strings.Contains(contents, marker) {
 			t.Errorf("workspace omitted %q", marker)
 		}
@@ -410,6 +410,42 @@ func TestWorkspaceServesEmbeddedAssetsWithoutExposingManagementToken(t *testing.
 		}
 		if response.Body.Len() < 1000 {
 			t.Errorf("%s unexpectedly small: %d bytes", asset, response.Body.Len())
+		}
+	}
+}
+
+func TestWorkspaceAuthoringConfigurationIsKeyGated(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		enabled bool
+		want    string
+	}{
+		{name: "disabled without key", enabled: false, want: "draftingEnabled: false"},
+		{name: "enabled with key", enabled: true, want: "draftingEnabled: true"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := New(&fakeStore{}, ":0", "", WithAuthoringEnabled(test.enabled))
+			request := httptest.NewRequest(http.MethodGet, "/app/config.js", nil)
+			response := httptest.NewRecorder()
+			server.server.Handler.ServeHTTP(response, request)
+			if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || !strings.Contains(response.Body.String(), test.want) {
+				t.Fatalf("status=%d cache=%q body=%q", response.Code, response.Header().Get("Cache-Control"), response.Body.String())
+			}
+			if strings.Contains(response.Body.String(), "TYPESAFE_API_KEY") {
+				t.Fatal("workspace configuration must expose capability state, not credential details")
+			}
+		})
+	}
+}
+
+func TestWorkspaceExplainsDisabledBYOKDrafting(t *testing.T) {
+	script, err := workspaceFiles.ReadFile("workspace/workspace.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{"draftingEnabled", "Draft unavailable", "TYPESAFE_API_KEY is not configured", "BYOK drafting is off"} {
+		if !strings.Contains(string(script), marker) {
+			t.Errorf("workspace script omitted disabled drafting state %q", marker)
 		}
 	}
 }

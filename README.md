@@ -32,6 +32,28 @@ This is an executable MVP, not yet a production sandbox.
 
 ## Quick start
 
+### Draft an automation from intent
+
+`werkt draft` is an opt-in, bring-your-own-key feature. It is disabled unless `TYPESAFE_API_KEY` is present. When enabled, it uses TypeSafe's Jev model at authoring time to turn a bounded plain-English task into typed workflow decisions, then compiles those decisions deterministically into a local, review-required Python package. Jev selects from Werkt's closed operation catalog; it does not generate code or arbitrary tool calls. Drafting does not deploy, run, or activate the automation, and the package persists only a SHA-256 of the original intent.
+
+```bash
+export TYPESAFE_API_KEY='...'
+werkt draft --project engineering --output ./release-brief \
+  'Every Friday, read the supplied Google Sheet, summarize it, and notify the operator.'
+```
+
+Werkt sends one speculative fan-out request containing Choice, Score, and Noul questions for the trigger, primary and optional operations, dependency edges, approval need, and execution risk. It validates every typed answer and probability distribution, applies explicit confidence thresholds, builds an acyclic graph, and inserts a durable approval gate for consequential work. The package contains `automation.yaml`, `main.py`, an auditable `workflow_plan.py`, focused `unittest` tests, `werkt.plan.json`, and a review checklist. An existing output path is never overwritten.
+
+Review the generated source and warnings, configure the named secrets, then verify it explicitly:
+
+```bash
+werkt validate ./release-brief
+python3 -m unittest discover -s ./release-brief -p 'test_*.py'
+werkt deploy ./release-brief
+```
+
+Use `WERKT_DRAFT_MODEL` or `--model` to select another TypeSafe model (the default is `jev-latest`), and `WERKT_DRAFT_API_BASE` or `--api-base` to select the API base. Pipe the intent on stdin when it should not appear in shell history. Drafting transmits the intent to TypeSafe; `TYPESAFE_API_KEY` is read from the environment and is never written to the package. Generated operations are intentionally limited to Werkt's embedded Zoom, Google Sheets, OpenAI, and operator-notification capabilities; unsupported integrations remain an explicit authoring task instead of becoming hallucinated code.
+
 Start PostgreSQL:
 
 ```bash

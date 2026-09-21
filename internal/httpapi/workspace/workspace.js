@@ -70,6 +70,7 @@
   const approvalNavCount = document.querySelector("#approval-nav-count");
   const receiptRegion = document.querySelector("#receipt-region");
   const toastRegion = document.querySelector("#toast-region");
+  const draftingEnabled = window.WERKT_CONFIG?.draftingEnabled === true;
 
   const HISTORY_LIMIT = 100;
   const views = new Set(["automations", "approvals", "runs", "deployments", "audit"]);
@@ -616,7 +617,7 @@
     if (!automations.length) {
       inventoryList.innerHTML = state.automations.length
         ? `<div class="empty-state"><div class="empty-state-inner"><span class="empty-symbol">${icon("search")}</span><h2>No matching automations</h2><p>Adjust the search or lifecycle filter to restore the inventory.</p></div></div>`
-        : `<div class="empty-state"><div class="empty-state-inner"><span class="empty-symbol">${icon("bolt")}</span><h2>No automations yet</h2><p>Deploy a package to create the first immutable revision.</p></div></div>`;
+        : `<div class="empty-state"><div class="empty-state-inner"><span class="empty-symbol">${icon("bolt")}</span><h2>No automations yet</h2><p>Draft a new automation or deploy an existing package.</p></div></div>`;
       return;
     }
     const projects = new Map();
@@ -670,8 +671,16 @@
   }
 
   function renderEmptyWorkspace() {
-    const command = "werkt deploy ./path/to/automation";
-    workspaceContent.innerHTML = `<section class="empty-state onboarding-empty"><div class="empty-state-inner"><span class="empty-symbol">${icon("bolt")}</span><h2>Bring your first automation to life</h2><p>Werkt validates the package, connects its triggers, and keeps every run attributable and recoverable.</p><ol class="onboarding-flow"><li><strong>Automation</strong><span>Describe one bounded job.</span></li><li><strong>Trigger</strong><span>Choose what starts it.</span></li><li><strong>Run</strong><span>Inspect every outcome.</span></li></ol><div class="command-row"><code class="empty-command">${command}</code><button class="button button-quiet button-compact" type="button" data-copy-value="${command}" aria-label="Copy first deployment command">${icon("copy")}Copy</button></div><p class="onboarding-note">Nothing becomes active until validation and deployment succeed.</p></div></section>`;
+    const draftCommand = `werkt draft --project my-project "Describe one bounded job"`;
+    const deployCommand = "werkt deploy ./path/to/automation";
+    const draftStep = draftingEnabled ? "Turn one bounded job into code and tests." : "Disabled until a TypeSafe API key is configured.";
+    const draftRow = draftingEnabled
+      ? `<div class="command-row"><code class="empty-command">${draftCommand}</code><button class="button button-quiet button-compact" type="button" data-copy-value="${draftCommand}" aria-label="Copy draft command">${icon("copy")}Copy draft</button></div>`
+      : `<div class="command-row"><code class="empty-command">TYPESAFE_API_KEY is not configured</code><button class="button button-quiet button-compact" type="button" disabled data-disabled-reason="missing-key" aria-label="Draft unavailable until a TypeSafe API key is configured">Draft unavailable</button></div>`;
+    const note = draftingEnabled
+      ? "BYOK drafting writes local files only. Nothing becomes active until validation and deployment succeed."
+      : "BYOK drafting is off. Set TYPESAFE_API_KEY in the Werkt environment to enable it; existing packages can still be deployed.";
+    workspaceContent.innerHTML = `<section class="empty-state onboarding-empty"><div class="empty-state-inner"><span class="empty-symbol">${icon("bolt")}</span><h2>Bring your first automation to life</h2><p>Start from an intent or an existing package. Werkt keeps generated code reviewable and every deployed run attributable and recoverable.</p><ol class="onboarding-flow"><li><strong>Draft</strong><span>${draftStep}</span></li><li><strong>Review</strong><span>Inspect permissions, side effects, and assumptions.</span></li><li><strong>Deploy</strong><span>Validate and activate one immutable revision.</span></li></ol><div class="command-stack">${draftRow}<div class="command-row"><code class="empty-command">${deployCommand}</code><button class="button button-quiet button-compact" type="button" data-copy-value="${deployCommand}" aria-label="Copy deployment command">${icon("copy")}Copy deploy</button></div></div><p class="onboarding-note">${note}</p></div></section>`;
   }
 
   function actorLabel(actor) {
