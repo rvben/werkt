@@ -337,6 +337,9 @@ artifact and its digest is part of the revision identity. See
 | `WERKT_LISTEN_ADDR` | `127.0.0.1:8080` |
 | `WERKT_ENVIRONMENT` | deployment build target, otherwise `development`; operator-visible environment |
 | `WERKT_INSTANCE` | deployment build target, otherwise listen address; operator-visible instance identity |
+| `TYPESAFE_API_KEY` | empty; enables opt-in BYOK Jev workflow drafting when set |
+| `WERKT_DRAFT_MODEL` | `jev-latest`; TypeSafe model used for workflow drafting |
+| `WERKT_DRAFT_API_BASE` | TypeSafe API default; override for compatible endpoints |
 | `WERKT_MANAGEMENT_TOKEN` | empty; legacy full-access management token |
 | `WERKT_MANAGEMENT_READ_TOKEN` | empty; inventory, run, deployment, and audit reads |
 | `WERKT_MANAGEMENT_OPERATE_TOKEN` | empty; read plus pause/resume, rollback, and manual runs |

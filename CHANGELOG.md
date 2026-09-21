@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.0](https://github.com/rvben/werkt/compare/v0.4.1...v0.5.0) - 2026-09-21
+
+### Added
+
+- **authoring**: add BYOK Jev workflow drafting ([27e1090](https://github.com/rvben/werkt/commit/27e1090348b557b01857e3a79a88a830e3a7736a))
+- **investigations**: retain supervised cloud handoffs and issue ownership ([38a9dd4](https://github.com/rvben/werkt/commit/38a9dd417c3a1f847b621b7960c6273659424688))
+- **runner**: make automation state capacity configurable ([f5f97b9](https://github.com/rvben/werkt/commit/f5f97b982cb5e40ffc6ca513244c4897f052a926))
+
+### Fixed
+
+- **sdk**: preserve durable work and reject conflicting controls ([00a618c](https://github.com/rvben/werkt/commit/00a618cc2f409519c5340a474e1da2ca3b5ed201))
+
 ## [0.4.1](https://github.com/rvben/werkt/compare/v0.4.0...v0.4.1) - 2026-09-16
 
 ### Fixed
