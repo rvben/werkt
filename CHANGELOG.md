@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.1](https://github.com/rvben/werkt/compare/v0.5.0...v0.5.1) - 2026-09-28
+
+### Fixed
+
+- **serve**: drain running attempts on shutdown and requeue them ([f454823](https://github.com/rvben/werkt/commit/f454823303d94933fdff336c207e3033c4142415))
+- **husker**: retry rate-limited requests and stop leaking VMs ([5278113](https://github.com/rvben/werkt/commit/527811353c239d189f609e476a3e8af697b5be92))
+
 ## [0.5.0](https://github.com/rvben/werkt/compare/v0.4.1...v0.5.0) - 2026-09-21
 
 ### Added
