@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,16 @@ const (
 	defaultBuildTimeout      = 15 * time.Minute
 	guestCommandGrace        = 30 * time.Second
 	maxAutomationResultBytes = 16 * 1024 * 1024
+	// A husker request is sent at most this many times. Retries cover a rate
+	// limit on any request and a dropped connection or unavailable gateway on
+	// a request that is safe to repeat.
+	maxHuskerAttempts = 5
+	// Husker's rate limit refills per minute, so it never asks for a longer
+	// wait. A longer Retry-After is returned as the error rather than slept.
+	maxHuskerRetryAfter = time.Minute
+	// defaultRequestCeiling bounds a husker request whose caller set no
+	// deadline, so an unresponsive husker cannot hold a worker forever.
+	defaultRequestCeiling = 5 * time.Minute
 )
 
 type HuskerConfig struct {
@@ -84,6 +95,8 @@ type HuskerRunner struct {
 	imageMu           sync.Mutex
 	resolvedImages    map[string]string
 	toolConfig        toolEnvironmentConfig
+	requestCeiling    time.Duration
+	sleep             func(context.Context, time.Duration) error
 }
 
 func NewHuskerRunner(config HuskerConfig) (*HuskerRunner, error) {
@@ -144,6 +157,8 @@ func NewHuskerRunner(config HuskerConfig) (*HuskerRunner, error) {
 			MiseVersion: config.MiseVersion, MiseDigest: config.MiseDigest,
 			PrepareTimeout: config.ToolPrepareTimeout,
 		},
+		requestCeiling: defaultRequestCeiling,
+		sleep:          sleepContext,
 	}, nil
 }
 
@@ -197,7 +212,7 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 	}
 
 	identity := executionIdentity(run)
-	vmName := "werkt-" + identity
+	vmName := attemptVMName(run.ID, run.Attempt)
 	guestRoot := "/tmp/werkt-" + identity
 	archivePath := guestRoot + ".tar.gz"
 	workspacePath := guestRoot + "/work"
@@ -221,10 +236,13 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 		}
 	}
 	network := runtimeNetwork(run.Manifest.Runtime)
-	if err := r.createVM(provisionContext, vmName, "werkt/"+run.ID, rootFS, network, run.Manifest.Runtime.Egress, lifetime); err != nil {
+	err = r.createVM(provisionContext, vmName, "werkt/"+run.ID, rootFS, network, run.Manifest.Runtime.Egress, lifetime)
+	if mayOwnVM(err) {
+		defer r.cleanupVM(vmName) //nolint:errcheck // cleanupVM logs its own failure; husker's expiry is the backstop
+	}
+	if err != nil {
 		return Result{}, fmt.Errorf("create husker VM: %w", err)
 	}
-	defer r.cleanupVM(vmName)
 
 	if err := r.waitReady(provisionContext, vmName); err != nil {
 		return Result{}, fmt.Errorf("wait for husker VM: %w", err)
@@ -426,6 +444,15 @@ func (r *HuskerRunner) createVM(ctx context.Context, name, owner, rootFS, networ
 	return r.doJSON(ctx, http.MethodPost, "/v1/vms", request, http.StatusCreated, nil)
 }
 
+// mayOwnVM reports whether a VM may exist under the name a create request
+// asked for. A create that failed after reaching husker, or whose response was
+// lost, can still have made the VM, so only a name husker reports as already
+// taken is known not to be ours to delete.
+func mayOwnVM(createErr error) bool {
+	var apiErr *huskerAPIError
+	return !errors.As(createErr, &apiErr) || apiErr.StatusCode != http.StatusConflict || apiErr.Kind != "vm_already_exists"
+}
+
 func (r *HuskerRunner) waitReady(ctx context.Context, name string) error {
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
@@ -539,31 +566,136 @@ func (r *HuskerRunner) exec(ctx context.Context, vmName string, request execRequ
 	return response, err
 }
 
-func (r *HuskerRunner) cleanupVM(name string) {
+// cleanupVM removes a VM this runner created. It runs on a fresh context so a
+// cancelled run still removes its VM, and it logs its own failure because it
+// usually runs deferred.
+func (r *HuskerRunner) cleanupVM(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), r.cleanupTimeout)
 	defer cancel()
+	if _, err := r.deleteVM(ctx, name); err != nil {
+		slog.Error("husker VM cleanup failed; husker's expiry will remove it", "vm", name, "error", err)
+		return err
+	}
+	return nil
+}
+
+// deleteVM removes a VM and reports whether one existed. A VM that is already
+// gone is not an error.
+func (r *HuskerRunner) deleteVM(ctx context.Context, name string) (bool, error) {
 	err := r.doJSON(ctx, http.MethodDelete, vmPath(name), nil, http.StatusNoContent, nil)
 	var apiErr *huskerAPIError
-	notFound := errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
-	if err != nil && !notFound {
-		slog.Warn("husker VM cleanup failed; durable expiration will retry cleanup", "vm", name, "error", err)
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// ReapPriorAttempts removes the VMs of every earlier attempt of a run. An
+// attempt whose worker stopped without cleaning up, or lost its lease while
+// still executing, leaves its VM behind, and a live one would go on running
+// the automation beside this attempt. The attempt proceeds only once every
+// earlier VM is confirmed gone.
+func (r *HuskerRunner) ReapPriorAttempts(parent context.Context, run domain.RunnableRun) error {
+	ctx, cancel := context.WithTimeout(parent, r.cleanupTimeout)
+	defer cancel()
+	for attempt := 1; attempt < run.Attempt; attempt++ {
+		name := attemptVMName(run.ID, attempt)
+		removed, err := r.deleteVM(ctx, name)
+		if err != nil {
+			return fmt.Errorf("remove VM %s left by attempt %d: %w", name, attempt, err)
+		}
+		if removed {
+			slog.Warn("removed husker VM left by an earlier attempt", "run", run.ID, "attempt", run.Attempt, "vm", name, "vm_attempt", attempt)
+		}
+	}
+	return nil
+}
+
+// doJSON sends one husker API call, retrying it within the caller's deadline
+// when that is safe. Husker rejects a rate-limited request before handling it,
+// so a 429 is retried for every method after the wait husker announces. A
+// dropped connection or an unavailable gateway may hide a request husker
+// already acted on, so those are retried only for GET and DELETE, which can be
+// repeated without effect.
+func (r *HuskerRunner) doJSON(ctx context.Context, method, path string, requestBody any, expectedStatus int, responseBody any) error {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.requestCeiling)
+		defer cancel()
+	}
+	var encoded []byte
+	if requestBody != nil {
+		var err error
+		if encoded, err = json.Marshal(requestBody); err != nil {
+			return err
+		}
+	}
+	for attempt := 1; ; attempt++ {
+		err := r.sendJSON(ctx, method, path, encoded, expectedStatus, responseBody)
+		delay, retry := r.retryDelay(ctx, method, attempt, err)
+		if !retry {
+			return withContextErr(ctx, err)
+		}
+		slog.Warn("retrying husker request", "method", method, "path", path, "attempt", attempt, "delay", delay, "error", err)
+		if sleepErr := r.sleep(ctx, delay); sleepErr != nil {
+			return withContextErr(ctx, err)
+		}
 	}
 }
 
-func (r *HuskerRunner) doJSON(ctx context.Context, method, path string, requestBody any, expectedStatus int, responseBody any) error {
-	var body io.Reader
-	if requestBody != nil {
-		encoded, err := json.Marshal(requestBody)
-		if err != nil {
-			return err
+// withContextErr adds the context's error to a request error when the context
+// ended first, so a caller can tell a request cut short by cancellation from
+// one husker refused, even when the last response was a refusal.
+func withContextErr(ctx context.Context, err error) error {
+	contextErr := ctx.Err()
+	if err == nil || contextErr == nil || errors.Is(err, contextErr) {
+		return err
+	}
+	return errors.Join(err, contextErr)
+}
+
+func (r *HuskerRunner) retryDelay(ctx context.Context, method string, attempt int, err error) (time.Duration, bool) {
+	if err == nil || attempt >= maxHuskerAttempts || ctx.Err() != nil {
+		return 0, false
+	}
+	backoff := time.Duration(1<<(attempt-1)) * time.Second
+	delay := time.Duration(0)
+	var apiErr *huskerAPIError
+	var transportErr *huskerTransportError
+	idempotent := method == http.MethodGet || method == http.MethodDelete
+	switch {
+	case errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusTooManyRequests:
+		delay = backoff
+		if apiErr.RetryAfter > 0 {
+			delay = apiErr.RetryAfter
 		}
+		if delay > maxHuskerRetryAfter {
+			return 0, false
+		}
+	case errors.As(err, &apiErr) && idempotent && (apiErr.StatusCode == http.StatusBadGateway ||
+		apiErr.StatusCode == http.StatusServiceUnavailable || apiErr.StatusCode == http.StatusGatewayTimeout):
+		delay = backoff
+	case errors.As(err, &transportErr) && idempotent:
+		delay = backoff
+	default:
+		return 0, false
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= delay {
+		return 0, false
+	}
+	return delay, true
+}
+
+func (r *HuskerRunner) sendJSON(ctx context.Context, method, path string, encoded []byte, expectedStatus int, responseBody any) error {
+	var body io.Reader
+	if encoded != nil {
 		body = bytes.NewReader(encoded)
 	}
 	request, err := http.NewRequestWithContext(ctx, method, r.baseURL+path, body)
 	if err != nil {
 		return err
 	}
-	if requestBody != nil {
+	if encoded != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
 	if r.token != "" {
@@ -571,12 +703,16 @@ func (r *HuskerRunner) doJSON(ctx context.Context, method, path string, requestB
 	}
 	response, err := r.client.Do(request)
 	if err != nil {
-		return err
+		return &huskerTransportError{err: err}
 	}
 	defer response.Body.Close() //nolint:errcheck // closing a read-only response body cannot change the result
 	if response.StatusCode != expectedStatus {
 		payload, _ := io.ReadAll(io.LimitReader(response.Body, 1024*1024))
-		apiErr := &huskerAPIError{StatusCode: response.StatusCode, Message: strings.TrimSpace(string(payload))}
+		apiErr := &huskerAPIError{
+			StatusCode: response.StatusCode,
+			Message:    strings.TrimSpace(string(payload)),
+			RetryAfter: parseRetryAfter(response.Header.Get("Retry-After")),
+		}
 		var envelope struct {
 			Kind    string `json:"kind"`
 			Message string `json:"message"`
@@ -597,6 +733,27 @@ func (r *HuskerRunner) doJSON(ctx context.Context, method, path string, requestB
 		return fmt.Errorf("decode husker response: %w", err)
 	}
 	return nil
+}
+
+// parseRetryAfter reads the delay-seconds form husker sends. Anything else
+// yields zero, which falls back to exponential backoff.
+func parseRetryAfter(value string) time.Duration {
+	seconds, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func archiveDirectory(directory string) ([]byte, error) {
@@ -668,8 +825,17 @@ func archiveDirectory(directory string) ([]byte, error) {
 }
 
 func executionIdentity(run domain.RunnableRun) string {
-	digest := sha256.Sum256([]byte(fmt.Sprintf("%s:%d", run.ID, run.Attempt)))
+	return attemptIdentity(run.ID, run.Attempt)
+}
+
+func attemptIdentity(runID string, attempt int) string {
+	digest := sha256.Sum256([]byte(fmt.Sprintf("%s:%d", runID, attempt)))
 	return hex.EncodeToString(digest[:8])
+}
+
+// attemptVMName is the name of the VM an attempt of a run executes in.
+func attemptVMName(runID string, attempt int) string {
+	return "werkt-" + attemptIdentity(runID, attempt)
 }
 
 func vmPath(name string) string {
@@ -764,6 +930,7 @@ type huskerAPIError struct {
 	StatusCode int
 	Kind       string
 	Message    string
+	RetryAfter time.Duration
 }
 
 func (e *huskerAPIError) Error() string {
@@ -772,3 +939,13 @@ func (e *huskerAPIError) Error() string {
 	}
 	return fmt.Sprintf("husker API returned %d: %s", e.StatusCode, e.Message)
 }
+
+// huskerTransportError is a request that got no HTTP response at all, so
+// whether husker acted on it is unknown.
+type huskerTransportError struct {
+	err error
+}
+
+func (e *huskerTransportError) Error() string { return e.err.Error() }
+
+func (e *huskerTransportError) Unwrap() error { return e.err }

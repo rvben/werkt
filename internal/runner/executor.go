@@ -25,6 +25,13 @@ type Executor interface {
 	Execute(context.Context, domain.RunnableRun) (Result, error)
 }
 
+// AttemptReaper is implemented by an executor whose attempts can outlive the
+// worker that started them. Before a later attempt runs, it removes whatever
+// the earlier attempts of the same run left behind.
+type AttemptReaper interface {
+	ReapPriorAttempts(context.Context, domain.RunnableRun) error
+}
+
 type ArtifactVerifier interface {
 	Verify(string, domain.ArtifactProvenance) error
 }
@@ -41,6 +48,11 @@ func NewVerifyingExecutor(next Executor, verifier ArtifactVerifier) Executor {
 func (e *verifyingExecutor) Execute(ctx context.Context, run domain.RunnableRun) (Result, error) {
 	if e.next == nil || e.verifier == nil {
 		return Result{}, errors.New("artifact verification is not configured")
+	}
+	if reaper, ok := e.next.(AttemptReaper); ok && run.Attempt > 1 {
+		if err := reaper.ReapPriorAttempts(ctx, run); err != nil {
+			return Result{}, fmt.Errorf("remove earlier attempts: %w", err)
+		}
 	}
 	if err := e.verifier.Verify(run.ArtifactPath, run.Provenance); err != nil {
 		return Result{}, fmt.Errorf("verify automation artifact: %w", err)

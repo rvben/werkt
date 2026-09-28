@@ -92,10 +92,13 @@ func (r *HuskerRunner) Build(parent context.Context, directory string, value dom
 		}
 	}
 	owner := "werkt/build/" + value.Metadata.Name
-	if err := r.createVM(provisionContext, vmName, owner, rootFS, r.buildNetwork, nil, lifetime); err != nil {
+	err = r.createVM(provisionContext, vmName, owner, rootFS, r.buildNetwork, nil, lifetime)
+	if mayOwnVM(err) {
+		defer r.cleanupVM(vmName) //nolint:errcheck // cleanupVM logs its own failure; husker's expiry is the backstop
+	}
+	if err != nil {
 		return fmt.Errorf("create husker build VM: %w", err)
 	}
-	defer r.cleanupVM(vmName)
 
 	if err := r.waitReady(provisionContext, vmName); err != nil {
 		return fmt.Errorf("wait for husker build VM: %w", err)

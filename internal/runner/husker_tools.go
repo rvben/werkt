@@ -43,9 +43,15 @@ func (r *HuskerRunner) ensureToolImage(parent context.Context, environment *doma
 	if err := parent.Err(); err != nil {
 		return err
 	}
+	timeout := r.toolConfig.PrepareTimeout
+	if timeout <= 0 {
+		timeout = 20 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
 
 	var base imageResponse
-	if err := r.doJSON(parent, http.MethodGet, "/v1/images/"+url.PathEscape(environment.BaseImage), nil, http.StatusOK, &base); err != nil {
+	if err := r.doJSON(ctx, http.MethodGet, "/v1/images/"+url.PathEscape(environment.BaseImage), nil, http.StatusOK, &base); err != nil {
 		return fmt.Errorf("inspect tool base image: %w", err)
 	}
 	if base.Name != environment.BaseImage || base.ContentDigest != environment.BaseImageDigest {
@@ -56,7 +62,7 @@ func (r *HuskerRunner) ensureToolImage(parent context.Context, environment *doma
 	}
 
 	var existing imageResponse
-	err := r.doJSON(parent, http.MethodGet, "/v1/images/"+url.PathEscape(environment.Image), nil, http.StatusOK, &existing)
+	err := r.doJSON(ctx, http.MethodGet, "/v1/images/"+url.PathEscape(environment.Image), nil, http.StatusOK, &existing)
 	if err == nil {
 		if err := verifyResolvedToolImage(existing, environment, false); err != nil {
 			return err
@@ -73,22 +79,19 @@ func (r *HuskerRunner) ensureToolImage(parent context.Context, environment *doma
 	if err != nil {
 		return err
 	}
-	timeout := r.toolConfig.PrepareTimeout
-	if timeout <= 0 {
-		timeout = 20 * time.Minute
-	}
-	ctx, cancel := context.WithTimeout(parent, timeout)
-	defer cancel()
 	suffix, err := secureSuffix()
 	if err != nil {
 		return fmt.Errorf("create tool preparer identity: %w", err)
 	}
 	vmName := "werkt-prepare-" + suffix
 	lifetime := timeout + r.cleanupTimeout + guestCommandGrace
-	if err := r.createVM(ctx, vmName, "werkt/tools/"+environment.IdentityDigest, environment.BaseImage, "filtered", environment.PreparationEgress, lifetime); err != nil {
+	err = r.createVM(ctx, vmName, "werkt/tools/"+environment.IdentityDigest, environment.BaseImage, "filtered", environment.PreparationEgress, lifetime)
+	if mayOwnVM(err) {
+		defer r.cleanupVM(vmName) //nolint:errcheck // cleanupVM logs its own failure; husker's expiry is the backstop
+	}
+	if err != nil {
 		return fmt.Errorf("create tool preparation VM: %w", err)
 	}
-	defer r.cleanupVM(vmName)
 	if err := r.waitReady(ctx, vmName); err != nil {
 		return fmt.Errorf("wait for tool preparation VM: %w", err)
 	}
