@@ -122,12 +122,17 @@ Standard output and error are redacted against the exact secrets resolved for th
 ## Husker attempt lifecycle
 
 1. Werkt derives a collision-resistant VM name from the run ID and attempt.
-2. It verifies the Ed25519 attestation and current artifact-tree digest before crossing the execution boundary.
-3. It verifies the prepared `runtime.tools` image digest (or resolves the pinned OCI escape hatch), then creates a VM from it with the requested resources, a manifest-derived network policy, `owner: werkt/<run-id>`, and a hard lifetime covering provisioning, execution, and cleanup grace.
-4. It waits for the guest agent, uploads the compressed immutable artifact in bounded chunks, and extracts it into a fresh guest directory.
-5. It uploads the event, initializes the result, and invokes `runtime.command` without a shell.
-6. It collects bounded logs and the JSON result, then destroys the VM using a cleanup context independent of the run context.
-7. If the worker or control plane disappears, Husker's durable expiration reaper destroys the VM.
+2. For a second or later attempt, it destroys the VM of every earlier attempt of the run, treating one already gone as destroyed. An earlier attempt whose worker lost its lease may still be executing, so if any of those VMs cannot be confirmed gone, this attempt fails before it creates anything.
+3. It verifies the Ed25519 attestation and current artifact-tree digest before crossing the execution boundary.
+4. It verifies the prepared `runtime.tools` image digest (or resolves the pinned OCI escape hatch), then creates a VM from it with the requested resources, a manifest-derived network policy, `owner: werkt/<run-id>`, and a hard lifetime covering provisioning, execution, and cleanup grace. A create whose response is lost still counts as a VM to destroy; only a create Husker refused because the name was taken does not.
+5. It waits for the guest agent, uploads the compressed immutable artifact in bounded chunks, and extracts it into a fresh guest directory.
+6. It uploads the event, initializes the result, and invokes `runtime.command` without a shell.
+7. It collects bounded logs and the JSON result, then destroys the VM using a cleanup context independent of the run context.
+8. If the worker or control plane disappears, Husker's durable expiration reaper destroys the VM.
+
+Werkt retries a Husker request Husker rate-limited after the wait Husker announces, since the limit rejects a request before it is handled. A dropped connection or an unavailable gateway may hide a request Husker already acted on, so those are retried only for reads and deletes. Every retry stays inside the caller's deadline, and a request with no deadline of its own is bounded at five minutes.
+
+On `SIGTERM` or `SIGINT` the control plane stops accepting API requests and cancels its workers, then waits up to `WERKT_SHUTDOWN_PERIOD` for them to finish. The period is only an upper bound, since a drain usually takes seconds; it has to outlast the Husker cleanup timeout plus the time to record an outcome, and Werkt warns at startup when it does not. A cancelled attempt destroys its VM (the process executor kills the command's whole process group instead) and is released back to the queue for immediate pickup. An interruption never fails a run by itself: the run is picked up again even with no retries left, although the new attempt counts toward the limit, as an attempt reclaimed after a lost lease does. An attempt that finished as shutdown began is recorded as it finished. A service manager must allow more than the shutdown period before killing the process: an attempt it kills is recovered when its lease expires, and its VM is destroyed by the next attempt or by Husker's expiration.
 
 The runtime network policy is part of the immutable manifest. An empty
 `runtime.egress` produces `network: none`. A non-empty policy produces

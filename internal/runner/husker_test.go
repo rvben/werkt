@@ -449,6 +449,145 @@ func TestHuskerRunnerCleansUpAfterAutomationFailure(t *testing.T) {
 	}
 }
 
+// The worker releases an attempt back to the queue, rather than failing it,
+// only when the attempt's error reports the shutdown's cancellation.
+func TestHuskerRunnerReportsCancellationAndCleansUp(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "run"), []byte("fixture"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	var once sync.Once
+	var mu sync.Mutex
+	deleted := false
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if serveTestHuskerImageImport(t, response, request, nil) {
+			return
+		}
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/v1/vms":
+			response.WriteHeader(http.StatusCreated)
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/ready"):
+			writeJSON(t, response, map[string]any{"ready": true})
+		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/files/write"):
+			writeJSON(t, response, map[string]any{"bytes_written": 1})
+		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/exec"):
+			var body execRequest
+			_ = json.NewDecoder(request.Body).Decode(&body)
+			if body.Command == "./run" {
+				once.Do(func() { close(started) })
+				<-request.Context().Done()
+				return
+			}
+			writeJSON(t, response, execResponse{ExitCode: 0})
+		case request.Method == http.MethodDelete:
+			mu.Lock()
+			deleted = true
+			mu.Unlock()
+			response.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(response, "unexpected", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	executor, err := NewHuskerRunner(HuskerConfig{URL: server.URL, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-started
+		cancel()
+	}()
+	_, err = executor.Execute(ctx, domain.RunnableRun{
+		Run:          domain.Run{ID: "cancelled", Attempt: 1},
+		ArtifactPath: directory,
+		Manifest: domain.Manifest{
+			Runtime:   domain.Runtime{Language: "shell", Image: "alpine@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", Command: []string{"./run"}},
+			Execution: domain.Execution{Timeout: "30s"},
+		},
+	})
+	if !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("error = %v, want one reporting context.Canceled and no timeout", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !deleted {
+		t.Fatal("VM was not cleaned up after cancellation")
+	}
+}
+
+func TestHuskerRunnerDoesNotBlameTheAutomationForItsCallersDeadline(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "run"), []byte("fixture"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if serveTestHuskerImageImport(t, response, request, nil) {
+			return
+		}
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/v1/vms":
+			response.WriteHeader(http.StatusCreated)
+		case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/ready"):
+			writeJSON(t, response, map[string]any{"ready": true})
+		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/files/write"):
+			writeJSON(t, response, map[string]any{"bytes_written": 1})
+		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/exec"):
+			var body execRequest
+			_ = json.NewDecoder(request.Body).Decode(&body)
+			if body.Command == "./run" {
+				<-request.Context().Done()
+				return
+			}
+			writeJSON(t, response, execResponse{ExitCode: 0})
+		case request.Method == http.MethodDelete:
+			response.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(response, "unexpected", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	executor, err := NewHuskerRunner(HuskerConfig{URL: server.URL, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err = executor.Execute(ctx, domain.RunnableRun{
+		Run:          domain.Run{ID: "caller-deadline", Attempt: 1},
+		ArtifactPath: directory,
+		Manifest: domain.Manifest{
+			Runtime:   domain.Runtime{Language: "shell", Image: "alpine@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", Command: []string{"./run"}},
+			Execution: domain.Execution{Timeout: "10m"},
+		},
+	})
+	if !errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "timeout 10m") || !strings.Contains(err.Error(), "interrupted") {
+		t.Fatalf("error = %v, want an interruption by the caller, not the automation's own timeout", err)
+	}
+}
+
+func TestAttemptEndedTellsTheAttemptsOwnTimeoutFromAnInheritedOne(t *testing.T) {
+	own, cancelOwn := withAttemptTimeout(context.Background(), time.Nanosecond)
+	defer cancelOwn()
+	<-own.Done()
+	if err := attemptEnded(own, time.Minute); !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "exceeded timeout 1m0s") {
+		t.Fatalf("own deadline: %v, want the attempt's timeout", err)
+	}
+
+	parent, cancelParent := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancelParent()
+	inherited, cancelInherited := withAttemptTimeout(parent, time.Hour)
+	defer cancelInherited()
+	<-inherited.Done()
+	if err := attemptEnded(inherited, time.Hour); !errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("inherited deadline: %v, want an interruption", err)
+	}
+}
+
 func TestHuskerRunnerBuildsInVMAndPromotesOutput(t *testing.T) {
 	directory := t.TempDir()
 	if err := os.WriteFile(filepath.Join(directory, "source.go"), []byte("package main\n"), 0o644); err != nil {

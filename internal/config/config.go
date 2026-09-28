@@ -97,7 +97,7 @@ func Load() Config {
 		OIDCSessionTTL:           durationEnv("WERKT_OIDC_SESSION_TTL", 12*time.Hour),
 		WorkerPoll:               durationEnv("WERKT_WORKER_POLL", 500*time.Millisecond),
 		SchedulerPoll:            durationEnv("WERKT_SCHEDULER_POLL", time.Second),
-		ShutdownPeriod:           durationEnv("WERKT_SHUTDOWN_PERIOD", 10*time.Second),
+		ShutdownPeriod:           durationEnv("WERKT_SHUTDOWN_PERIOD", 45*time.Second),
 		DeployTimeout:            durationEnv("WERKT_DEPLOY_TIMEOUT", 30*time.Minute),
 		DeploymentPoll:           durationEnv("WERKT_DEPLOYMENT_POLL", 500*time.Millisecond),
 		MaxPackageBytes:          int64Env("WERKT_MAX_PACKAGE_BYTES", 64<<20),

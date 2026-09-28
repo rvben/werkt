@@ -546,11 +546,6 @@ func serve(arguments []string) error {
 		return err
 	}
 	executor = runner.NewVerifyingExecutor(executor, attestor)
-	hostname, _ := os.Hostname()
-	for index := range *workers {
-		workerID := fmt.Sprintf("%s-%d-%d", hostname, os.Getpid(), index)
-		go service.NewWorker(store, executor, workerID, configuration.WorkerPoll).Run(ctx)
-	}
 	builder, err := newBuilder(configuration)
 	if err != nil {
 		return err
@@ -566,15 +561,6 @@ func serve(arguments []string) error {
 		prepareManifest = toolPreparer.PrepareManifest
 	}
 	deployer := service.NewDeployer(store, configuration.DataDir, builder, attestor, prepareManifest)
-	deploymentWorkerID := fmt.Sprintf("%s-%d-deployments", hostname, os.Getpid())
-	go service.NewDeploymentWorker(store, deployer, deploymentWorkerID, configuration.DeploymentPoll).Run(ctx)
-	go service.NewScheduler(store, configuration.SchedulerPoll).Run(ctx)
-	go service.NewNtfyReconciler(store, secretResolver).Run(ctx)
-	notificationWorkerID := fmt.Sprintf("%s-%d-notifications", hostname, os.Getpid())
-	go service.NewNotificationWorker(
-		store, notificationConfig, notification.NewSender(vault), configuration.PublicURL,
-		notificationWorkerID, configuration.NotificationPoll, configuration.NotificationExpiry,
-	).Run(ctx)
 
 	managementTokens := []string{
 		configuration.ManagementToken,
@@ -589,6 +575,10 @@ func serve(arguments []string) error {
 	}
 	if configuration.Executor == "process" {
 		slog.Warn("process executor runs deployed build and runtime commands on this host; use husker before accepting untrusted packages")
+	}
+	if needed := drainAllowance(configuration); configuration.ShutdownPeriod <= needed {
+		slog.Warn("shutdown period does not outlast a draining attempt; one still cleaning up when it ends is recovered only when its lease expires",
+			"period", configuration.ShutdownPeriod, "needed", needed)
 	}
 	intake := service.NewDeploymentIntake(store, configuration.DataDir, packageio.Limits{
 		CompressedBytes: configuration.MaxPackageBytes,
@@ -629,20 +619,81 @@ func serve(arguments []string) error {
 		apiOptions = append(apiOptions, httpapi.WithBrowserAuth(browserAuth))
 	}
 	api := httpapi.New(store, configuration.ListenAddress, configuration.ManagementToken, apiOptions...)
+
+	// Every fallible step is above this line, so nothing below can return
+	// before the loops it started have been drained.
+	loopContext, stopLoops := context.WithCancel(ctx)
+	defer stopLoops()
+	supervisor := service.NewSupervisor()
+	hostname, _ := os.Hostname()
+	for index := range *workers {
+		workerID := fmt.Sprintf("%s-%d-%d", hostname, os.Getpid(), index)
+		worker := service.NewWorker(store, executor, workerID, configuration.WorkerPoll)
+		supervisor.Go("worker "+workerID, func() { worker.Run(loopContext) })
+	}
+	deploymentWorker := service.NewDeploymentWorker(store, deployer, fmt.Sprintf("%s-%d-deployments", hostname, os.Getpid()), configuration.DeploymentPoll)
+	supervisor.Go("deployment worker", func() { deploymentWorker.Run(loopContext) })
+	scheduler := service.NewScheduler(store, configuration.SchedulerPoll)
+	supervisor.Go("scheduler", func() { scheduler.Run(loopContext) })
+	ntfyReconciler := service.NewNtfyReconciler(store, secretResolver)
+	supervisor.Go("ntfy reconciler", func() { ntfyReconciler.Run(loopContext) })
+	notificationWorker := service.NewNotificationWorker(
+		store, notificationConfig, notification.NewSender(vault), configuration.PublicURL,
+		fmt.Sprintf("%s-%d-notifications", hostname, os.Getpid()), configuration.NotificationPoll, configuration.NotificationExpiry,
+	)
+	supervisor.Go("notification worker", func() { notificationWorker.Run(loopContext) })
+
 	serverErrors := make(chan error, 1)
 	go func() {
 		slog.Info("control plane listening", "address", configuration.ListenAddress, "workers", *workers)
 		serverErrors <- api.ListenAndServe()
 	}()
 
+	var serveErr error
 	select {
-	case err := <-serverErrors:
-		return err
+	case serveErr = <-serverErrors:
+		slog.Error("control plane API stopped; draining", "error", serveErr)
 	case <-ctx.Done():
-		shutdownContext, cancel := context.WithTimeout(context.Background(), configuration.ShutdownPeriod)
-		defer cancel()
-		return api.Shutdown(shutdownContext)
+		// A second signal now terminates the process instead of waiting out
+		// the drain.
+		stop()
+		slog.Info("control plane stopping; draining", "period", configuration.ShutdownPeriod)
 	}
+	return errors.Join(serveErr, drain(configuration.ShutdownPeriod, api, supervisor, stopLoops))
+}
+
+// drain stops the API and the background loops under one deadline. The two run
+// concurrently so neither spends the other's share of the period, and the loops
+// get to destroy their VMs and record how their runs ended before the store
+// they write to is closed.
+func drain(period time.Duration, api *httpapi.Server, supervisor *service.Supervisor, stopLoops context.CancelFunc) error {
+	ctx, cancel := context.WithTimeout(context.Background(), period)
+	defer cancel()
+	stopLoops()
+	apiStopped := make(chan error, 1)
+	go func() { apiStopped <- api.Shutdown(ctx) }()
+	loopsErr := supervisor.Wait(ctx)
+	apiErr := <-apiStopped
+	if loopsErr != nil {
+		slog.Error("control plane stopped before its loops finished; their runs are recovered when their leases expire", "error", loopsErr)
+	} else {
+		slog.Info("control plane drained")
+	}
+	if apiErr != nil {
+		apiErr = fmt.Errorf("stop management API: %w", apiErr)
+	}
+	return errors.Join(apiErr, loopsErr)
+}
+
+// drainAllowance is the longest an attempt interrupted by shutdown may take to
+// finish legitimately: destroying its VM within the Husker cleanup budget, then
+// recording its outcome.
+func drainAllowance(configuration config.Config) time.Duration {
+	allowance := service.OutcomeTimeout
+	if configuration.Executor == "husker" {
+		allowance += configuration.HuskerCleanupTimeout
+	}
+	return allowance
 }
 
 func newExecutor(configuration config.Config, secrets runner.SecretResolver) (runner.Executor, error) {

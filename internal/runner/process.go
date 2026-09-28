@@ -11,12 +11,34 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/rvben/werkt/internal/domain"
 )
 
 const maxLogs = 1 << 20
+
+// processWaitDelay bounds how long a cancelled command's output is still read
+// after its process group has been killed.
+const processWaitDelay = 5 * time.Second
+
+// commandInGroup starts argv in a process group of its own and, when ctx ends,
+// kills the whole group rather than only the command. Anything the command
+// started would otherwise outlive a cancelled attempt, overlap the attempt that
+// replaces it, and hold the output pipes open so the cancellation never returns.
+func commandInGroup(ctx context.Context, argv []string) *exec.Cmd {
+	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Cancel = func() error {
+		if err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL); !errors.Is(err, syscall.ESRCH) {
+			return err
+		}
+		return os.ErrProcessDone
+	}
+	command.WaitDelay = processWaitDelay
+	return command
+}
 
 type ProcessRunner struct {
 	secrets       SecretResolver
@@ -64,7 +86,7 @@ func runPromotionCommand(ctx context.Context, directory string, values map[strin
 			return err
 		}
 	}
-	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	command := commandInGroup(ctx, argv)
 	command.Dir = directory
 	command.Env = append(inheritedRuntimeEnvironment(), environment(values)...)
 	var output limitedBuffer
@@ -124,7 +146,7 @@ func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) 
 	if len(run.Manifest.Runtime.Egress) > 0 {
 		return Result{}, errors.New("runtime.egress requires the husker executor; the process executor cannot enforce network policy")
 	}
-	ctx, cancel := context.WithTimeout(parent, run.Manifest.Execution.TimeoutDuration())
+	ctx, cancel := withAttemptTimeout(parent, run.Manifest.Execution.TimeoutDuration())
 	defer cancel()
 	resolved, err := resolveRuntimeEnvironment(parent, r.secrets, run.Manifest.Runtime)
 	if err != nil {
@@ -165,7 +187,7 @@ func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) 
 		}
 	}
 
-	command := exec.CommandContext(ctx, run.Manifest.Runtime.Command[0], run.Manifest.Runtime.Command[1:]...)
+	command := commandInGroup(ctx, run.Manifest.Runtime.Command)
 	command.Dir = run.ArtifactPath
 	resolved.values["WERKT_STATE_MAX_BYTES"] = fmt.Sprint(r.maxStateBytes)
 	command.Env = append(inheritedRuntimeEnvironment(), runtimeEnvironment(run, eventPath, resultPath, controlPath, statePath, resolved.values)...)
@@ -175,7 +197,7 @@ func (r *ProcessRunner) Execute(parent context.Context, run domain.RunnableRun) 
 	commandErr := command.Run()
 	logs := formatLogs(redactor.Redact(stdout.String()), redactor.Redact(stderr.String()))
 	if ctx.Err() != nil {
-		return Result{Logs: logs}, fmt.Errorf("automation exceeded timeout %s: %w", run.Manifest.Execution.TimeoutDuration(), ctx.Err())
+		return Result{Logs: logs}, attemptEnded(ctx, run.Manifest.Execution.TimeoutDuration())
 	}
 	if commandErr != nil {
 		return Result{Logs: logs}, fmt.Errorf("automation process failed: %w", redactor.Error(commandErr))

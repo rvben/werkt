@@ -356,7 +356,7 @@ artifact and its digest is part of the revision identity. See
 | `WERKT_OIDC_SESSION_TTL` | `12h` |
 | `WERKT_WORKER_POLL` | `500ms` |
 | `WERKT_SCHEDULER_POLL` | `1s` |
-| `WERKT_SHUTDOWN_PERIOD` | `10s` |
+| `WERKT_SHUTDOWN_PERIOD` | `45s`; the longest shutdown waits for running attempts to destroy their VMs and record their outcome. It returns as soon as they have; keep it above `WERKT_HUSKER_CLEANUP_TIMEOUT` plus 5s |
 | `WERKT_DEPLOY_TIMEOUT` | `30m` |
 | `WERKT_DEPLOYMENT_POLL` | `500ms` |
 | `WERKT_MAX_PACKAGE_BYTES` | `67108864` (64 MiB compressed) |

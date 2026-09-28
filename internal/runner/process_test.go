@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -262,5 +264,151 @@ func TestProcessRunnerStopsAfterFailedPromotionCheck(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(directory, "should-not-run")); !os.IsNotExist(err) {
 		t.Fatalf("later check ran: %v", err)
+	}
+}
+
+// The worker releases an attempt back to the queue, rather than failing it,
+// only when the attempt's error reports the shutdown's cancellation.
+func TestProcessRunnerReportsCancellation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is POSIX-specific")
+	}
+	directory := t.TempDir()
+	script := []byte("#!/bin/sh\ntouch \"$0.started\"\nexec sleep 30\n")
+	path := filepath.Join(directory, "run.sh")
+	if err := os.WriteFile(path, script, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		for {
+			if _, err := os.Stat(path + ".started"); err == nil {
+				cancel()
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}()
+	_, err := runner.NewProcessRunner(staticSecrets{}).Execute(ctx, domain.RunnableRun{
+		Run:          domain.Run{ID: "run_cancelled", AutomationID: "example", RevisionID: "rev_test"},
+		ArtifactPath: directory,
+		Manifest: domain.Manifest{
+			Runtime:   domain.Runtime{Language: "shell", Command: []string{"./run.sh"}},
+			Execution: domain.Execution{Timeout: "30s"},
+		},
+	})
+	if !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("Execute() error = %v, want one reporting context.Canceled and no timeout", err)
+	}
+}
+
+// A cancelled attempt is released for immediate pickup, so nothing it started
+// may outlive it: a leftover child would overlap the next attempt, and while it
+// holds the output pipe open the cancelled attempt cannot even return.
+func TestProcessRunnerStopsDescendantsOfACancelledAttempt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is POSIX-specific")
+	}
+	directory := t.TempDir()
+	script := []byte("#!/bin/sh\nsleep 30 &\necho $! > \"$0.child\"\nwait\n")
+	path := filepath.Join(directory, "run.sh")
+	if err := os.WriteFile(path, script, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	childPID := path + ".child"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		for {
+			if data, err := os.ReadFile(childPID); err == nil && strings.TrimSpace(string(data)) != "" {
+				cancel()
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}()
+	started := time.Now()
+	_, err := runner.NewProcessRunner(staticSecrets{}).Execute(ctx, domain.RunnableRun{
+		Run:          domain.Run{ID: "run_descendants", AutomationID: "example", RevisionID: "rev_test"},
+		ArtifactPath: directory,
+		Manifest: domain.Manifest{
+			Runtime:   domain.Runtime{Language: "shell", Command: []string{"./run.sh"}},
+			Execution: domain.Execution{Timeout: "60s"},
+		},
+	})
+	if elapsed := time.Since(started); elapsed > 10*time.Second {
+		t.Fatalf("cancelled attempt returned after %s, want promptly", elapsed)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Execute() error = %v, want one reporting context.Canceled", err)
+	}
+	data, readErr := os.ReadFile(childPID)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	pid, convErr := strconv.Atoi(strings.TrimSpace(string(data)))
+	if convErr != nil {
+		t.Fatal(convErr)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatalf("child %d of the cancelled attempt is still running", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestProcessRunnerReportsItsOwnTimeoutAsATimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is POSIX-specific")
+	}
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "run.sh"), []byte("#!/bin/sh\nexec sleep 30\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runner.NewProcessRunner(staticSecrets{}).Execute(context.Background(), domain.RunnableRun{
+		Run:          domain.Run{ID: "run_timeout", AutomationID: "example", RevisionID: "rev_test"},
+		ArtifactPath: directory,
+		Manifest: domain.Manifest{
+			Runtime:   domain.Runtime{Language: "shell", Command: []string{"./run.sh"}},
+			Execution: domain.Execution{Timeout: "1s"},
+		},
+	})
+	if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "exceeded timeout 1s") {
+		t.Fatalf("Execute() error = %v, want the attempt's own timeout", err)
+	}
+}
+
+func TestProcessRunnerDoesNotBlameTheAutomationForItsCallersDeadline(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture is POSIX-specific")
+	}
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "run.sh"), []byte("#!/bin/sh\nexec sleep 30\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	parent, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, err := runner.NewProcessRunner(staticSecrets{}).Execute(parent, domain.RunnableRun{
+		Run:          domain.Run{ID: "run_parent_deadline", AutomationID: "example", RevisionID: "rev_test"},
+		ArtifactPath: directory,
+		Manifest: domain.Manifest{
+			Runtime:   domain.Runtime{Language: "shell", Command: []string{"./run.sh"}},
+			Execution: domain.Execution{Timeout: "10m"},
+		},
+	})
+	if !errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "timeout 10m") || !strings.Contains(err.Error(), "interrupted") {
+		t.Fatalf("Execute() error = %v, want an interruption by the caller, not the automation's own timeout", err)
 	}
 }

@@ -288,7 +288,7 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 	}
 	cancelProvision()
 
-	executionContext, cancelExecution := context.WithTimeout(parent, runtimeTimeout+guestCommandGrace)
+	executionContext, cancelExecution := withAttemptTimeout(parent, runtimeTimeout+guestCommandGrace)
 	defer cancelExecution()
 	command := run.Manifest.Runtime.Command
 	resolved.values["WERKT_STATE_MAX_BYTES"] = fmt.Sprint(r.maxStateBytes)
@@ -310,7 +310,7 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 	if executeErr != nil {
 		executeErr = redactor.Error(executeErr)
 		if executionContext.Err() != nil {
-			return Result{Logs: logs}, fmt.Errorf("automation exceeded timeout %s: %w", runtimeTimeout, executionContext.Err())
+			return Result{Logs: logs}, attemptEnded(executionContext, runtimeTimeout)
 		}
 		return Result{Logs: logs}, fmt.Errorf("execute automation in husker VM: %w", executeErr)
 	}

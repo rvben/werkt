@@ -382,3 +382,22 @@ func (r logRedactor) Error(err error) error {
 	}
 	return errors.New(r.Redact(err.Error()))
 }
+
+// errAttemptTimeout is the cause an attempt's own deadline carries, so a
+// deadline inherited from the caller is not reported as the automation's.
+var errAttemptTimeout = errors.New("attempt timeout")
+
+// withAttemptTimeout bounds an attempt by its own timeout.
+func withAttemptTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeoutCause(parent, timeout, errAttemptTimeout)
+}
+
+// attemptEnded reports why ctx stopped an attempt: its own timeout, or an
+// interruption from outside it, such as the control plane shutting down or a
+// deadline set by the caller.
+func attemptEnded(ctx context.Context, timeout time.Duration) error {
+	if errors.Is(context.Cause(ctx), errAttemptTimeout) {
+		return fmt.Errorf("automation exceeded timeout %s: %w", timeout, ctx.Err())
+	}
+	return fmt.Errorf("automation interrupted: %w", ctx.Err())
+}

@@ -909,6 +909,27 @@ func (s *Store) FailRun(ctx context.Context, run domain.Run, workerID, logs stri
 	return tx.Commit(ctx)
 }
 
+// ReleaseRun hands a run the worker could not finish back to the queue for
+// immediate pickup, as when the control plane stops mid-run. The attempt was
+// interrupted rather than failed, so the run is picked up again even when it
+// has no retries left. The next acquire still numbers a new attempt, which
+// keeps VM names unique and counts toward the retry limit as a reclaimed lease
+// does.
+func (s *Store) ReleaseRun(ctx context.Context, run domain.Run, workerID, logs, reason string) error {
+	command, err := s.pool.Exec(ctx, `
+		UPDATE runs SET status = 'queued', logs = $3, error = $4, available_at = now(),
+			lease_owner = NULL, lease_expires_at = NULL
+		WHERE id = $1 AND status = 'running' AND lease_owner = $2`,
+		run.ID, workerID, logs, reason)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return ErrRunLeaseLost
+	}
+	return nil
+}
+
 func (s *Store) ListAutomations(ctx context.Context, filter AutomationFilter) ([]AutomationSummary, error) {
 	var enabled any
 	if filter.Enabled != nil {
