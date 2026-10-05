@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.0](https://github.com/rvben/werkt/compare/v0.5.1...v0.6.0) - 2026-10-05
+
+### Added
+
+- **workspace**: dark surface hierarchy and a connected automation flow with measured ports, selection-aware inspectors, and direct access to run evidence.
+
+### Fixed
+
+- **workspace**: keep large source lists compact, wrap long historical identifiers, and adapt flow controls to narrow workspaces.
+- **workspace**: clear recorded sources when returning to the definition view and distinguish missing logs and results from recorded evidence.
+
 ## [0.5.1](https://github.com/rvben/werkt/compare/v0.5.0...v0.5.1) - 2026-09-28
 
 ### Fixed
