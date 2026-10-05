@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.1](https://github.com/rvben/werkt/compare/v0.6.0...v0.6.1) - 2026-10-05
+
+### Added
+
+- **approvals**: add a display-only image field ([eb67b5b](https://github.com/rvben/werkt/commit/eb67b5bc587fe7f08de6012c8a8e6b4343a793bc))
+
+### Fixed
+
+- **approvals**: store an approval that requests no fields ([6c31508](https://github.com/rvben/werkt/commit/6c31508be78b2d51bffeb625dfef3b02a0fbd3d7))
+
 ## [0.6.0](https://github.com/rvben/werkt/compare/v0.5.1...v0.6.0) - 2026-10-05
 
 ### Added
