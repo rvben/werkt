@@ -60,6 +60,8 @@ func TestWorkspaceBrowserKeyboardFocusAndResponsiveModality(t *testing.T) {
 		"flowLiveEvidence",
 		"flowLedgerPrecedesJourney",
 		"flowReadOnly",
+		"flowConnectionsMeetPorts",
+		"flowInspectorAction",
 		"flowTabPanelsResolve",
 		"helpShortcut",
 		"journeyAccessible",
@@ -118,6 +120,98 @@ func TestWorkspaceBrowserEmptyStateDraftHandoff(t *testing.T) {
 			t.Errorf("empty-state browser contract %q failed: %#v", contract, results)
 		}
 	}
+}
+
+// Stress the same rendered interface with API-shaped records, not DOM-only mocks.
+func TestWorkspaceBrowserFlowEdgeCases(t *testing.T) {
+	if os.Getenv("WERKT_BROWSER_TESTS") == "" {
+		t.Skip("set WERKT_BROWSER_TESTS=1 to run the headless workspace contract")
+	}
+	chrome := findChrome(t)
+	server := httptest.NewServer(http.HandlerFunc(workspaceEdgeBrowserFixture))
+	defer server.Close()
+	for _, size := range []string{"390,844", "1440,1000"} {
+		t.Run(size, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			command := exec.CommandContext(ctx, chrome, "--headless=new", "--disable-background-networking", "--disable-default-apps", "--disable-extensions", "--disable-gpu", "--no-first-run", "--no-sandbox", "--user-data-dir="+t.TempDir(), "--virtual-time-budget=12000", "--window-size="+size, "--dump-dom", server.URL+"/app/")
+			output, err := command.CombinedOutput()
+			match := regexp.MustCompile(`<pre id="browser-test-results">([^<]+)</pre>`).FindSubmatch(output)
+			if len(match) != 2 {
+				t.Fatalf("edge-case contract did not publish results: %v\n%s", err, output)
+			}
+			var results map[string]any
+			if err := json.Unmarshal([]byte(html.UnescapeString(string(match[1]))), &results); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"longOverview", "manySources", "portsAligned", "historicalSource", "missingEvidence", "longDiagnosis", "manualDefinition"} {
+				if results[key] != true {
+					t.Errorf("%s failed: %#v", key, results)
+				}
+			}
+		})
+	}
+}
+
+const edgeAutomationID = "recording-complete-with-a-very-long-unbroken-identifier-for-the-weekly-international-operations-reconciliation-and-summary"
+
+func workspaceEdgeBrowserFixture(response http.ResponseWriter, request *http.Request) {
+	if request.URL.Path == "/test-driver.js" {
+		response.Header().Set("Content-Type", "text/javascript")
+		_, _ = response.Write([]byte(workspaceEdgeBrowserDriver))
+		return
+	}
+	copyRequest := request.Clone(request.Context())
+	copyURL := *request.URL
+	copyURL.Path = strings.ReplaceAll(copyURL.Path, edgeAutomationID, "test-automation")
+	copyRequest.URL = &copyURL
+	recorder := httptest.NewRecorder()
+	workspaceBrowserFixture(recorder, copyRequest)
+	body := recorder.Body.String()
+	if strings.HasPrefix(request.URL.Path, "/api/v1/") {
+		body = strings.ReplaceAll(body, "test-automation", edgeAutomationID)
+		var value any
+		if json.Unmarshal([]byte(body), &value) == nil {
+			var amend func(any)
+			amend = func(value any) {
+				switch item := value.(type) {
+				case []any:
+					for _, child := range item {
+						amend(child)
+					}
+				case map[string]any:
+					if _, exists := item["manifest"]; exists {
+						triggers := []any{}
+						if request.URL.Query().Get("edge") != "manual" {
+							for n := 0; n < 20; n++ {
+								triggers = append(triggers, map[string]any{"id": strings.Repeat("international-reconciliation-", 4) + string(rune('a'+n)), "type": "webhook", "enabled": true, "config": map[string]any{"provider": "zoom"}})
+							}
+						}
+						item["triggers"] = triggers
+					}
+					if item["id"] == "run_test" {
+						item["revisionId"] = "rev_retired_" + strings.Repeat("0123456789abcdef", 4)
+						delete(item, "logs")
+						delete(item, "result")
+						item["error"] = "Provider rejected request: " + strings.Repeat("unbroken-upstream-error-context-", 12)
+					}
+					for _, child := range item {
+						amend(child)
+					}
+				}
+			}
+			amend(value)
+			encoded, _ := json.Marshal(value)
+			body = string(encoded)
+		}
+	}
+	for key, values := range recorder.Header() {
+		for _, value := range values {
+			response.Header().Add(key, value)
+		}
+	}
+	response.WriteHeader(recorder.Code)
+	_, _ = response.Write([]byte(body))
 }
 
 func findChrome(t *testing.T) string {
@@ -283,6 +377,29 @@ const workspaceBrowserDriver = `
       results.flowAsyncFocus = Boolean(document.activeElement?.dataset.flowLayer === "live"
         && document.querySelector('[data-flow-focus="diagnosis"]')
         && document.querySelector('[data-flow-focus="ledger-summary"]'));
+      await waitFor(() => document.querySelectorAll('.flow-wires path').length === 4);
+      const svg = document.querySelector('.flow-wires');
+      const graphBounds = svg.getBoundingClientRect();
+      const portPoint = (key, side) => {
+        const node = [...document.querySelectorAll('[data-flow-evidence]')].find(item => item.dataset.flowEvidence === key);
+        const port = node.querySelector('[data-flow-port="' + side + '"]').getBoundingClientRect();
+        return {x: (port.left + port.right) / 2 - graphBounds.left, y: (port.top + port.bottom) / 2 - graphBounds.top};
+      };
+      results.flowConnectionsMeetPorts = [...svg.querySelectorAll('path')].every(path => {
+        const start = path.getPointAtLength(0);
+        const end = path.getPointAtLength(path.getTotalLength());
+        const source = portPoint(path.dataset.from, 'out');
+        const target = portPoint(path.dataset.to, 'in');
+        return Math.hypot(start.x - source.x, start.y - source.y) < 1
+          && Math.hypot(end.x - target.x, end.y - target.y) < 1;
+      });
+      document.querySelector('[data-flow-evidence="logs"]').click();
+      results.flowInspectorAction = document.querySelector('#flow-selection-title').textContent === 'Execution logs'
+        && document.querySelector('[data-flow-evidence="logs"]').getAttribute('aria-controls') === 'flow-selection';
+      document.querySelector('[data-flow-focus="inspect-selected"]').click();
+      await waitFor(() => document.querySelector('#diagnosis-tab-logs')?.getAttribute('aria-selected') === 'true');
+      results.flowInspectorAction = results.flowInspectorAction && document.querySelector('#diagnosis-panel-logs').textContent.includes('fixture log');
+      document.querySelector('[data-close-diagnosis]').click();
       results.flowExactLedger = results.flowExactLedger && document.querySelector(".flow-ledger time")?.textContent.includes("2026-08-23T");
       results.flowExactChronology = ["Event occurred", "Event received", "Run created", "Revision started"].every((label) => document.querySelector(".flow-ledger").textContent.includes(label));
       results.flowLedgerPrecedesJourney = Boolean(document.querySelector(".flow-ledger").compareDocumentPosition(document.querySelector(".actor-journey")) & Node.DOCUMENT_POSITION_FOLLOWING);
@@ -343,6 +460,80 @@ const workspaceEmptyBrowserDriver = `
     output.id = "browser-test-results";
     output.textContent = JSON.stringify(results);
     document.body.append(output);
+  });
+})();
+`
+
+const workspaceEdgeBrowserDriver = `
+(() => {
+  // Chrome's virtual clock does not advance compositor grid transitions.
+  // Assert the resting layout rather than an intermediate drawer width.
+  const style=document.createElement('style');
+  style.textContent='.app-shell { transition: none !important; }';
+  document.head.append(style);
+  const waitFor = async test => {
+    const deadline = Date.now() + 5000;
+    while (!test() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+    if (!test()) throw new Error("Timed out: " + test);
+  };
+  const fits = selector => [...document.querySelectorAll(selector)].every(e => e.scrollWidth <= e.clientWidth + 1);
+  window.addEventListener("load", async () => {
+    const results = {};
+    try {
+      await waitFor(() => document.querySelector('[data-automation]'));
+      document.querySelector('[data-automation]').click();
+      await waitFor(() => document.querySelector('.automation-technical'));
+      results.longOverview = document.querySelector('.detail-title h2').textContent.length > 100 && fits('.detail-header, .detail-body');
+      document.querySelector('[data-automation-tab="flow"]').click();
+      await waitFor(() => document.querySelectorAll('.flow-wires path').length > 3);
+      results.manySources = document.querySelectorAll('.flow-source').length === 20 && fits('.flow-map, .flow-inspector, .flow-node-copy, .flow-history-notice') && document.querySelector('.flow-source-list').clientHeight <= 384;
+      if(!results.manySources) results.sourceOverflow=[...document.querySelectorAll('.flow-map, .flow-inspector, .flow-node-copy, .flow-history-notice')].filter(e=>e.scrollWidth>e.clientWidth+1).map(e=>({class:e.className,width:e.clientWidth,scroll:e.scrollWidth}));
+      const aligned = () => {
+        const svg = document.querySelector('.flow-wires'), bounds = svg.getBoundingClientRect();
+        return [...svg.querySelectorAll('path')].every(path => {
+          const port = (key, side) => {
+            const node = [...document.querySelectorAll('[data-flow-evidence]')].find(e => e.dataset.flowEvidence === key);
+            const r = node.querySelector('[data-flow-port="' + side + '"]').getBoundingClientRect();
+            return {x:(r.left+r.right)/2-bounds.left,y:(r.top+r.bottom)/2-bounds.top};
+          };
+          const a=path.getPointAtLength(0),b=path.getPointAtLength(path.getTotalLength()),s=port(path.dataset.from,'out'),t=port(path.dataset.to,'in');
+          return Math.hypot(a.x-s.x,a.y-s.y)<1 && Math.hypot(b.x-t.x,b.y-t.y)<1;
+        });
+      };
+      results.portsAligned = aligned();
+      const sources=document.querySelector('.flow-source-list');
+      sources.scrollTop=sources.scrollHeight;
+      sources.dispatchEvent(new Event('scroll'));
+      results.portsAligned=results.portsAligned && aligned();
+      sources.scrollTop=0;sources.dispatchEvent(new Event('scroll'));
+      document.querySelector('[data-flow-layer="live"]').click();
+      await waitFor(() => document.querySelector('[data-flow-evidence="recorded-source"]'));
+      await waitFor(() => document.querySelector('[data-flow-evidence="logs"]').textContent.includes('No output recorded'));
+      await waitFor(() => document.querySelector('.flow-wires path.is-observed') && document.querySelectorAll('.flow-wires path').length > 3);
+      results.portsAligned = results.portsAligned && aligned();
+      results.historicalSource = document.querySelector('.flow-core').textContent.includes('Historical manifest unavailable')
+        && document.querySelectorAll('.flow-source.is-observed').length === 1
+        && document.querySelector('[data-flow-evidence="recorded-source"]').classList.contains('is-observed');
+      results.missingEvidence = !document.querySelector('[data-flow-evidence="logs"]').classList.contains('is-observed')
+        && !document.querySelector('[data-flow-evidence="output"]').classList.contains('is-observed')
+        && document.querySelector('[data-flow-evidence="output"]').textContent.includes('No result recorded');
+      document.querySelector('[data-flow-evidence="recorded-source"]').click();
+      results.historicalSource = results.historicalSource && document.querySelector('.flow-inspector').textContent.includes('Unavailable for this run');
+      document.querySelector('[data-flow-focus="diagnosis"]').click();
+      await waitFor(() => document.querySelector('.run-failure'));
+      await waitFor(() => document.querySelector('.diagnosis-body').clientWidth > 250);
+      results.longDiagnosis = fits('.run-failure, .diagnosis-body') && document.querySelector('.run-failure').textContent.includes('unbroken-upstream');
+      if(!results.longDiagnosis) results.diagnosisOverflow=[...document.querySelectorAll('.run-failure, .diagnosis-body, .run-failure-actions .button')].map(e=>({class:e.className,width:e.clientWidth,scroll:e.scrollWidth}));
+      document.querySelector('[data-close-diagnosis]').click();
+      const originalFetch=window.fetch;
+      window.fetch=(path,opts) => originalFetch(String(path).includes('/api/v1/automations/') ? String(path)+'?edge=manual' : path,opts);
+      document.querySelector('[data-flow-layer="definition"]').click();
+      document.querySelector('#refresh-button').click();
+      await waitFor(() => document.querySelector('.flow-map')?.textContent.includes('No manifest triggers'));
+      await waitFor(() => document.querySelectorAll('.flow-wires path').length === 3);
+      results.manualDefinition = document.querySelector('.flow-map').textContent.includes('Manual runs remain available') && aligned();
+    } catch(error) { results.error=String(error);results.pathCount=document.querySelectorAll(".flow-wires path").length; }
+    const pre=document.createElement('pre');pre.id='browser-test-results';pre.textContent=JSON.stringify(results);document.body.append(pre);
   });
 })();
 `

@@ -78,6 +78,9 @@
   const runStatuses = new Set(["all", "queued", "running", "succeeded", "failed"]);
   const deploymentStatuses = new Set(["all", "in-progress", "succeeded", "failed"]);
   const approvalStatuses = new Set(["all", "pending", "approved", "rejected", "expired"]);
+  let flowLayoutObserver = null;
+  let flowSourceScrollCleanup = null;
+  let flowLayoutFrame = 0;
   let workspaceRequest = 0;
   let detailRequest = 0;
   let workspaceController = null;
@@ -652,6 +655,7 @@
   }
 
   function renderCurrentView() {
+    disconnectFlowPorts();
     if (state.view === "approvals") renderGlobalApprovals();
     else if (state.view === "runs") renderGlobalRuns();
     else if (state.view === "deployments") renderGlobalDeployments();
@@ -753,6 +757,7 @@
   }
 
   function renderAutomationDetail() {
+    disconnectFlowPorts();
     const detail = state.detail;
     const runtime = detail.manifest?.runtime || {};
     const execution = detail.manifest?.execution || {};
@@ -781,6 +786,7 @@
       <div class="detail-body" id="automation-panel-overview" role="tabpanel" aria-labelledby="automation-tab-overview" tabindex="0" ${state.automationTab === "overview" ? "" : "hidden"}>${state.automationTab === "overview" ? renderAutomationOverview(detail, runtime, execution, activeRevision, triggers, recentRuns, health) : ""}</div>
       <div class="detail-body" id="automation-panel-flow" role="tabpanel" aria-labelledby="automation-tab-flow" tabindex="0" ${state.automationTab === "flow" ? "" : "hidden"}>${state.automationTab === "flow" ? renderAutomationFlow(detail, activeRevision, triggers) : ""}</div>
     </article>`;
+    connectFlowPorts();
   }
 
   function renderAutomationOverview(detail, runtime, execution, activeRevision, triggers, recentRuns, health) {
@@ -820,15 +826,15 @@
     const evidenceLoading = Boolean(live && run && state.flowRunLoading[run.id]);
     const evidenceError = live && run ? state.flowRunErrors[run.id] : "";
     const evidenceReady = Boolean(!live || runDetail);
-    const observedTrigger = evidenceReady ? runDetail?.event?.trigger || null : null;
+    const observedTrigger = live && evidenceReady ? runDetail?.event?.trigger || null : null;
     const runRevision = live && run ? detail.revisions?.find((revision) => revision.id === run.revisionId) || null : activeRevision;
     const historical = Boolean(live && run && run.revisionId !== detail.activeRevisionId);
-    const sourceModel = flowSources(triggers, observedTrigger, runDetail?.event?.metadata || {}, historical);
+    const sourceModel = flowSources(triggers, observedTrigger, live ? runDetail?.event?.metadata || {} : {}, historical);
     const evidence = flowEvidence(detail, runRevision, sourceModel, live ? run : null, {historical, evidenceReady});
     const runOptions = state.detailRuns.map((item) => `<option value="${escapeHTML(item.id)}"${item.id === run?.id ? " selected" : ""}>${escapeHTML(shortID(item.id, 26))} · ${escapeHTML(capitalize(item.status))} · ${escapeHTML(formatDate(item.createdAt))}</option>`).join("");
     return `<section class="flow-view" aria-labelledby="flow-heading">
       <header class="flow-heading">
-        <div><h3 id="flow-heading">Automation flow</h3><p>The code and manifest stay authoritative. This view projects their stable shape and overlays recorded evidence.</p></div>
+        <div><h3 id="flow-heading">Automation flow</h3><p>Follow an event into deployed code, then inspect what the run recorded.</p></div>
         <div class="flow-controls">
           <div class="segmented-control" role="group" aria-label="Flow layer">
             <button type="button" data-flow-layer="definition" aria-pressed="${!live}" class="${!live ? "is-active" : ""}">Definition</button>
@@ -843,36 +849,159 @@
       ${live && state.detailApprovalsError ? `<div class="inline-notice is-error" role="status"><span>${escapeHTML(state.detailApprovalsError)}</span><button class="button button-quiet button-compact" type="button" data-flow-focus="retry-approvals" data-retry-detail-approvals>Retry approval evidence</button></div>` : ""}
       ${historical ? `<div class="inline-notice flow-history-notice" role="status"><span>This run used revision <code>${escapeHTML(run.revisionId)}</code>. The topology still reflects the active manifest; unavailable historical manifest fields are labeled below.</span></div>` : ""}
       ${live && !run ? `<div class="empty-state flow-empty"><div class="empty-state-inner"><h2>No recorded run to overlay</h2><p>Trigger this automation to connect its definition to runtime evidence.</p></div></div>` : `
-      <div class="flow-map${live && evidenceReady ? " has-recorded-path" : ""}" aria-label="${escapeHTML(live && run ? `${evidenceReady ? "Recorded path" : "Run evidence loading"} for run ${run.id}` : `Definition map for ${detail.id}`)}">
+      <div class="flow-workbench">
+      <div class="flow-map${live && evidenceReady ? " has-recorded-path" : ""}" data-flow-live="${live}" aria-label="${escapeHTML(live && run ? `${evidenceReady ? "Recorded path" : "Run evidence loading"} for run ${run.id}` : `Definition map for ${detail.id}`)}">
+        <svg class="flow-wires" aria-hidden="true" focusable="false"></svg>
         <section class="flow-stage flow-sources" aria-labelledby="flow-sources-title">
-          <div class="flow-stage-title"><h4 id="flow-sources-title">Event sources</h4><span>${triggers.length} ${triggers.length === 1 ? "declaration" : "declarations"} in active manifest</span></div>
-          <div class="flow-node-stack">${sourceModel.length ? sourceModel.map((source) => `<button class="flow-node flow-source${source.observed ? " is-observed" : ""}" type="button" data-flow-evidence="${escapeHTML(source.key)}" aria-pressed="${state.flowEvidence === source.key}"><span class="flow-node-icon">${icon(icons[source.type] || "code")}</span><span><strong>${escapeHTML(source.id)}</strong><small>${escapeHTML(source.detail)}</small></span>${source.observed ? '<span class="observed-mark">Observed</span>' : ""}</button>`).join("") : `<div class="flow-node is-muted"><span><strong>No manifest triggers</strong><small>Manual runs remain available</small></span></div>`}</div>
+          <div class="flow-stage-title"><h4 id="flow-sources-title">Event sources</h4><span>${sourceModel.length} ${sourceModel.length === 1 ? "source" : "sources"}</span></div>
+          <div class="flow-node-stack flow-source-list" tabindex="0" role="group" aria-label="Scrollable event sources">${sourceModel.length ? sourceModel.slice().sort((a, b) => Number(b.observed) - Number(a.observed)).map((source) => renderFlowCard({key: source.key, title: source.id, subtitle: flowSourceSummary(source), symbol: icons[source.type] || "code", kind: "source", sourceType: source.type, observed: source.observed, annotation: live && evidenceReady && source.observed ? "Recorded source" : "", port: "out"})).join("") : '<div class="flow-node is-muted"><span><strong>No manifest triggers</strong><small>Manual runs remain available</small></span></div>'}</div>
         </section>
-        <div class="flow-connector" aria-hidden="true"><span></span></div>
+        <div class="flow-link-lane" aria-hidden="true"></div>
         <section class="flow-stage flow-runtime" aria-labelledby="flow-runtime-title">
-          <div class="flow-stage-title"><h4 id="flow-runtime-title">Code revision</h4><span>${live ? "Pinned for run" : "Active definition"}</span></div>
-          <button class="flow-node flow-core${live ? ` status-${statusClass(run.status)}` : ""}" type="button" data-flow-evidence="revision" aria-pressed="${state.flowEvidence === "revision"}">
-            <span class="flow-core-top"><span class="flow-node-icon">${icon("code")}</span><span class="status-badge status-${live ? statusClass(run.status) : (detail.enabled ? "active" : "paused")}">${live ? escapeHTML(capitalize(run.status)) : (detail.enabled ? "Active" : "Paused")}</span></span>
-            <strong>${escapeHTML(shortID(live ? run.revisionId : detail.activeRevisionId, 22))}</strong>
-            <small>${historical ? "Historical runtime manifest unavailable" : `${escapeHTML(detail.manifest?.runtime?.language || "Executable")} · ${escapeHTML(detail.manifest?.execution?.concurrency || "allow")} concurrency`}</small>
-            ${live ? `<span class="flow-run-id mono">${escapeHTML(run.id)}</span>` : `<span class="flow-run-id">Immutable deployed code</span>`}
-          </button>
-        </section>
-        <div class="flow-connector" aria-hidden="true"><span></span></div>
-        <section class="flow-stage flow-evidence" aria-labelledby="flow-evidence-title">
-          <div class="flow-stage-title"><h4 id="flow-evidence-title">Recorded evidence</h4><span>${live ? "This run" : "On every run"}</span></div>
+          <div class="flow-stage-title"><h4 id="flow-runtime-title">Code revision</h4><span>${live ? "Pinned for this run" : "Deployed package"}</span></div>
           <div class="flow-node-stack">
-            <button class="flow-node${live ? " is-observed" : ""}" type="button" data-flow-evidence="record" aria-pressed="${state.flowEvidence === "record"}"><span class="flow-node-icon">${icon("runs")}</span><span><strong>Run record</strong><small>Status, attempts, and duration</small></span></button>
-            <button class="flow-node${live && evidenceReady && run?.logs ? " is-observed" : ""}" type="button" data-flow-evidence="logs" aria-pressed="${state.flowEvidence === "logs"}"><span class="flow-node-icon">${icon("code")}</span><span><strong>Execution logs</strong><small>${live ? (!evidenceReady ? (evidenceError ? "Evidence unavailable" : "Loading run detail…") : (run?.logs ? "Recorded output available" : "No output recorded")) : "stdout and stderr"}</small></span></button>
-            <button class="flow-node${live && evidenceReady && run?.result != null ? " is-observed" : ""}" type="button" data-flow-evidence="output" aria-pressed="${state.flowEvidence === "output"}"><span class="flow-node-icon">${icon("package")}</span><span><strong>Structured result</strong><small>${live ? (!evidenceReady ? (evidenceError ? "Evidence unavailable" : "Loading run detail…") : (run?.result != null ? "Recorded result available" : "No result recorded")) : "JSON result when emitted"}</small></span></button>
+          <button class="flow-node flow-core${live ? ` status-${statusClass(run.status)}` : ""}" type="button" data-flow-evidence="revision" aria-pressed="${state.flowEvidence === "revision"}" aria-controls="flow-selection">
+            <span class="flow-port flow-port-in" data-flow-port="in" aria-hidden="true"></span>
+            <span class="flow-core-top"><span class="flow-node-icon">${icon("code")}</span><span class="status-badge status-${live ? statusClass(run.status) : (detail.enabled ? "active" : "paused")}">${live ? escapeHTML(capitalize(run.status)) : (detail.enabled ? "Active" : "Paused")}</span></span>
+            <strong>${historical ? "Deployed code" : `${escapeHTML(detail.manifest?.runtime?.language || "Executable")} automation`}</strong>
+            <small class="mono">${escapeHTML(shortID(live ? run.revisionId : detail.activeRevisionId, 22))}</small>
+            <span class="flow-core-footer">${historical ? "Historical manifest unavailable" : escapeHTML(executionProtection(detail.manifest?.execution || {}))}</span>
+            <span class="flow-port flow-port-out" data-flow-port="out" aria-hidden="true"></span>
+          </button>
           </div>
         </section>
+        <div class="flow-link-lane" aria-hidden="true"></div>
+        <section class="flow-stage flow-evidence" aria-labelledby="flow-evidence-title">
+          <div class="flow-stage-title"><h4 id="flow-evidence-title">Run evidence</h4><span>${live ? "Selected run" : "Captured at runtime"}</span></div>
+          <div class="flow-node-stack">
+            ${renderFlowCard({key: "record", title: "Run record", subtitle: live ? `${capitalize(run.status)} · attempt ${run.attempt}/${run.maxAttempts}` : "Status and attempts", symbol: "runs", kind: "evidence", observed: live, port: "in"})}
+            ${renderFlowCard({key: "logs", title: "Execution logs", subtitle: live ? (!evidenceReady ? (evidenceError ? "Evidence unavailable" : "Loading evidence…") : (run?.logs ? "Output captured" : "No output recorded")) : "stdout and stderr", symbol: "code", kind: "evidence", observed: live && evidenceReady && Boolean(run?.logs), port: "in"})}
+            ${renderFlowCard({key: "output", title: "Structured result", subtitle: live ? (!evidenceReady ? (evidenceError ? "Evidence unavailable" : "Loading evidence…") : (run?.result != null ? "JSON captured" : "No result recorded")) : "JSON when emitted", symbol: "package", kind: "evidence", observed: live && evidenceReady && run?.result != null, port: "in"})}
+          </div>
+        </section>
+        <div class="flow-map-note"><span class="flow-key-line" aria-hidden="true"></span><span>${live ? "Solid paths have recorded evidence. Dashed paths show the definition only." : "Select a node to inspect its definition. Connections describe the execution boundary."}</span></div>
       </div>
-      <aside class="flow-inspector" aria-live="polite"><div><span class="flow-inspector-label">Selected evidence</span><h4>${escapeHTML(evidence.title)}</h4><p>${escapeHTML(evidence.description)}</p></div><dl>${evidence.facts.map(([label, value]) => `<div><dt>${escapeHTML(label)}</dt><dd class="${label.includes("ID") || label === "Revision" ? "mono" : ""}">${escapeHTML(value)}</dd></div>`).join("")}</dl></aside>
+      <aside class="flow-inspector" id="flow-selection" aria-labelledby="flow-selection-title" aria-live="polite">
+        <div class="flow-inspector-heading"><span class="flow-node-icon">${icon(flowSelectionIcon(sourceModel))}</span><div><h4 id="flow-selection-title">${escapeHTML(evidence.title)}</h4><span class="flow-selection-kind">${escapeHTML(flowSelectionKind(sourceModel))}</span></div></div>
+        <p>${escapeHTML(evidence.description)}</p>
+        <dl>${evidence.facts.map(([label, value]) => `<div><dt>${escapeHTML(label)}</dt><dd class="${label.includes("ID") || label === "Revision" || label.includes("hash") ? "mono" : ""}"><span>${escapeHTML(value)}</span>${label.includes("ID") || label === "Revision" || label.includes("hash") ? copyValueButton(value, label.toLowerCase()) : ""}</dd></div>`).join("")}</dl>
+        ${live && run && ["record", "logs", "output"].includes(state.flowEvidence) ? `<div class="flow-inspector-actions"><button type="button" class="button button-quiet" data-flow-focus="inspect-selected" data-run="${escapeHTML(run.id)}" data-run-initial-tab="${state.flowEvidence === "logs" ? "logs" : state.flowEvidence === "output" ? "output" : "summary"}">${icon(state.flowEvidence === "logs" ? "code" : "runs")}${state.flowEvidence === "logs" ? (evidenceReady && run.logs ? "Open captured logs" : "Inspect logs") : state.flowEvidence === "output" ? (evidenceReady && run.result != null ? "Open structured result" : "Inspect result") : "Inspect run"}</button></div>` : ""}
+      </aside>
+      </div>
+      ${live && run ? `<div class="flow-run-summary${run.status === "failed" ? " is-failed" : ""}"><span class="status-badge status-${statusClass(run.status)}">${escapeHTML(capitalize(run.status))}</span><span>${run.status === "failed" ? escapeHTML(run.error || "The run failed. Open diagnosis for recorded details.") : `Attempt ${escapeHTML(run.attempt)}/${escapeHTML(run.maxAttempts)} · ${escapeHTML(runDuration(run))}`}</span><button class="section-link" type="button" data-run="${escapeHTML(run.id)}">Inspect run</button></div>` : ""}
       ${live && run && !evidenceReady ? renderUnavailableLedger(run, evidenceError ? "unavailable" : "loading") : renderFlowLedger(detail, runRevision, triggers, live ? runDetail : null)}
       ${live && run && evidenceReady && !state.detailApprovalsError ? renderActorJourney(runDetail, state.detailApprovals, "automation-flow-journey") : ""}
       `}
     </section>`;
+  }
+
+  function flowSourceSummary(source) {
+    if (source.recorded) return `${capitalize(source.type)} · recorded event`;
+    if (source.type === "schedule") return `Schedule · ${source.trigger?.config?.cron || "Configured schedule"}`;
+    if (source.type === "webhook") return source.trigger?.config?.provider ? `${capitalize(source.trigger.config.provider)} webhook` : "Webhook event";
+    return `${capitalize(source.type)} event`;
+  }
+
+  function renderFlowCard({key, title, subtitle, symbol, kind, sourceType = "", observed = false, annotation = "", port}) {
+    return `<button class="flow-node flow-${kind}${observed ? " is-observed" : ""}" type="button" data-flow-evidence="${escapeHTML(key)}" ${sourceType ? `data-source-type="${escapeHTML(sourceType)}"` : ""} aria-pressed="${state.flowEvidence === key}" aria-controls="flow-selection"><span class="flow-port flow-port-${port}" data-flow-port="${port}" aria-hidden="true"></span><span class="flow-node-icon">${icon(symbol)}</span><span class="flow-node-copy"><strong>${escapeHTML(title)}</strong><small>${escapeHTML(subtitle)}</small>${annotation ? `<span class="flow-node-annotation${observed ? " observed-mark" : ""}">${escapeHTML(annotation)}</span>` : ""}</span></button>`;
+  }
+
+  function flowSelectionIcon(sources) {
+    const source = sources.find((item) => item.key === state.flowEvidence);
+    return source ? (icons[source.type] || "code") : ({revision: "code", record: "runs", logs: "code", output: "package"}[state.flowEvidence] || "code");
+  }
+
+  function flowSelectionKind(sources) {
+    const source = sources.find((item) => item.key === state.flowEvidence);
+    return source ? `${capitalize(source.type)} source` : ({revision: state.flowLayer === "live" ? "Pinned to selected run" : "Active deployment", record: "Execution record", logs: "Captured output", output: "JSON result"}[state.flowEvidence] || "Immutable revision");
+  }
+
+  // Paths are measured from the actual ports after layout. Long labels, the
+  // inspector, zoom, and mobile reflow all change geometry without stale lines.
+  function disconnectFlowPorts() {
+    flowLayoutObserver?.disconnect();
+    flowLayoutObserver = null;
+    flowSourceScrollCleanup?.();
+    flowSourceScrollCleanup = null;
+    cancelAnimationFrame(flowLayoutFrame);
+  }
+
+  function connectFlowPorts() {
+    const map = workspaceContent.querySelector(".flow-map");
+    if (!map) return;
+    const draw = () => {
+      if (!map.isConnected) return;
+      const wires = map.querySelector(".flow-wires");
+      const core = map.querySelector(".flow-core");
+      if (!wires || !core) return;
+      const bounds = wires.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return;
+      const scaleX = map.clientWidth / bounds.width;
+      const scaleY = map.clientHeight / bounds.height;
+      const point = (node, side) => {
+        const port = node.querySelector(`[data-flow-port="${side}"]`).getBoundingClientRect();
+        return {x: ((port.left + port.right) / 2 - bounds.left) * scaleX, y: ((port.top + port.bottom) / 2 - bounds.top) * scaleY};
+      };
+      const vertical = getComputedStyle(map).gridTemplateColumns.trim().split(/\s+/).length === 1;
+      const edges = [];
+      const sourceList = map.querySelector(".flow-source-list");
+      const sourceBounds = sourceList.getBoundingClientRect();
+      map.querySelectorAll(".flow-source").forEach((node) => {
+        const port = node.querySelector('[data-flow-port="out"]').getBoundingClientRect();
+        const center = (port.top + port.bottom) / 2;
+        if (center >= sourceBounds.top && center <= sourceBounds.bottom) edges.push({from: node, to: core, kind: "source"});
+      });
+      map.querySelectorAll(".flow-evidence .flow-node").forEach((node) => edges.push({from: core, to: node, kind: "evidence"}));
+      wires.setAttribute("viewBox", `0 0 ${map.clientWidth} ${map.clientHeight}`);
+      wires.replaceChildren();
+      edges.forEach(({from, to, kind}) => {
+        const start = point(from, "out");
+        const end = point(to, "in");
+        let points;
+        if (!vertical) {
+          const middle = (start.x + end.x) / 2;
+          points = [start, {x: middle, y: start.y}, {x: middle, y: end.y}, end];
+        } else if (kind === "source") {
+          const rail = map.clientWidth - 9;
+          points = [start, {x: rail, y: start.y}, {x: rail, y: end.y - 16}, {x: end.x, y: end.y - 16}, end];
+        } else {
+          points = [start, {x: start.x, y: start.y + 16}, {x: 9, y: start.y + 16}, {x: 9, y: end.y}, end];
+        }
+        const key = kind === "source" ? from.dataset.flowEvidence : to.dataset.flowEvidence;
+        const observed = (kind === "source" ? from : to).classList.contains("is-observed");
+        const selected = state.flowEvidence === key || state.flowEvidence === "revision";
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", roundedFlowPath(points));
+        path.setAttribute("class", `flow-edge${observed ? " is-observed" : ""}${selected ? " is-selected" : ""}${map.dataset.flowLive === "true" && !observed ? " is-definition" : ""}`);
+        path.dataset.from = from.dataset.flowEvidence;
+        path.dataset.to = to.dataset.flowEvidence;
+        wires.append(path);
+      });
+    };
+    const schedule = () => { cancelAnimationFrame(flowLayoutFrame); flowLayoutFrame = requestAnimationFrame(draw); };
+    flowLayoutObserver = new ResizeObserver(schedule);
+    flowLayoutObserver.observe(map);
+    map.querySelectorAll(".flow-node").forEach((node) => flowLayoutObserver.observe(node));
+    const sourceList = map.querySelector(".flow-source-list");
+    sourceList.addEventListener("scroll", draw, {passive: true});
+    flowSourceScrollCleanup = () => sourceList.removeEventListener("scroll", draw);
+    draw();
+  }
+
+  function roundedFlowPath(points) {
+    const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    const towards = (a, b, amount) => {
+      const length = distance(a, b);
+      return length ? {x: a.x + (b.x - a.x) * amount / length, y: a.y + (b.y - a.y) * amount / length} : a;
+    };
+    const position = (point) => `${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
+    let path = `M ${position(points[0])}`;
+    for (let index = 1; index < points.length - 1; index++) {
+      const corner = points[index];
+      const radius = Math.min(10, distance(corner, points[index - 1]) / 2, distance(corner, points[index + 1]) / 2);
+      path += ` L ${position(towards(corner, points[index - 1], radius))} Q ${position(corner)} ${position(towards(corner, points[index + 1], radius))}`;
+    }
+    return `${path} L ${position(points[points.length - 1])}`;
   }
 
   function flowSources(triggers, observedTrigger, metadata, historical) {
@@ -899,12 +1028,12 @@
     if (key === "recorded-source" || key.startsWith("trigger:")) {
       const source = sources.find((item) => item.key === key);
       if (source?.recorded) return {title: source.id, description: source.systemSource ? "Recorded by Werkt’s management or continuation machinery, not declared as a manifest trigger." : "Recorded on the selected historical run. Its original trigger configuration is not retained in this view.", facts: [["Type", source.type], ["Configuration", "Unavailable for this run"], ["Evidence", "Recorded event source"]]};
-      if (source) return {title: source.id, description: source.observed ? "Declared by the active manifest and recorded as this run’s source." : "Declared in the active manifest. No claim is made that the selected historical run used this configuration.", facts: [["Type", source.type], ["Configuration", triggerConfiguration(source.trigger)], ["State", detail.enabled && source.trigger.enabled ? "Enabled" : "Paused"]]};
+      if (source) return {title: source.id, description: source.observed ? "This trigger is configured in the active manifest and recorded as the selected run’s source." : (run ? "Configured in the active manifest. The recorded event identifies its source separately." : "This trigger is configured to start runs of the active revision."), facts: [["Type", source.type], ["Configuration", triggerConfiguration(source.trigger)], ["State", detail.enabled && source.trigger.enabled ? "Enabled" : "Paused"]]};
     }
     if (key === "record") return {title: "Run record", description: run ? "The durable execution record selected for this overlay." : "Werkt creates a durable run record for each accepted event.", facts: [["Run ID", run?.id || "Created at runtime"], ["Status", run ? capitalize(run.status) : "Recorded at runtime"], ["Attempt", run ? `${run.attempt}/${run.maxAttempts}` : "Bounded by the manifest"]]};
-    if (key === "logs") return {title: "Execution logs", description: !evidenceReady && run ? "Run detail is still loading or unavailable; absence is not inferred." : (run?.logs ? "The selected run produced captured stdout or stderr." : "Logs stay attached to the exact run and revision that produced them."), facts: [["Availability", !evidenceReady && run ? "Loading or unavailable" : (run?.logs ? "Recorded" : "None recorded")], ["Run ID", run?.id || "Created at runtime"]]};
-    if (key === "output") return {title: "Structured result", description: !evidenceReady && run ? "Run detail is still loading or unavailable; absence is not inferred." : (run?.result != null ? "The selected run returned a structured result." : "Code may return a JSON result; Werkt stores it on the exact run."), facts: [["Availability", !evidenceReady && run ? "Loading or unavailable" : (run?.result != null ? "Recorded" : "None recorded")], ["Run ID", run?.id || "Created at runtime"]]};
-    return {title: "Immutable code revision", description: run ? "The run summary pins this revision identity; detail evidence augments it without changing the active topology." : "The deployed package remains the source of execution behavior; the map does not replace or rewrite it.", facts: [["Revision", run?.revisionId || detail.activeRevisionId], ["Content hash", revision?.contentHash || "Unavailable for this revision"], ["Runtime", historical ? "Historical manifest unavailable" : (detail.manifest?.runtime?.image || "Local process")]]};
+    if (key === "logs") return {title: "Execution logs", description: !evidenceReady && run ? "Run detail is still loading or unavailable; absence is not inferred." : (run?.logs ? "The selected run produced captured stdout or stderr." : "Logs stay attached to the exact run and revision that produced them."), facts: [["Availability", !run ? "Captured at runtime" : !evidenceReady ? "Loading or unavailable" : (run.logs ? "Recorded" : "None recorded")], ["Run ID", run?.id || "Created at runtime"]]};
+    if (key === "output") return {title: "Structured result", description: !evidenceReady && run ? "Run detail is still loading or unavailable; absence is not inferred." : (run?.result != null ? "The selected run returned a structured result." : "Code may return a JSON result; Werkt stores it on the exact run."), facts: [["Availability", !run ? "Captured at runtime" : !evidenceReady ? "Loading or unavailable" : (run.result != null ? "Recorded" : "None recorded")], ["Run ID", run?.id || "Created at runtime"]]};
+    return {title: "Code revision", description: run ? "This run is pinned to the revision below. Its execution state and captured evidence remain attached to that run." : "Accepted events run this immutable package. Select an event source to inspect its configuration.", facts: [["Revision", run?.revisionId || detail.activeRevisionId], ["Content hash", revision?.contentHash || "Unavailable for this revision"], ["Runtime", historical ? "Historical manifest unavailable" : (detail.manifest?.runtime?.image || "Local process")]]};
   }
 
   function approvalForRun(run, approvals) {
@@ -2036,7 +2165,7 @@
     const runLogsButton = event.target.closest("[data-run-logs]");
     if (runLogsButton) { openRun(runLogsButton.dataset.runLogs, "logs"); return; }
     const runButton = event.target.closest("[data-run]");
-    if (runButton) { openRun(runButton.dataset.run); return; }
+    if (runButton) { openRun(runButton.dataset.run, ["logs", "output"].includes(runButton.dataset.runInitialTab) ? runButton.dataset.runInitialTab : "summary"); return; }
     const deploymentButton = event.target.closest("[data-deployment]");
     if (deploymentButton) { openDeployment(deploymentButton.dataset.deployment); return; }
     const auditButton = event.target.closest("[data-audit]");
