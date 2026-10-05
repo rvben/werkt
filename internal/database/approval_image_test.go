@@ -12,29 +12,31 @@ import (
 	"github.com/rvben/werkt/internal/domain"
 )
 
-func TestApprovalImageIsListedWithoutValueAndNotEchoedIntegration(t *testing.T) {
+// acquiredApprovalRun opens the integration store and acquires one run of a
+// fresh automation, for a test to complete with an approval request.
+func acquiredApprovalRun(t *testing.T, ctx context.Context) (*Store, domain.RunnableRun, string) {
+	t.Helper()
 	databaseURL := os.Getenv("WERKT_TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("WERKT_TEST_DATABASE_URL is not set")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	dataDir := t.TempDir()
 	store, err := Open(ctx, databaseURL, dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(store.Close)
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// Cleanup runs after the test has cancelled its own context.
 	reset := func() {
-		if _, err := store.pool.Exec(ctx, `TRUNCATE notification_deliveries, notification_events, approvals, deployments, audit_events, runs, events, triggers, revisions, automations CASCADE`); err != nil {
+		if _, err := store.pool.Exec(context.Background(), `TRUNCATE notification_deliveries, notification_events, approvals, deployments, audit_events, runs, events, triggers, revisions, automations CASCADE`); err != nil {
 			t.Fatal(err)
 		}
 	}
 	reset()
-	defer reset()
+	t.Cleanup(reset)
 
 	manifest := domain.Manifest{
 		APIVersion: "werkt.dev/v1", Kind: "Automation",
@@ -53,9 +55,16 @@ func TestApprovalImageIsListedWithoutValueAndNotEchoedIntegration(t *testing.T) 
 	if err != nil || run == nil {
 		t.Fatalf("acquire run=%#v err=%v", run, err)
 	}
+	return store, *run, manifest.Metadata.Name
+}
+
+func TestApprovalImageIsListedWithoutValueAndNotEchoedIntegration(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	store, run, automation := acquiredApprovalRun(t, ctx)
 	jpeg := append([]byte{0xFF, 0xD8, 0xFF, 0xE0}, make([]byte, 96<<10)...)
 	image := domain.ApprovalImagePrefix + base64.StdEncoding.EncodeToString(jpeg)
-	if err := store.CompleteRun(ctx, *run, "worker-1", "", json.RawMessage(`{}`), nil, domain.RunControl{
+	if err := store.CompleteRun(ctx, run, "worker-1", "", json.RawMessage(`{}`), nil, domain.RunControl{
 		Approval: &domain.ApprovalRequest{
 			Key: "publish-image", Title: "Publish?", ExpiresAt: time.Now().UTC().Add(time.Hour),
 			Fields: []domain.ApprovalField{
@@ -69,7 +78,7 @@ func TestApprovalImageIsListedWithoutValueAndNotEchoedIntegration(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	listed, err := store.ListApprovalsPage(ctx, manifest.Metadata.Name, "", ListCursor{}, 10)
+	listed, err := store.ListApprovalsPage(ctx, automation, "", ListCursor{}, 10)
 	if err != nil || len(listed) != 1 {
 		t.Fatalf("listed=%d err=%v", len(listed), err)
 	}
@@ -92,7 +101,7 @@ func TestApprovalImageIsListedWithoutValueAndNotEchoedIntegration(t *testing.T) 
 		t.Fatal("approval detail does not carry the image the reviewer needs")
 	}
 
-	if _, created, err := store.ResolveApproval(ctx, detail.ID, "decision-image", revisionID, "approve", map[string]any{}, "user:test"); err != nil || !created {
+	if _, created, err := store.ResolveApproval(ctx, detail.ID, "decision-image", run.RevisionID, "approve", map[string]any{}, "user:test"); err != nil || !created {
 		t.Fatalf("resolve created=%v err=%v", created, err)
 	}
 	var envelope string
@@ -101,5 +110,25 @@ func TestApprovalImageIsListedWithoutValueAndNotEchoedIntegration(t *testing.T) 
 	}
 	if strings.Contains(envelope, "slide") || !strings.Contains(envelope, "Sunday service") {
 		t.Fatalf("continuation event=%s, want the title without the image", envelope)
+	}
+}
+
+func TestApprovalWithoutFieldsIsStoredAndListedIntegration(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	store, run, automation := acquiredApprovalRun(t, ctx)
+	// A control that leaves out "fields" decodes to a nil slice, which
+	// validation accepts and the column's array constraint must still take.
+	if err := store.CompleteRun(ctx, run, "worker-1", "", json.RawMessage(`{}`), nil, domain.RunControl{
+		Approval: &domain.ApprovalRequest{
+			Key: "confirm", Title: "Confirm?", ExpiresAt: time.Now().UTC().Add(time.Hour),
+			Actions: []domain.ApprovalAction{{ID: "approve", Label: "Approve"}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := store.ListApprovalsPage(ctx, automation, "", ListCursor{}, 10)
+	if err != nil || len(listed) != 1 || len(listed[0].Fields) != 0 {
+		t.Fatalf("listed=%#v err=%v", listed, err)
 	}
 }

@@ -783,7 +783,13 @@ func (s *Store) CompleteRun(ctx context.Context, run domain.RunnableRun, workerI
 	}
 	if control.Approval != nil {
 		approvalID := newID("approval")
-		fields, err := json.Marshal(control.Approval.Fields)
+		// An approval may ask nothing but a decision, and the column holds an
+		// array, which a nil slice would marshal as null instead of.
+		requested := control.Approval.Fields
+		if requested == nil {
+			requested = []domain.ApprovalField{}
+		}
+		fields, err := json.Marshal(requested)
 		if err != nil {
 			return err
 		}
