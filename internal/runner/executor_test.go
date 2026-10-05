@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"image"
+	"image/jpeg"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -108,6 +112,108 @@ func TestValidateRunControlAcceptsTypedApprovalAndRejectsUnsafeShapes(t *testing
 	}
 }
 
+// approvalImage is a JPEG that decodes, padded after its end marker to size
+// bytes so a fixture can sit exactly on a limit.
+func approvalImage(size int) string {
+	var buffer bytes.Buffer
+	if err := jpeg.Encode(&buffer, image.NewGray(image.Rect(0, 0, 8, 8)), nil); err != nil {
+		panic(err)
+	}
+	if buffer.Len() > size {
+		panic(fmt.Sprintf("an approval image fixture takes at least %d bytes", buffer.Len()))
+	}
+	padded := append(buffer.Bytes(), make([]byte, size-buffer.Len())...)
+	return domain.ApprovalImagePrefix + base64.StdEncoding.EncodeToString(padded)
+}
+
+func approvalControl(t *testing.T, now time.Time, fields ...map[string]any) []byte {
+	t.Helper()
+	control := map[string]any{"approval": map[string]any{
+		"key": "publish-42", "title": "Publish recording?", "expiresAt": now.Add(time.Hour).Format(time.RFC3339),
+		"fields":  fields,
+		"actions": []map[string]any{{"id": "approve", "label": "Publish", "requiresFields": true}},
+	}}
+	encoded, err := json.Marshal(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func TestValidateRunControlAcceptsBoundedInlineJPEGImageField(t *testing.T) {
+	now := time.Now().UTC()
+	image := approvalImage(domain.MaxApprovalImageBytes)
+	value := approvalControl(t, now,
+		map[string]any{"id": "slide", "label": "Slide", "type": "image", "value": image},
+		map[string]any{"id": "title", "label": "Title", "type": "text", "required": true},
+	)
+	if len(value) <= 64*1024 {
+		t.Fatalf("fixture of %d bytes does not exercise a control larger than the text-only budget", len(value))
+	}
+	control, err := validateRunControl(value, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if control.Approval.Fields[0].Type != "image" || control.Approval.Fields[0].Value != image {
+		t.Fatalf("image field was not kept intact: %#v", control.Approval.Fields[0].Type)
+	}
+	four := make([]map[string]any, 0, 4)
+	for index := range 4 {
+		four = append(four, map[string]any{"id": fmt.Sprintf("frame-%d", index), "label": "Frame", "type": "image", "value": approvalImage(domain.MaxApprovalImagesBytes / 4)})
+	}
+	if _, err := validateRunControl(approvalControl(t, now, four...), now); err != nil {
+		t.Fatalf("images filling the whole budget were refused: %v", err)
+	}
+}
+
+func TestValidateRunControlRefusesUnsafeImageFields(t *testing.T) {
+	now := time.Now().UTC()
+	png := domain.ApprovalImagePrefix + base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nrest"))
+	overBudget := make([]map[string]any, 0, 5)
+	for index := range 4 {
+		overBudget = append(overBudget, map[string]any{"id": fmt.Sprintf("frame-%d", index), "label": "Frame", "type": "image", "value": approvalImage(domain.MaxApprovalImagesBytes / 4)})
+	}
+	overBudget = append(overBudget, map[string]any{"id": "frame-4", "label": "Frame", "type": "image", "value": approvalImage(1024)})
+	cases := []struct {
+		name   string
+		fields []map[string]any
+		want   string
+	}{
+		{"oversized", []map[string]any{{"id": "slide", "label": "Slide", "type": "image", "value": approvalImage(domain.MaxApprovalImageBytes + 1)}}, "at most"},
+		{"png bytes", []map[string]any{{"id": "slide", "label": "Slide", "type": "image", "value": png}}, "JPEG"},
+		{"png media type", []map[string]any{{"id": "slide", "label": "Slide", "type": "image", "value": "data:image/png;base64,/9j/4A=="}}, "must start with"},
+		{"invalid base64", []map[string]any{{"id": "slide", "label": "Slide", "type": "image", "value": domain.ApprovalImagePrefix + "/9j/4A=*"}}, "base64"},
+		{"unpadded base64", []map[string]any{{"id": "slide", "label": "Slide", "type": "image", "value": domain.ApprovalImagePrefix + "/9j/4A"}}, "base64"},
+		{"not a string", []map[string]any{{"id": "slide", "label": "Slide", "type": "image", "value": 42}}, "string"},
+		{"no image", []map[string]any{{"id": "slide", "label": "Slide", "type": "image"}}, "require a value"},
+		{"required", []map[string]any{{"id": "slide", "label": "Slide", "type": "image", "required": true, "value": approvalImage(1024)}}, "display-only"},
+		{"options", []map[string]any{{"id": "slide", "label": "Slide", "type": "image", "options": []string{"a"}, "value": approvalImage(1024)}}, "options"},
+		{"over the per-approval budget", overBudget, "together"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			value := approvalControl(t, now, tc.fields...)
+			if len(value) > MaxRunControlBytes {
+				t.Fatalf("fixture of %d bytes is refused by the file bound before the field check runs", len(value))
+			}
+			_, err := validateRunControl(value, now)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v, want one mentioning %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateRunControlKeepsTextBudgetBesideImages(t *testing.T) {
+	now := time.Now().UTC()
+	padding := strings.Repeat("x", 64*1024)
+	value := approvalControl(t, now, map[string]any{"id": "slide", "label": "Slide", "type": "image", "value": approvalImage(1024)})
+	value = []byte(`{"defer":{"key":"next","until":"` + now.Add(time.Hour).Format(time.RFC3339) + `","data":{"padding":"` + padding + `"}},` + string(value[1:]))
+	if _, err := validateRunControl(value, now); err == nil || !strings.Contains(err.Error(), "besides approval images") {
+		t.Fatalf("error=%v, want the text budget to refuse 64 KiB of continuation data", err)
+	}
+}
+
 func TestValidateRunControlAcceptsApprovalWithExpiryContinuation(t *testing.T) {
 	now := time.Now().UTC()
 	value := []byte(`{"defer":{"key":"recording-42.approval-expiry","until":"` + now.Add(7*24*time.Hour).Format(time.RFC3339) + `","data":{"jobId":"recording-42","step":"approval-expiry"}},"approval":{"key":"recording-42.publish","title":"Publish recording?","expiresAt":"` + now.Add(7*24*time.Hour).Format(time.RFC3339) + `","fields":[],"actions":[{"id":"approve","label":"Publish"}]}}`)
@@ -136,5 +242,29 @@ func TestValidateRunControlAcceptsBoundedProviderNeutralNotifications(t *testing
 		if _, err := validateRunControl([]byte(value), time.Now().UTC()); err == nil {
 			t.Fatalf("invalid notification control was accepted: %s", value)
 		}
+	}
+}
+
+func TestValidateRunControlChargesEscapedImageBytesToTheImageBudget(t *testing.T) {
+	now := time.Now().UTC()
+	image := approvalImage(48 * 1024)
+	value := approvalControl(t, now, map[string]any{"id": "slide", "label": "Slide", "type": "image", "value": image})
+	encoded, err := json.Marshal(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The same string, spelled with every "A" as a JSON \u escape: what an
+	// encoder that escapes more than it must is entitled to write.
+	escaped := strings.ReplaceAll(string(encoded), "A", "\\u0041")
+	value = bytes.Replace(value, encoded, []byte(escaped), 1)
+	if len(value) <= 64*1024 || len(value) > MaxRunControlBytes {
+		t.Fatalf("fixture of %d bytes does not sit between the text budget and the file bound", len(value))
+	}
+	control, err := validateRunControl(value, now)
+	if err != nil {
+		t.Fatalf("escaped image was charged to the text budget: %v", err)
+	}
+	if control.Approval.Fields[0].Value != image {
+		t.Fatal("escaped image did not decode to the same value")
 	}
 }

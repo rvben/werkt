@@ -1074,9 +1074,14 @@ components:
       properties:
         id: {type: string}
         label: {type: string}
-        type: {type: string, enum: [text, textarea, number, boolean, select]}
+        type: {type: string, enum: [text, textarea, number, boolean, select, image]}
         required: {type: boolean}
-        value: {}
+        value:
+          description: >-
+            Default value. For type image, a display-only inline JPEG
+            (data:image/jpeg;base64,...) of at most 256 KiB decoded and 4096
+            pixels on each side; list
+            responses omit it and getApproval returns it.
         description: {type: string}
         options:
           type: array

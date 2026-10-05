@@ -36,3 +36,26 @@ func TestValidateApprovalResponseEnforcesDeclaredTypesAndRequiredFields(t *testi
 		t.Fatalf("reject should not require approve fields: %v", err)
 	}
 }
+
+func TestValidateApprovalResponseKeepsImageFieldsDisplayOnly(t *testing.T) {
+	approval := domain.Approval{
+		Fields: []domain.ApprovalField{
+			{ID: "slide", Type: "image", Value: domain.ApprovalImagePrefix + "/9j/4A=="},
+			{ID: "title", Type: "text", Required: true},
+		},
+		Actions: []domain.ApprovalAction{{ID: "approve", RequiresFields: true}, {ID: "reject"}},
+	}
+	values, err := validateApprovalResponse(approval, "approve", map[string]any{"title": "Sunday service"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, echoed := values["slide"]; echoed || values["title"] != "Sunday service" {
+		t.Fatalf("values=%#v, want the title without the image the automation already holds", values)
+	}
+	for _, supplied := range []any{domain.ApprovalImagePrefix + "/9j/4A==", "", nil} {
+		_, err := validateApprovalResponse(approval, "approve", map[string]any{"title": "Sunday service", "slide": supplied})
+		if !errors.Is(err, ErrApprovalInvalidResponse) {
+			t.Fatalf("reviewer-submitted image value %#v error=%v", supplied, err)
+		}
+	}
+}

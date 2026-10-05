@@ -20,9 +20,14 @@ func (s *Store) ListApprovalsPage(ctx context.Context, automationID, status stri
 	if _, err := s.pool.Exec(ctx, `UPDATE approvals SET status = 'expired' WHERE status = 'pending' AND expires_at <= now()`); err != nil {
 		return nil, err
 	}
+	// Image values are left out of the list, which can hold hundreds of
+	// approvals; GetApproval returns them for the one being reviewed.
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, automation_id, revision_id, requested_by_run_id, approval_key,
-			status, title, description, fields, actions, expires_at, created_at,
+			status, title, description,
+			COALESCE((SELECT jsonb_agg(CASE WHEN field->>'type' = 'image' THEN field - 'value' ELSE field END ORDER BY position)
+				FROM jsonb_array_elements(fields) WITH ORDINALITY AS listed(field, position)), '[]'::jsonb),
+			actions, expires_at, created_at,
 			resolved_at, resolved_by, response, COALESCE(action_run_id, '')
 		FROM approvals
 		WHERE ($1 = '' OR automation_id = $1) AND ($2 = '' OR status = $2)
@@ -195,12 +200,21 @@ func validateApprovalResponse(approval domain.Approval, action string, supplied 
 		declarations[field.ID] = field
 	}
 	for key := range supplied {
-		if _, exists := declarations[key]; !exists {
+		declaration, exists := declarations[key]
+		if !exists {
 			return nil, fmt.Errorf("%w: field %q is not declared", ErrApprovalInvalidResponse, key)
+		}
+		if declaration.Type == "image" {
+			return nil, fmt.Errorf("%w: field %q is display-only", ErrApprovalInvalidResponse, key)
 		}
 	}
 	result := make(map[string]any, len(declarations))
 	for id, declaration := range declarations {
+		if declaration.Type == "image" {
+			// The automation sent the image and still holds it; echoing it back
+			// would only copy up to a megabyte into the continuation event.
+			continue
+		}
 		value, exists := supplied[id]
 		if !exists {
 			value = declaration.Value

@@ -68,6 +68,9 @@
   const approvalActions = document.querySelector("#approval-actions");
   const approvalError = document.querySelector("#approval-error");
   const approvalNavCount = document.querySelector("#approval-nav-count");
+  const imageDialog = document.querySelector("#image-dialog");
+  const imageDialogTitle = document.querySelector("#image-dialog-title");
+  const imageDialogImage = document.querySelector("#image-dialog-image");
   const receiptRegion = document.querySelector("#receipt-region");
   const toastRegion = document.querySelector("#toast-region");
   const draftingEnabled = window.WERKT_CONFIG?.draftingEnabled === true;
@@ -1688,7 +1691,11 @@
       approvalScopeRevision.textContent = approval.revisionId;
       approvalScopeRequested.textContent = formatDate(approval.createdAt);
       approvalScopeExpires.textContent = `${formatDate(approval.expiresAt)} · ${relativeTime(approval.expiresAt)}`;
-      approvalFields.innerHTML = approval.fields.map(renderApprovalField).join("");
+      // Images are the evidence the editable fields are checked against, so
+      // they come first whatever order the automation declared them in.
+      const images = approval.fields.filter((field) => field.type === "image");
+      const editable = approval.fields.filter((field) => field.type !== "image");
+      approvalFields.innerHTML = [...images, ...editable].map(renderApprovalField).join("");
       approvalActions.innerHTML = `<button class="button button-quiet" type="button" data-close-dialog="approval">Cancel</button>${approval.actions.map((action) => `<button class="button ${action.style === "primary" ? "button-primary" : action.style === "danger" ? "button-danger" : "button-quiet"}" type="button" data-resolve-approval="${escapeHTML(action.id)}">${escapeHTML(action.label)}</button>`).join("")}`;
       approvalDialog.showModal();
       approvalDialog.querySelector("input, textarea, select, [data-resolve-approval]")?.focus();
@@ -1700,6 +1707,14 @@
   function renderApprovalField(field) {
     const controlID = `approval-field-${field.id}`;
     const descriptionID = `approval-field-${field.id}-description`;
+    if (field.type === "image") {
+      // Display-only: no data-approval-field, so the image is never submitted.
+      const source = typeof field.value === "string" && field.value.startsWith("data:image/jpeg;base64,") ? field.value : "";
+      const image = source
+        ? `<button class="approval-image-open" type="button" data-approval-image="${escapeHTML(field.id)}" aria-label="Open ${escapeHTML(field.label)} full size"><img src="${escapeHTML(source)}" alt="${escapeHTML(field.label)}"></button>`
+        : `<p class="field-help">The image is not available.</p>`;
+      return `<figure class="approval-field approval-image" id="${escapeHTML(controlID)}">${image}<figcaption><strong>${escapeHTML(field.label)}</strong>${field.description ? `<span class="field-help">${escapeHTML(field.description)}</span>` : ""}</figcaption></figure>`;
+    }
     const describedBy = field.description ? ` aria-describedby="${escapeHTML(descriptionID)}"` : "";
     let control = "";
     if (field.type === "textarea") control = `<textarea id="${escapeHTML(controlID)}" rows="5" data-approval-field="${escapeHTML(field.id)}"${describedBy}>${escapeHTML(field.value || "")}</textarea>`;
@@ -1708,6 +1723,15 @@
     else control = `<input id="${escapeHTML(controlID)}" type="${field.type === "number" ? "number" : "text"}" data-approval-field="${escapeHTML(field.id)}" value="${escapeHTML(field.value ?? "")}"${describedBy}>`;
     const visibleLabel = field.type === "boolean" ? "" : `<label for="${escapeHTML(controlID)}">${escapeHTML(field.label)}${field.required ? ' <span class="required-mark">Required</span>' : ""}</label>`;
     return `<div class="approval-field" data-field-required="${field.required ? "true" : "false"}">${visibleLabel}${control}${field.description ? `<p id="${escapeHTML(descriptionID)}" class="field-help">${escapeHTML(field.description)}</p>` : ""}</div>`;
+  }
+
+  function openApprovalImage(button) {
+    const image = button.querySelector("img");
+    if (!image) return;
+    imageDialogImage.src = image.src;
+    imageDialogImage.alt = image.alt;
+    imageDialogTitle.textContent = image.alt || "Approval image";
+    imageDialog.showModal();
   }
 
   function approvalFieldValues() {
@@ -2233,6 +2257,9 @@
       else if (state.detail) openAction({kind: "pause", automationId: state.detail.id});
       return;
     }
+    const imageButton = event.target.closest("[data-approval-image]");
+    if (imageButton) { openApprovalImage(imageButton); return; }
+    if (event.target === imageDialog || event.target === imageDialogImage) { imageDialog.close(); return; }
     if (event.target.closest("[data-open-run]")) { openManualRun(); return; }
     if (event.target.closest("[data-mobile-back]")) { closeMobileDetail(); return; }
     const closeDialog = event.target.closest("[data-close-dialog]");
@@ -2240,6 +2267,7 @@
       if (closeDialog.dataset.closeDialog === "connection") connectionDialog.close();
       else if (closeDialog.dataset.closeDialog === "run") runDialog.close();
       else if (closeDialog.dataset.closeDialog === "approval") approvalDialog.close();
+      else if (closeDialog.dataset.closeDialog === "image") imageDialog.close();
       else {
         actionDialog.close();
         state.pendingAction = null;

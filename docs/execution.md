@@ -80,7 +80,7 @@ existing artifacts. The underlying files and environment variables remain the
 portable contract for other languages.
 
 After a successful attempt, an automation may write run control of at most 64
-KiB. A deferred continuation is pinned to the same immutable revision
+KiB, not counting approval images (below). A deferred continuation is pinned to the same immutable revision
 and becomes runnable at the declared RFC 3339 time, up to 30 days ahead:
 
 ```json
@@ -88,13 +88,23 @@ and becomes runnable at the declared RFC 3339 time, up to 30 days ahead:
 ```
 
 An approval creates a typed operator task. Fields may be `text`,
-`textarea`, `number`, `boolean`, or `select`; actions are `approve` or `reject`.
-The eventual decision queues a pinned `approval` event rather than mutating or
-re-running the requesting attempt:
+`textarea`, `number`, `boolean`, `select`, or `image`; actions are `approve` or
+`reject`. The eventual decision queues a pinned `approval` event rather than
+mutating or re-running the requesting attempt:
 
 ```json
 {"approval":{"key":"recording-42.publish","title":"Publish recording?","expiresAt":"2026-08-31T18:00:00Z","fields":[{"id":"title","label":"Title","type":"text","required":true}],"actions":[{"id":"approve","label":"Publish","style":"primary","requiresFields":true},{"id":"reject","label":"Skip","style":"neutral"}]}}
 ```
+
+An `image` field shows the reviewer the evidence a decision rests on, such as
+the frame a value was read from. Its `value` is an inline JPEG,
+`data:image/jpeg;base64,` followed by strictly padded base64, of at most 256 KiB
+decoded and 4096 pixels on each side, and an approval's images total at most
+1 MiB. An image that does not decode is refused when the control is read, so
+the inbox never shows a broken one. It is display-only: it
+cannot be `required`, a decision that submits a value for it is refused, and it
+is not repeated in the `approval` event, since the automation already holds it.
+Approval lists omit image values; fetching the single approval returns them.
 
 An automation may request both an approval and one deferred continuation in the
 same control object. This is intended for a durable expiry or escalation step:

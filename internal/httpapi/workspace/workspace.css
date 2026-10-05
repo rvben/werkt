@@ -709,6 +709,15 @@ dialog input[aria-invalid="true"], dialog textarea[aria-invalid="true"], dialog 
 .approval-checkbox { display: flex; align-items: flex-start; gap: var(--space-2); cursor: pointer; }
 .approval-checkbox input { width: 1.1rem; height: 1.1rem; margin: 0.12rem 0 0; accent-color: var(--primary); }
 .approval-actions { padding-top: var(--space-4); border-top: 1px solid var(--line); }
+.approval-image { margin-inline: 0; }
+.approval-image figcaption { display: grid; gap: var(--space-1); margin-top: var(--space-2); font-size: 0.8125rem; }
+.approval-image figcaption .field-help { margin: 0; }
+.approval-image-open { display: block; width: 100%; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--canvas); cursor: zoom-in; overflow: hidden; }
+.approval-image-open:focus-visible { outline: 0; box-shadow: 0 0 0 3px var(--focus); }
+.approval-image-open img { display: block; width: 100%; height: auto; }
+.image-dialog { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px); border: 0; border-radius: 0; background: oklch(0.12 0.01 43); }
+.image-dialog img { display: block; width: 100%; height: 100%; object-fit: contain; cursor: zoom-out; }
+.image-dialog .dialog-close { position: absolute; top: calc(env(safe-area-inset-top, 0px) + var(--space-3)); right: var(--space-3); z-index: 1; }
 .feed-footer { display: flex; justify-content: center; padding: var(--space-5) 0 var(--space-2); }
 .help-dialog { width: min(42rem, calc(100vw - 2rem)); max-width: min(42rem, calc(100vw - 2rem)); }
 .help-guides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); margin-top: var(--space-5); }

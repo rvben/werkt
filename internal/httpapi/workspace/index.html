@@ -272,6 +272,14 @@
     </form>
   </dialog>
 
+  <dialog class="image-dialog" id="image-dialog" aria-labelledby="image-dialog-title">
+    <h2 class="sr-only" id="image-dialog-title">Approval image</h2>
+    <button class="icon-button dialog-close" type="button" data-close-dialog="image" aria-label="Close full-size image">
+      <svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg>
+    </button>
+    <img id="image-dialog-image" alt="">
+  </dialog>
+
   <div class="receipt-region" id="receipt-region" aria-live="polite"></div>
   <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
 </body>

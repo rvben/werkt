@@ -70,6 +70,11 @@ func TestWorkspaceBrowserKeyboardFocusAndResponsiveModality(t *testing.T) {
 		"operatorScopeVisible",
 		"approvalFieldTyped",
 		"approvalTargetProtected",
+		"approvalImageFirst",
+		"approvalImageFullWidth",
+		"approvalImageDisplayOnly",
+		"approvalImageOpensFullSize",
+		"approvalImageCloses",
 		"identifierHierarchy",
 		"diagnosticAdvancedClosed",
 		"runShortcutReviews",
@@ -237,6 +242,10 @@ func findChrome(t *testing.T) string {
 	return ""
 }
 
+// browserFixtureJPEG is a 64x36 JPEG, so the contract can tell an image that
+// decoded from a broken one.
+const browserFixtureJPEG = "/9j/4AAQSkZJRgABAgAAAQABAAD//gAPTGF2YzYzLjEuMTAyAP/bAEMACAoKCwoLDQ0NDQ0NEA8QEBAQEBAQEBAQEBISEhUVFRISEhAQEhIUFBUVFxcXFRUVFRcXGRkZHh4cHCMjJCsrM//EAE0AAQEAAAAAAAAAAAAAAAAAAAAGAQEBAQAAAAAAAAAAAAAAAAAABQYQAQAAAAAAAAAAAAAAAAAAAAARAQAAAAAAAAAAAAAAAAAAAAD/wAARCAAkAEADASIAAhEAAxEA/9oADAMBAAIRAxEAPwCbAaJBAAAAAAAAAAAAAAAAAAAAAAf/2Q=="
+
 func workspaceBrowserFixture(response http.ResponseWriter, request *http.Request) {
 	switch request.URL.Path {
 	case "/app/":
@@ -277,7 +286,7 @@ func workspaceBrowserFixture(response http.ResponseWriter, request *http.Request
 	case "/api/v1/approvals":
 		writeBrowserJSON(response, `[{"id":"apr_test","automationId":"test-automation","revisionId":"rev_test","requestedByRunId":"run_test","key":"publish","status":"pending","title":"Publish recording?","description":"Confirm the final title.","fields":[{"id":"title","label":"Title","type":"text","required":true,"value":"Sunday service"}],"actions":[{"id":"approve","label":"Publish","style":"primary","requiresFields":true},{"id":"reject","label":"Skip","style":"neutral"}],"expiresAt":"2026-08-31T18:42:00Z","createdAt":"2026-08-30T18:42:00Z"}]`)
 	case "/api/v1/approvals/apr_test":
-		writeBrowserJSON(response, `{"id":"apr_test","automationId":"test-automation","revisionId":"rev_test","requestedByRunId":"run_test","key":"publish","status":"pending","title":"Publish recording?","description":"Confirm the final title.","fields":[{"id":"title","label":"Title","type":"text","required":true,"value":"Sunday service"}],"actions":[{"id":"approve","label":"Publish","style":"primary","requiresFields":true},{"id":"reject","label":"Skip","style":"neutral"}],"expiresAt":"2026-08-31T18:42:00Z","createdAt":"2026-08-30T18:42:00Z"}`)
+		writeBrowserJSON(response, `{"id":"apr_test","automationId":"test-automation","revisionId":"rev_test","requestedByRunId":"run_test","key":"publish","status":"pending","title":"Publish recording?","description":"Confirm the final title.","fields":[{"id":"title","label":"Title","type":"text","required":true,"value":"Sunday service"},{"id":"slide","label":"Slide","type":"image","description":"Frame the title was read from.","value":"data:image/jpeg;base64,`+browserFixtureJPEG+`"}],"actions":[{"id":"approve","label":"Publish","style":"primary","requiresFields":true},{"id":"reject","label":"Skip","style":"neutral"}],"expiresAt":"2026-08-31T18:42:00Z","createdAt":"2026-08-30T18:42:00Z"}`)
 	case "/api/v1/deployments", "/api/v1/audit":
 		writeBrowserJSON(response, `[]`)
 	case "/api/v1/auth/session":
@@ -354,6 +363,19 @@ const workspaceBrowserDriver = `
         && document.querySelector("#approval-scope-revision").closest("details").open === false;
       results.approvalFieldTyped = document.querySelector('[data-approval-field="title"]') instanceof HTMLInputElement
         && document.querySelector('[data-resolve-approval="approve"]').textContent === "Publish";
+      const approvalImage = document.querySelector("#approval-fields > .approval-image img");
+      await waitFor(() => approvalImage?.complete);
+      results.approvalImageFirst = document.querySelector("#approval-fields").firstElementChild?.classList.contains("approval-image") === true;
+      results.approvalImageFullWidth = approvalImage?.naturalWidth === 64
+        && Math.abs(approvalImage.getBoundingClientRect().width - document.querySelector("#approval-fields").getBoundingClientRect().width) <= 2;
+      results.approvalImageDisplayOnly = !document.querySelector('[data-approval-field="slide"]')
+        && document.querySelectorAll("#approval-fields [data-approval-field]").length === 1;
+      document.querySelector('[data-approval-image="slide"]').click();
+      results.approvalImageOpensFullSize = document.querySelector("#image-dialog").open
+        && document.querySelector("#image-dialog-image").src === approvalImage.src
+        && document.querySelector("#image-dialog-image").getBoundingClientRect().width >= window.innerWidth - 2;
+      document.querySelector("#image-dialog-image").click();
+      results.approvalImageCloses = !document.querySelector("#image-dialog").open && document.querySelector("#approval-dialog").open;
       document.querySelector("#approval-dialog").close();
       document.querySelector('[data-view="automations"]').click();
       document.querySelector("[data-mobile-back]").click();

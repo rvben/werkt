@@ -78,7 +78,12 @@ func automationStateLimit(configured int) int {
 	return DefaultMaxAutomationStateBytes
 }
 
-const MaxRunControlBytes = 64 * 1024
+// maxRunControlTextBytes bounds everything in a run control except approval
+// images, which have their own budget. MaxRunControlBytes is what a control
+// file may hold before it is parsed: both budgets, plus room for the data URI
+// prefix and padding of up to 16 image fields.
+const maxRunControlTextBytes = 64 * 1024
+const MaxRunControlBytes = maxRunControlTextBytes + domain.MaxApprovalImagesBytes/3*4 + 16*64
 const maxContinuationDelay = 30 * 24 * time.Hour
 const maxNotificationsPerRun = 8
 
@@ -114,6 +119,9 @@ func validateRunControl(value []byte, now time.Time) (domain.RunControl, error) 
 		if err := validateApprovalRequest(*control.Approval, now); err != nil {
 			return domain.RunControl{}, err
 		}
+	}
+	if len(value)-approvalImageEncodedBytes(value) > maxRunControlTextBytes {
+		return domain.RunControl{}, fmt.Errorf("run control exceeds %d bytes besides approval images", maxRunControlTextBytes)
 	}
 	if len(control.Notifications) > maxNotificationsPerRun {
 		return domain.RunControl{}, fmt.Errorf("notifications accepts at most %d messages", maxNotificationsPerRun)
@@ -165,6 +173,7 @@ func validateApprovalRequest(value domain.ApprovalRequest, now time.Time) error 
 		return errors.New("approval accepts at most 16 fields and requires one to four actions")
 	}
 	fields := make(map[string]struct{}, len(value.Fields))
+	imageBytes := 0
 	for _, field := range value.Fields {
 		if !controlIdentifier.MatchString(field.ID) {
 			return errors.New("approval field id is invalid")
@@ -181,6 +190,24 @@ func validateApprovalRequest(value domain.ApprovalRequest, now time.Time) error 
 			if len(field.Options) > 0 {
 				return errors.New("approval field options require type select")
 			}
+		case "image":
+			if len(field.Options) > 0 {
+				return errors.New("approval field options require type select")
+			}
+			if field.Required {
+				return errors.New("approval image fields are display-only and cannot be required")
+			}
+			if field.Value == nil {
+				return errors.New("approval image fields require a value")
+			}
+			image, err := domain.DecodeApprovalImage(field.Value)
+			if err != nil {
+				return err
+			}
+			imageBytes += len(image)
+			if imageBytes > domain.MaxApprovalImagesBytes {
+				return fmt.Errorf("approval images must together be at most %d bytes", domain.MaxApprovalImagesBytes)
+			}
 		case "select":
 			if len(field.Options) == 0 || len(field.Options) > 32 {
 				return errors.New("approval select fields require one to 32 options")
@@ -196,7 +223,7 @@ func validateApprovalRequest(value domain.ApprovalRequest, now time.Time) error 
 				seenOptions[option] = struct{}{}
 			}
 		default:
-			return errors.New("approval field type must be text, textarea, number, boolean, or select")
+			return errors.New("approval field type must be text, textarea, number, boolean, select, or image")
 		}
 		if field.Value != nil {
 			switch field.Type {
@@ -238,6 +265,31 @@ func validateApprovalRequest(value domain.ApprovalRequest, now time.Time) error 
 		}
 	}
 	return nil
+}
+
+// approvalImageEncodedBytes is how much of a run control the approval's image
+// values take up as spelled in the control file, escapes included, so an
+// encoder that escapes more than it must is not charged for it against the
+// text budget.
+func approvalImageEncodedBytes(value []byte) int {
+	var raw struct {
+		Approval *struct {
+			Fields []struct {
+				Type  string          `json:"type"`
+				Value json.RawMessage `json:"value"`
+			} `json:"fields"`
+		} `json:"approval"`
+	}
+	if json.Unmarshal(value, &raw) != nil || raw.Approval == nil {
+		return 0
+	}
+	total := 0
+	for _, field := range raw.Approval.Fields {
+		if field.Type == "image" {
+			total += len(field.Value)
+		}
+	}
+	return total
 }
 
 func contains(values []string, target string) bool {
