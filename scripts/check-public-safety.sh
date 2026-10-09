@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Git repositories may contain non-UTF-8 source. Scan bytes consistently on
+# macOS and Linux instead of losing matches to locale-dependent text errors.
+export LC_ALL=C
 
 usage() {
   echo "usage: $0 [--history] [repository]" >&2
@@ -35,10 +38,19 @@ patterns=(
 )
 
 local_patterns="$repo/.public-safety-denylist"
+private_combined=""
 if [[ -f "$local_patterns" ]]; then
+  pattern_line=0
   while IFS= read -r pattern || [[ -n "$pattern" ]]; do
+    pattern_line=$((pattern_line + 1))
     [[ -z "$pattern" || "$pattern" == \#* ]] && continue
-    patterns+=("$pattern")
+    if grep -E -e "$pattern" </dev/null >/dev/null 2>&1; then
+      :
+    elif [[ $? -ne 1 ]]; then
+      echo "public-safety: invalid private rule at line $pattern_line" >&2
+      exit 2
+    fi
+    private_combined="${private_combined:+$private_combined|}($pattern)"
   done < "$local_patterns"
 fi
 
@@ -54,13 +66,52 @@ done
 excluded=':(exclude)scripts/check-public-safety.sh'
 failed=false
 
+query_matches() {
+  local pattern="$1" revision="$2" result status
+  if [[ -n "$revision" ]]; then
+    if result="$(git -C "$repo" grep -I -n -E "$pattern" "$revision" -- . "$excluded" 2>/dev/null)"; then
+      printf '%s' "$result"
+      return
+    else
+      status=$?
+    fi
+  else
+    if result="$(git -C "$repo" grep -I -n -E "$pattern" -- . "$excluded" 2>/dev/null)"; then
+      printf '%s' "$result"
+      return
+    else
+      status=$?
+    fi
+  fi
+  [[ "$status" -eq 1 ]] && return 0
+  echo "public-safety: Git content scan failed (status $status)" >&2
+  return "$status"
+}
+
 scan_tree() {
   local revision="${1:-}"
   local matches
-  if [[ -n "$revision" ]]; then
-    matches="$(git -C "$repo" grep -I -n -E "$combined" "$revision" -- . "$excluded" 2>/dev/null || true)"
-  else
-    matches="$(git -C "$repo" grep -I -n -E "$combined" -- . "$excluded" 2>/dev/null || true)"
+  matches="$(query_matches "$combined" "$revision")" || { failed=true; return; }
+  # These exact source constructs are not private hostnames or credentials.
+  # Rescan the rest of each matching line: a fixture must not hide another hit.
+  matches="$(while IFS= read -r match; do
+    [[ -z "$match" ]] && continue
+    sanitized="${match//Path.home()/python-home-call}"
+    if ! sanitized="$(printf '%s\n' "$sanitized" | sed -E "s#https?://user:password@example[.]com([/?[:space:]'\",)]|$)#synthetic-credential-fixture\\1#g")"; then
+      printf '%s\n' "$match"
+      continue
+    fi
+    if grep -q -E "$combined" <<< "$sanitized"; then
+      printf '%s\n' "$match"
+    elif [[ $? -ne 1 ]]; then
+      printf '%s\n' "$match"
+    fi
+  done <<< "$matches")"
+  # Operator denylist rules always inspect the original, unmasked content.
+  if [[ -n "$private_combined" ]]; then
+    local private_matches
+    private_matches="$(query_matches "$private_combined" "$revision")" || { failed=true; return; }
+    matches="$(printf '%s\n%s\n' "$matches" "$private_matches" | sed '/^$/d' | sort -u)"
   fi
   if [[ -n "$matches" ]]; then
     echo "public-safety: sensitive-looking tracked content${revision:+ in $revision}:" >&2
@@ -87,10 +138,12 @@ scan_paths() {
 }
 
 if "$scan_history"; then
+  revisions="$(git -C "$repo" rev-list --all)" || { echo "public-safety: history enumeration failed" >&2; exit 1; }
   while IFS= read -r revision; do
+    [[ -z "$revision" ]] && continue
     scan_tree "$revision"
     scan_paths "$revision"
-  done < <(git -C "$repo" rev-list --all)
+  done <<< "$revisions"
 else
   scan_tree
   scan_paths
