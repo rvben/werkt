@@ -145,3 +145,15 @@ Unattended launching, automatic browser transcript extraction, cloud
 cancellation, and long-lived worker login refresh are not implemented. The
 adapter uses the authenticated operator workstation, and never copies its login
 into automation packages or microVMs.
+
+## Retired factory integration
+
+The two-model factory belongs to the standalone Fabriek product. Werkt retains
+its supervised cloud investigation and explicit snapshot/local-takeover workflow.
+Factory APIs, the Issue fixes workspace and Mac review workers are removed.
+
+Migration names `013_issue_reviews.sql`, `014_factory_jobs.sql` and
+`015_factory_conversations.sql` are retired and must not be reused. Installations
+that ran these migrations may retain their tables and migration records. This
+code removal does not drop retained data or modify installed notification routes
+and workers; those require a backed-up, separately approved operational cleanup.

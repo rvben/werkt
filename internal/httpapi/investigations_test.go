@@ -19,6 +19,60 @@ type fakeInvestigations struct {
 	writes int
 }
 
+func TestFactoryRoutesRemovedAndInvestigationRoutesPreserved(t *testing.T) {
+	s := New(&fakeStore{}, "127.0.0.1:0", "test-token", WithInvestigationRegistry(&fakeInvestigations{}))
+	for _, route := range []struct{ method, path string }{
+		{"GET", "/api/v1/factory-jobs"},
+		{"POST", "/api/v1/factory-jobs"},
+		{"GET", "/api/v1/factory-jobs/job"},
+		{"POST", "/api/v1/factory-jobs/job/messages"},
+		{"POST", "/api/v1/factory-jobs/job/message-receipts"},
+		{"POST", "/api/v1/factory-jobs/job/claim"},
+		{"GET", "/api/v1/issue-reviews"},
+		{"GET", "/api/v1/issue-reviews/review"},
+		{"POST", "/api/v1/issue-reviews/review/actions"},
+		{"GET", "/api/v1/issue-review-runners"},
+		{"POST", "/api/v1/issue-review-runners"},
+		{"POST", "/api/v1/investigations/request/review"},
+	} {
+		t.Run(route.method+" "+route.path, func(t *testing.T) {
+			r := httptest.NewRequest(route.method, route.path, nil)
+			r.Header.Set("Authorization", "Bearer test-token")
+			w := httptest.NewRecorder()
+			s.server.Handler.ServeHTTP(w, r)
+			if w.Code != 404 {
+				t.Fatalf("removed route returned %d, want 404", w.Code)
+			}
+		})
+	}
+	for _, path := range []string{"/api/v1/investigations?repositoryId=123&issueNumber=42", "/api/v1/investigations/request"} {
+		w := httptest.NewRecorder()
+		s.server.Handler.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		if w.Code != 401 {
+			t.Fatalf("preserved route %s returned %d, want authentication required", path, w.Code)
+		}
+		r := httptest.NewRequest("GET", path, nil)
+		r.Header.Set("Authorization", "Bearer test-token")
+		w = httptest.NewRecorder()
+		s.server.Handler.ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("preserved authenticated route %s returned %d, want 200", path, w.Code)
+		}
+	}
+	for _, route := range []struct{ method, path string }{
+		{"POST", "/api/v1/investigations"},
+		{"PUT", "/api/v1/investigations/request"},
+	} {
+		r := httptest.NewRequest(route.method, route.path, strings.NewReader("{}"))
+		r.Header.Set("Authorization", "Bearer test-token")
+		w := httptest.NewRecorder()
+		s.server.Handler.ServeHTTP(w, r)
+		if w.Code != 400 {
+			t.Fatalf("preserved mutation route %s %s returned %d, want input validation", route.method, route.path, w.Code)
+		}
+	}
+}
+
 func TestInvestigationOpenAPIReferences(t *testing.T) {
 	raw, err := openAPIFS.ReadFile("openapi.yaml")
 	if err != nil {
