@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.2](https://github.com/rvben/werkt/compare/v0.6.1...v0.6.2) - 2026-10-12
+
+### Added
+
+- **investigations**: add supervised cloud issue dispatch ([f4624b9](https://github.com/rvben/werkt/commit/f4624b9c533ae63a04bbf1d6d2e2740a6cecdf36))
+
+### Fixed
+
+- **deployments**: answer a replayed key with the retry that repaired it ([ec0f7c5](https://github.com/rvben/werkt/commit/ec0f7c59259564735d1beb25001b8ff899afc2dd))
+- **ci**: distinguish privacy fixtures and fail on scan errors ([b137322](https://github.com/rvben/werkt/commit/b137322609c6c5e289100013b690a5c6f10f8698))
+
 ## [0.6.1](https://github.com/rvben/werkt/compare/v0.6.0...v0.6.1) - 2026-10-05
 
 ### Added
