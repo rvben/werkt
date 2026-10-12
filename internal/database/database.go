@@ -1395,7 +1395,50 @@ func (s *Store) CreateDeployment(ctx context.Context, deploymentID, idempotencyK
 	if err != nil {
 		return domain.Deployment{}, false, err
 	}
-	return value, command.RowsAffected() == 1, nil
+	if command.RowsAffected() == 1 {
+		return value, true, nil
+	}
+	if value.Status == domain.DeploymentFailed || value.Status == domain.DeploymentCancelled {
+		retry, found, err := s.liveRetryOf(ctx, value.ID)
+		if err != nil {
+			return domain.Deployment{}, false, err
+		}
+		if found {
+			return retry, false, nil
+		}
+	}
+	return value, false, nil
+}
+
+// liveRetryOf finds what became of a failed or cancelled deployment after it
+// was retried. A retry deploys the same package as the deployment it repeats,
+// so a replay of the original key is answered by the retry: the newest one that
+// succeeded, else the newest one still under way. Retries of retries count,
+// since each repeats the same package. Failed and cancelled retries are passed
+// over; when nothing else is left the caller reports the original as it is.
+func (s *Store) liveRetryOf(ctx context.Context, deploymentID string) (domain.Deployment, bool, error) {
+	var value domain.Deployment
+	err := scanDeployment(s.pool.QueryRow(ctx, `
+		WITH RECURSIVE chain AS (
+			SELECT id FROM deployments WHERE retry_of = $1
+			UNION
+			SELECT d.id FROM deployments d JOIN chain c ON d.retry_of = c.id
+		)
+		SELECT d.id, d.status, d.automation_id, d.package_digest, d.content_digest, d.content_hash,
+			COALESCE(d.revision_id, ''), COALESCE(d.retry_of, ''), d.actor, d.error, d.provenance,
+			d.created_at, d.updated_at, d.started_at, d.finished_at, d.cancel_requested_at
+		FROM deployments d JOIN chain c ON d.id = c.id
+		WHERE d.status NOT IN ($2, $3)
+		ORDER BY (d.status = $4) DESC, d.created_at DESC, d.id DESC
+		LIMIT 1`,
+		deploymentID, domain.DeploymentFailed, domain.DeploymentCancelled, domain.DeploymentSucceeded), &value)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Deployment{}, false, nil
+	}
+	if err != nil {
+		return domain.Deployment{}, false, err
+	}
+	return value, true, nil
 }
 
 // deploymentContentDigest reports the package content already recorded under an
