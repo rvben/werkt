@@ -122,11 +122,11 @@ func TestDeploymentLifecycleIntegration(t *testing.T) {
 	if err != nil || failed.Status != domain.DeploymentFailed || !strings.Contains(failed.Error, "compiler exited") {
 		t.Fatalf("failed=%#v err=%v", failed, err)
 	}
-	retried, created, err := store.RetryDeployment(ctx, failed.ID, "dep_retry", "retry-key", "agent:repair")
+	retried, created, err := store.RetryDeployment(ctx, failed.ID, "dep_retry", "retry-key", "agent:repair", false)
 	if err != nil || !created || retried.RetryOf != failed.ID || retried.Status != domain.DeploymentQueued {
 		t.Fatalf("retry=%#v created=%v err=%v", retried, created, err)
 	}
-	retriedAgain, created, err := store.RetryDeployment(ctx, failed.ID, "dep_ignored_retry", "retry-key", "agent:repair")
+	retriedAgain, created, err := store.RetryDeployment(ctx, failed.ID, "dep_ignored_retry", "retry-key", "agent:repair", false)
 	if err != nil || created || retriedAgain.ID != retried.ID {
 		t.Fatalf("idempotent retry=%#v created=%v err=%v", retriedAgain, created, err)
 	}
@@ -134,7 +134,7 @@ func TestDeploymentLifecycleIntegration(t *testing.T) {
 	if err != nil || cancelled.Status != domain.DeploymentCancelled || cancelled.CancelRequestedAt == nil {
 		t.Fatalf("cancelled=%#v err=%v", cancelled, err)
 	}
-	activeRetry, created, err := store.RetryDeployment(ctx, failed.ID, "dep_active_cancel", "active-cancel-key", "agent:repair")
+	activeRetry, created, err := store.RetryDeployment(ctx, failed.ID, "dep_active_cancel", "active-cancel-key", "agent:repair", false)
 	if err != nil || !created {
 		t.Fatalf("active retry=%#v created=%v err=%v", activeRetry, created, err)
 	}

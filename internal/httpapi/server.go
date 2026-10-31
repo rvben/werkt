@@ -79,7 +79,7 @@ type Store interface {
 	ListDeploymentsPage(context.Context, string, string, database.ListCursor, int) ([]domain.Deployment, error)
 	GetDeployment(context.Context, string) (domain.Deployment, error)
 	RequestDeploymentCancellation(context.Context, string, string) (domain.Deployment, error)
-	RetryDeployment(context.Context, string, string, string, string) (domain.Deployment, bool, error)
+	RetryDeployment(context.Context, string, string, string, string, bool) (domain.Deployment, bool, error)
 }
 
 type DeploymentIntake interface {
@@ -350,13 +350,25 @@ func (s *Server) retryDeployment(response http.ResponseWriter, request *http.Req
 		writeError(response, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Stranding approvals is a decision an operator makes about specific
+	// pending requests, so anything but an explicit true or false is refused
+	// rather than read as either.
+	strandApprovals := false
+	switch value := strings.TrimSpace(request.Header.Get("X-Werkt-Strand-Approvals")); value {
+	case "", "false":
+	case "true":
+		strandApprovals = true
+	default:
+		writeError(response, http.StatusBadRequest, "X-Werkt-Strand-Approvals must be true or false")
+		return
+	}
 	deploymentID, err := service.NewDeploymentID()
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, "create deployment identity")
 		return
 	}
 	value, created, err := s.store.RetryDeployment(
-		request.Context(), request.PathValue("deployment"), deploymentID, idempotencyKey, requestActor(request),
+		request.Context(), request.PathValue("deployment"), deploymentID, idempotencyKey, requestActor(request), strandApprovals,
 	)
 	switch {
 	case errors.Is(err, database.ErrDeploymentNotFound):

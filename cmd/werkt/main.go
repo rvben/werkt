@@ -257,12 +257,19 @@ func deploymentCommand(arguments []string) error {
 		return printJSON(value)
 	case "retry":
 		flags := flag.NewFlagSet("deployment retry", flag.ContinueOnError)
-		idempotencyKey := flags.String("idempotency-key", "retry-"+deploymentID, "retry replay key")
+		idempotencyKey := flags.String("idempotency-key", "", "retry replay key (default retry-ID, or retry-ID-strand with -strand-approvals)")
 		wait := flags.Bool("wait", true, "wait for validation, checks, and activation")
+		strandApprovals := flags.Bool("strand-approvals", false, "activate even though pending approvals on the active revision become unanswerable")
 		if err := flags.Parse(arguments[2:]); err != nil {
 			return err
 		}
-		value, _, err := client.RetryDeployment(ctx, deploymentID, *idempotencyKey, "cli")
+		if *idempotencyKey == "" {
+			*idempotencyKey = "retry-" + deploymentID
+			if *strandApprovals {
+				*idempotencyKey += "-strand"
+			}
+		}
+		value, _, err := client.RetryDeployment(ctx, deploymentID, *idempotencyKey, "cli", *strandApprovals)
 		if err != nil {
 			return err
 		}
@@ -812,7 +819,7 @@ func usage() {
   %s draft [-name NAME] [-project PROJECT] [-output DIRECTORY] INTENT
   %s validate [directory]
   %s deploy [-api URL] [-idempotency-key KEY] [-wait=true] [directory]
-  %s deployment get|cancel|retry DEPLOYMENT_ID
+  %s deployment get|cancel|retry DEPLOYMENT_ID [-strand-approvals]
   %s rollback AUTOMATION_ID REVISION_ID
   %s retention plan|get|apply [PLAN_ID]
   %s secret list|get|set|delete [NAME]

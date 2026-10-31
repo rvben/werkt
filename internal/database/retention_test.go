@@ -100,7 +100,7 @@ func TestRetentionLifecycleIntegration(t *testing.T) {
 	if detached, err := store.DetachRetentionItem(ctx, domain.RetentionKindSource, sourcePath); err != nil || !detached {
 		t.Fatalf("terminal source detached=%v err=%v", detached, err)
 	}
-	if _, _, err := store.RetryDeployment(ctx, deployment.ID, "dep_retry", "retry-retained-source", "agent:test"); !errors.Is(err, ErrDeploymentSourceUnavailable) {
+	if _, _, err := store.RetryDeployment(ctx, deployment.ID, "dep_retry", "retry-retained-source", "agent:test", false); !errors.Is(err, ErrDeploymentSourceUnavailable) {
 		t.Fatalf("retry after retention error = %v", err)
 	}
 

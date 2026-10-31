@@ -84,7 +84,7 @@ func TestRetentionManagerRevalidatesPlanBeforeDeleting(t *testing.T) {
 
 	// Both resources become protected after the dry run: a retry starts using
 	// the shared source and rollback makes the inactive artifact active.
-	if _, created, err := store.RetryDeployment(ctx, "dep_protect", "dep_retry", "retry-after-plan", "agent:repair"); err != nil || !created {
+	if _, created, err := store.RetryDeployment(ctx, "dep_protect", "dep_retry", "retry-after-plan", "agent:repair", false); err != nil || !created {
 		t.Fatalf("retry created=%v err=%v", created, err)
 	}
 	if changed, err := store.RollbackAutomation(ctx, manifest.Metadata.Name, inactiveRevision, "agent:operator"); err != nil || !changed {

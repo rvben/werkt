@@ -81,6 +81,31 @@ func TestCreateDeploymentDoesNotCloseCallerReader(t *testing.T) {
 	}
 }
 
+func TestRetryDeploymentSendsTheStrandApprovalsDecisionOnlyWhenMade(t *testing.T) {
+	var headers []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		values, present := request.Header["X-Werkt-Strand-Approvals"]
+		if !present {
+			values = []string{"<absent>"}
+		}
+		headers = append(headers, strings.Join(values, ","))
+		_ = json.NewEncoder(response).Encode(map[string]any{"deployment": domain.Deployment{ID: "dep_retry"}, "created": true})
+	}))
+	defer server.Close()
+	client, err := New(server.URL, "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, strand := range []bool{false, true} {
+		if _, _, err := client.RetryDeployment(context.Background(), "dep_failed", "retry-key", "cli", strand); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(headers) != 2 || headers[0] != "<absent>" || headers[1] != "true" {
+		t.Fatalf("strand headers=%q, want [<absent> true]", headers)
+	}
+}
+
 func TestRetentionClientPreservesPlanThenApplyBoundary(t *testing.T) {
 	var planned domain.RetentionPolicy
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {

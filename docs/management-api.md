@@ -104,6 +104,20 @@ werkt deployment get dep_...
 
 `POST /api/v1/deployments/{id}/cancel` is safe only for nonterminal work. `POST /api/v1/deployments/{id}/retry` requires `Idempotency-Key`, returns a new deployment linked by `retryOf`, and rejects successful or active jobs. A pruned source returns `409 Conflict` rather than silently accepting a retry that cannot run.
 
+### Deployments and pending approvals
+
+An approval can be answered only while the revision that opened it is active (see [Approvals](#approvals)), so activating a new revision would leave every pending approval unanswerable until it expires. Activation therefore refuses while the automation has a pending, unexpired approval on its active revision: the deployment fails, and its `error` names each approval with its title and expiry. Redeploying the active revision (unchanged content) is never refused, and resolved or expired approvals never block.
+
+Answer the approvals and retry, or decide they can be abandoned and retry with the override:
+
+```bash
+werkt deployment retry dep_... -strand-approvals
+```
+
+The CLI flag sends `X-Werkt-Strand-Approvals: true` on `POST /api/v1/deployments/{id}/retry`; the header accepts only `true` or `false`, and anything else returns `400`. The override is recorded on the deployment as `strandApprovals` and, when it strands anything, in the `automation.deployed` audit event as `strandedApprovals`. An idempotency key belongs to one answer: reusing a key with the other value returns `409 idempotency_conflict`, which is why the CLI's default key for an override retry is `retry-ID-strand`.
+
+Rollback is not guarded: it is the recovery path and must not be blocked by the requests it may strand. An approval requested by a run that finishes after the activation is opened on the revision that run started on, so it is unanswerable from the start; drain running work before deploying when that matters.
+
 Package intake is streamed and bounded. Werkt rejects traversal paths, links, special files, duplicate case-insensitive names, the reserved `.werkt` metadata directory, excessive entries, and compressed or expanded bodies over the configured limits before any build runs. A Husker manifest may request exact versions through `runtime.tools`, or use `runtime.image` and `runtime.buildImage` as digest-pinned OCI escape hatches. Tools and image fields are mutually exclusive.
 
 ## Retention plans
@@ -176,7 +190,9 @@ the request, atomically records actor attribution and the decision, and queues
 an `approval` continuation pinned to the reviewed revision. A resolved or
 expired request, or an automation whose active revision changed during review,
 returns `409` without queueing work. An idempotent replay returns the original
-decision and run.
+decision and run. A deployment that would change the active revision while an
+approval is pending is refused for this reason; see
+[Deployments and pending approvals](#deployments-and-pending-approvals).
 
 ## Runs and audit history
 

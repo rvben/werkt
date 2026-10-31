@@ -70,7 +70,7 @@ func TestDeploymentReplayFollowsRetryIntegration(t *testing.T) {
 		t.Fatalf("unretried replay=%#v", got)
 	}
 
-	firstRetry, created, err := store.RetryDeployment(ctx, original.ID, "dep_retry_first", "retry-first", "agent:operator")
+	firstRetry, created, err := store.RetryDeployment(ctx, original.ID, "dep_retry_first", "retry-first", "agent:operator", false)
 	if err != nil || !created {
 		t.Fatalf("first retry=%#v created=%v err=%v", firstRetry, created, err)
 	}
@@ -84,7 +84,7 @@ func TestDeploymentReplayFollowsRetryIntegration(t *testing.T) {
 
 	// A retry of the retry is still the same package: the chain is followed to
 	// its end, not just one link.
-	secondRetry, created, err := store.RetryDeployment(ctx, firstRetry.ID, "dep_retry_second", "retry-second", "agent:operator")
+	secondRetry, created, err := store.RetryDeployment(ctx, firstRetry.ID, "dep_retry_second", "retry-second", "agent:operator", false)
 	if err != nil || !created || secondRetry.RetryOf != firstRetry.ID {
 		t.Fatalf("second retry=%#v created=%v err=%v", secondRetry, created, err)
 	}
@@ -115,7 +115,7 @@ func TestDeploymentReplayFollowsRetryIntegration(t *testing.T) {
 	}
 
 	// A later retry that was abandoned does not hide the one that succeeded.
-	abandoned, created, err := store.RetryDeployment(ctx, original.ID, "dep_retry_abandoned", "retry-abandoned", "agent:operator")
+	abandoned, created, err := store.RetryDeployment(ctx, original.ID, "dep_retry_abandoned", "retry-abandoned", "agent:operator", false)
 	if err != nil || !created {
 		t.Fatalf("abandoned retry=%#v created=%v err=%v", abandoned, created, err)
 	}

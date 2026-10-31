@@ -51,7 +51,91 @@ var (
 	ErrApprovalExpired               = errors.New("approval has expired")
 	ErrApprovalInvalidResponse       = errors.New("approval response is invalid")
 	ErrNotificationLeaseLost         = errors.New("notification delivery lease ownership was lost")
+	ErrPendingApprovals              = errors.New("automation has pending approvals that a new revision would strand")
 )
+
+// PendingApproval names an approval that activating a new revision would make
+// unanswerable.
+type PendingApproval struct {
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+// PendingApprovalsError refuses an activation that would strand approvals. An
+// approval is answered only while the revision that opened it is active, so a
+// new active revision leaves each one pending until it expires.
+type PendingApprovalsError struct {
+	AutomationID   string
+	ActiveRevision string
+	NewRevision    string
+	Approvals      []PendingApproval
+}
+
+func (e *PendingApprovalsError) Error() string {
+	names := make([]string, 0, len(e.Approvals))
+	for _, approval := range e.Approvals {
+		names = append(names, fmt.Sprintf("%s (%q, expires %s)", approval.ID, approval.Title, approval.ExpiresAt.UTC().Format(time.RFC3339)))
+	}
+	return fmt.Sprintf(
+		"%s has %d pending approval(s) on %s that activating %s would make unanswerable: %s; answer them and retry the deployment, or retry it with strand approvals set to activate anyway",
+		e.AutomationID, len(e.Approvals), e.ActiveRevision, e.NewRevision, strings.Join(names, ", "),
+	)
+}
+
+func (e *PendingApprovalsError) Is(target error) bool { return target == ErrPendingApprovals }
+
+// guardPendingApprovals refuses to replace the active revision while approvals
+// opened on it are still answerable, unless the deployment records the
+// operator's decision to strand them. Redeploying the active revision changes
+// nothing an approval depends on and always passes. The automation row is
+// locked so a run cannot open a new approval between this check and the
+// activation; CompleteRun takes the matching shared lock. It returns the IDs of
+// approvals the deployment strands, for the audit record.
+func guardPendingApprovals(ctx context.Context, tx pgx.Tx, automationID, revisionID, deploymentID string) ([]string, error) {
+	var active string
+	err := tx.QueryRow(ctx, `SELECT COALESCE(active_revision_id, '') FROM automations WHERE id = $1 FOR UPDATE`, automationID).Scan(&active)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lock automation: %w", err)
+	}
+	if active == "" || active == revisionID {
+		return nil, nil
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT id, title, expires_at FROM approvals
+		WHERE automation_id = $1 AND revision_id = $2 AND status = 'pending' AND expires_at > now()
+		ORDER BY created_at, id`, automationID, active)
+	if err != nil {
+		return nil, fmt.Errorf("list pending approvals: %w", err)
+	}
+	pending, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (PendingApproval, error) {
+		var value PendingApproval
+		return value, row.Scan(&value.ID, &value.Title, &value.ExpiresAt)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list pending approvals: %w", err)
+	}
+	if len(pending) == 0 {
+		return nil, nil
+	}
+	strand := false
+	if deploymentID != "" {
+		if err := tx.QueryRow(ctx, `SELECT strand_approvals FROM deployments WHERE id = $1`, deploymentID).Scan(&strand); err != nil {
+			return nil, fmt.Errorf("read deployment approval override: %w", err)
+		}
+	}
+	if !strand {
+		return nil, &PendingApprovalsError{AutomationID: automationID, ActiveRevision: active, NewRevision: revisionID, Approvals: pending}
+	}
+	ids := make([]string, 0, len(pending))
+	for _, approval := range pending {
+		ids = append(ids, approval.ID)
+	}
+	return ids, nil
+}
 
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
@@ -280,6 +364,11 @@ func (s *Store) deploy(ctx context.Context, value domain.Manifest, contentHash, 
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	stranded, err := guardPendingApprovals(ctx, tx, value.Metadata.Name, revisionID, deploymentID)
+	if err != nil {
+		return "", err
+	}
+
 	_, err = tx.Exec(ctx, `
 		INSERT INTO automations (id, project, folder, description, labels)
 		VALUES ($1, $2, $3, $4, $5)
@@ -314,12 +403,16 @@ func (s *Store) deploy(ctx context.Context, value domain.Manifest, contentHash, 
 	if _, err := tx.Exec(ctx, `UPDATE automations SET active_revision_id = $2, updated_at = now() WHERE id = $1`, value.Metadata.Name, revisionID); err != nil {
 		return "", fmt.Errorf("activate revision: %w", err)
 	}
-	if err := insertAuditEvent(ctx, tx, "automation.deployed", value.Metadata.Name, actor, map[string]any{
+	deployedDetails := map[string]any{
 		"revisionId":   revisionID,
 		"contentHash":  contentHash,
 		"deploymentId": deploymentID,
 		"provenance":   provenanceAuditDetails(provenance),
-	}); err != nil {
+	}
+	if len(stranded) > 0 {
+		deployedDetails["strandedApprovals"] = stranded
+	}
+	if err := insertAuditEvent(ctx, tx, "automation.deployed", value.Metadata.Name, actor, deployedDetails); err != nil {
 		return "", fmt.Errorf("audit deployment: %w", err)
 	}
 	if deploymentID != "" {
@@ -796,6 +889,12 @@ func (s *Store) CompleteRun(ctx context.Context, run domain.RunnableRun, workerI
 		actions, err := json.Marshal(control.Approval.Actions)
 		if err != nil {
 			return err
+		}
+		// A deployment holds the automation row exclusively while it checks for
+		// pending approvals and activates, so this lock keeps a new approval
+		// from landing between that check and the activation.
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM automations WHERE id = $1 FOR SHARE`, run.AutomationID); err != nil {
+			return fmt.Errorf("lock automation for approval: %w", err)
 		}
 		command, err := tx.Exec(ctx, `
 			INSERT INTO approvals (id, automation_id, revision_id, requested_by_run_id,
@@ -1426,7 +1525,7 @@ func (s *Store) liveRetryOf(ctx context.Context, deploymentID string) (domain.De
 		)
 		SELECT d.id, d.status, d.automation_id, d.package_digest, d.content_digest, d.content_hash,
 			COALESCE(d.revision_id, ''), COALESCE(d.retry_of, ''), d.actor, d.error, d.provenance,
-			d.created_at, d.updated_at, d.started_at, d.finished_at, d.cancel_requested_at
+			d.created_at, d.updated_at, d.started_at, d.finished_at, d.cancel_requested_at, d.strand_approvals
 		FROM deployments d JOIN chain c ON d.id = c.id
 		WHERE d.status NOT IN ($2, $3)
 		ORDER BY (d.status = $4) DESC, d.created_at DESC, d.id DESC
@@ -1482,7 +1581,7 @@ func (s *Store) ListDeploymentsFiltered(ctx context.Context, automationID, statu
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, status, automation_id, package_digest, content_digest, content_hash,
 			COALESCE(revision_id, ''), COALESCE(retry_of, ''), actor, error, provenance,
-			created_at, updated_at, started_at, finished_at, cancel_requested_at
+			created_at, updated_at, started_at, finished_at, cancel_requested_at, strand_approvals
 		FROM deployments
 		WHERE ($1 = '' OR automation_id = $1) AND ($2 = '' OR status = $2)
 		ORDER BY created_at DESC, id DESC LIMIT $3`, automationID, status, limit)
@@ -1508,7 +1607,7 @@ func (s *Store) ListDeploymentsPage(ctx context.Context, automationID, status st
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, status, automation_id, package_digest, content_digest, content_hash,
 			COALESCE(revision_id, ''), COALESCE(retry_of, ''), actor, error, provenance,
-			created_at, updated_at, started_at, finished_at, cancel_requested_at
+			created_at, updated_at, started_at, finished_at, cancel_requested_at, strand_approvals
 		FROM deployments
 		WHERE ($1 = '' OR automation_id = $1) AND ($2 = '' OR status = $2)
 			AND ($3 = '' OR (created_at, id) < ($4, $3))
@@ -1533,7 +1632,7 @@ func (s *Store) GetDeployment(ctx context.Context, deploymentID string) (domain.
 	err := scanDeployment(s.pool.QueryRow(ctx, `
 		SELECT id, status, automation_id, package_digest, content_digest, content_hash,
 			COALESCE(revision_id, ''), COALESCE(retry_of, ''), actor, error, provenance,
-			created_at, updated_at, started_at, finished_at, cancel_requested_at
+			created_at, updated_at, started_at, finished_at, cancel_requested_at, strand_approvals
 		FROM deployments WHERE id = $1`, deploymentID), &value)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Deployment{}, ErrDeploymentNotFound
@@ -1564,7 +1663,7 @@ func (s *Store) getDeploymentByIdempotencyKey(ctx context.Context, idempotencyKe
 	err := scanDeployment(s.pool.QueryRow(ctx, `
 		SELECT id, status, automation_id, package_digest, content_digest, content_hash,
 			COALESCE(revision_id, ''), COALESCE(retry_of, ''), actor, error, provenance,
-			created_at, updated_at, started_at, finished_at, cancel_requested_at
+			created_at, updated_at, started_at, finished_at, cancel_requested_at, strand_approvals
 		FROM deployments WHERE idempotency_key = $1`, idempotencyKey), &value)
 	return value, err
 }
@@ -1590,13 +1689,13 @@ func (s *Store) AcquireDeployment(ctx context.Context, workerID string, leaseDur
 		)
 		SELECT id, status, automation_id, package_digest, content_digest, content_hash,
 			COALESCE(revision_id, ''), COALESCE(retry_of, ''), actor, error, provenance,
-			created_at, updated_at, started_at, finished_at, cancel_requested_at,
+			created_at, updated_at, started_at, finished_at, cancel_requested_at, strand_approvals,
 			source_path
 		FROM claimed`, workerID, leaseDuration.String(), domain.DeploymentQueued,
 		domain.DeploymentValidating, domain.DeploymentBuilding, domain.DeploymentChecking, domain.DeploymentActivating).Scan(
 		&value.ID, &value.Status, &value.AutomationID, &value.PackageDigest, &value.ContentDigest, &value.ContentHash,
 		&value.RevisionID, &value.RetryOf, &value.Actor, &value.Error, &provenanceJSON, &value.CreatedAt, &value.UpdatedAt,
-		&value.StartedAt, &value.FinishedAt, &value.CancelRequestedAt, &value.SourcePath)
+		&value.StartedAt, &value.FinishedAt, &value.CancelRequestedAt, &value.StrandApprovals, &value.SourcePath)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -1824,9 +1923,12 @@ func (s *Store) CompleteDeploymentCancellation(ctx context.Context, deploymentID
 	return tx.Commit(ctx)
 }
 
-func (s *Store) RetryDeployment(ctx context.Context, originalID, deploymentID, idempotencyKey, actor string) (domain.Deployment, bool, error) {
+// RetryDeployment queues another attempt at a failed or cancelled deployment.
+// strandApprovals records the operator's decision to activate even though
+// pending approvals on the active revision would become unanswerable.
+func (s *Store) RetryDeployment(ctx context.Context, originalID, deploymentID, idempotencyKey, actor string, strandApprovals bool) (domain.Deployment, bool, error) {
 	if existing, err := s.getDeploymentByIdempotencyKey(ctx, idempotencyKey); err == nil {
-		if existing.RetryOf != originalID {
+		if existing.RetryOf != originalID || existing.StrandApprovals != strandApprovals {
 			return domain.Deployment{}, false, ErrDeploymentIdempotencyConflict
 		}
 		return existing, false, nil
@@ -1850,13 +1952,13 @@ func (s *Store) RetryDeployment(ctx context.Context, originalID, deploymentID, i
 		return domain.Deployment{}, false, ErrDeploymentSourceUnavailable
 	}
 	command, err := s.pool.Exec(ctx, `
-		INSERT INTO deployments (id, idempotency_key, package_digest, content_digest, source_path, status, actor, retry_of)
-		SELECT $2, $3, package_digest, content_digest, source_path, $4, $5, id
+		INSERT INTO deployments (id, idempotency_key, package_digest, content_digest, source_path, status, actor, retry_of, strand_approvals)
+		SELECT $2, $3, package_digest, content_digest, source_path, $4, $5, id, $8
 		FROM deployments
 		WHERE id = $1 AND status IN ($6, $7) AND source_path <> ''
 		ON CONFLICT (idempotency_key) DO NOTHING`,
 		originalID, deploymentID, idempotencyKey, domain.DeploymentQueued, actor,
-		domain.DeploymentFailed, domain.DeploymentCancelled)
+		domain.DeploymentFailed, domain.DeploymentCancelled, strandApprovals)
 	if err != nil {
 		return domain.Deployment{}, false, err
 	}
@@ -1864,7 +1966,7 @@ func (s *Store) RetryDeployment(ctx context.Context, originalID, deploymentID, i
 	if err != nil {
 		return domain.Deployment{}, false, err
 	}
-	if value.RetryOf != originalID {
+	if value.RetryOf != originalID || value.StrandApprovals != strandApprovals {
 		return domain.Deployment{}, false, ErrDeploymentIdempotencyConflict
 	}
 	return value, command.RowsAffected() == 1, nil
@@ -1918,7 +2020,7 @@ func scanDeployment(row rowScanner, value *domain.Deployment) error {
 	if err := row.Scan(&value.ID, &value.Status, &value.AutomationID, &value.PackageDigest,
 		&value.ContentDigest, &value.ContentHash, &value.RevisionID, &value.RetryOf, &value.Actor, &value.Error,
 		&provenanceJSON, &value.CreatedAt, &value.UpdatedAt, &value.StartedAt, &value.FinishedAt,
-		&value.CancelRequestedAt); err != nil {
+		&value.CancelRequestedAt, &value.StrandApprovals); err != nil {
 		return err
 	}
 	return setDeploymentProvenance(value, provenanceJSON)

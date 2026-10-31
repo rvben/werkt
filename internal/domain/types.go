@@ -365,6 +365,9 @@ type Deployment struct {
 	StartedAt         *time.Time          `json:"startedAt,omitempty"`
 	FinishedAt        *time.Time          `json:"finishedAt,omitempty"`
 	CancelRequestedAt *time.Time          `json:"cancelRequestedAt,omitempty"`
+	// StrandApprovals records that the operator chose to activate this
+	// deployment even though pending approvals would become unanswerable.
+	StrandApprovals bool `json:"strandApprovals,omitempty"`
 }
 
 type RunnableDeployment struct {

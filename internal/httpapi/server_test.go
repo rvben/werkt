@@ -279,11 +279,11 @@ func (s *fakeStore) RequestDeploymentCancellation(_ context.Context, deploymentI
 	return domain.Deployment{ID: deploymentID, Status: domain.DeploymentCancelled}, nil
 }
 
-func (s *fakeStore) RetryDeployment(_ context.Context, originalID, deploymentID, _ string, actor string) (domain.Deployment, bool, error) {
+func (s *fakeStore) RetryDeployment(_ context.Context, originalID, deploymentID, _ string, actor string, strandApprovals bool) (domain.Deployment, bool, error) {
 	if originalID == "missing" {
 		return domain.Deployment{}, false, database.ErrDeploymentNotFound
 	}
-	return domain.Deployment{ID: deploymentID, RetryOf: originalID, Status: domain.DeploymentQueued, Actor: actor}, true, nil
+	return domain.Deployment{ID: deploymentID, RetryOf: originalID, Status: domain.DeploymentQueued, Actor: actor, StrandApprovals: strandApprovals}, true, nil
 }
 
 type fakeDeploymentIntake struct {
@@ -975,8 +975,22 @@ func TestDeploymentLifecycleMutationsAndRollbackAreAgentAccessible(t *testing.T)
 	request.Header.Set("X-Werkt-Actor", "agent:repair")
 	response = httptest.NewRecorder()
 	server.server.Handler.ServeHTTP(response, request)
-	if response.Code != http.StatusAccepted || !strings.Contains(response.Body.String(), `"retryOf":"dep_failed"`) {
+	if response.Code != http.StatusAccepted || !strings.Contains(response.Body.String(), `"retryOf":"dep_failed"`) ||
+		strings.Contains(response.Body.String(), `"strandApprovals"`) {
 		t.Fatalf("retry status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	for header, want := range map[string]int{"true": http.StatusAccepted, "false": http.StatusAccepted, "yes": http.StatusBadRequest, "1": http.StatusBadRequest} {
+		request = httptest.NewRequest(http.MethodPost, "/api/v1/deployments/dep_failed/retry", nil)
+		request.Header.Set("Authorization", "Bearer management-secret")
+		request.Header.Set("Idempotency-Key", "repair-strand-"+header)
+		request.Header.Set("X-Werkt-Strand-Approvals", header)
+		response = httptest.NewRecorder()
+		server.server.Handler.ServeHTTP(response, request)
+		stranded := strings.Contains(response.Body.String(), `"strandApprovals":true`)
+		if response.Code != want || stranded != (header == "true") {
+			t.Fatalf("retry with strand header %q status=%d body=%s, want %d", header, response.Code, response.Body.String(), want)
+		}
 	}
 
 	request = httptest.NewRequest(http.MethodPost, "/api/v1/automations/example/rollback", strings.NewReader(`{"revisionId":"rev_previous"}`))

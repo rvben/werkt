@@ -88,13 +88,19 @@ func (c *Client) CancelDeployment(ctx context.Context, deploymentID, actor strin
 	return value, nil
 }
 
-func (c *Client) RetryDeployment(ctx context.Context, deploymentID, idempotencyKey, actor string) (domain.Deployment, bool, error) {
+// RetryDeployment queues another attempt at a failed or cancelled deployment.
+// strandApprovals activates it even when pending approvals on the active
+// revision would become unanswerable.
+func (c *Client) RetryDeployment(ctx context.Context, deploymentID, idempotencyKey, actor string, strandApprovals bool) (domain.Deployment, bool, error) {
 	request, err := c.request(ctx, http.MethodPost, "/api/v1/deployments/"+url.PathEscape(deploymentID)+"/retry", nil)
 	if err != nil {
 		return domain.Deployment{}, false, err
 	}
 	request.Header.Set("Idempotency-Key", idempotencyKey)
 	request.Header.Set("X-Werkt-Actor", actor)
+	if strandApprovals {
+		request.Header.Set("X-Werkt-Strand-Approvals", "true")
+	}
 	var response struct {
 		Deployment domain.Deployment `json:"deployment"`
 		Created    bool              `json:"created"`
