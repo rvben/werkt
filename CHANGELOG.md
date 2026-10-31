@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.3](https://github.com/rvben/werkt/compare/v0.6.2...v0.6.3) - 2026-10-31
+
+### Fixed
+
+- **deployments**: refuse to activate a revision that strands pending approvals ([ce3ede2](https://github.com/rvben/werkt/commit/ce3ede2291d0dafaadf219d2f8ce33714bf6d253))
+
 ## [0.6.2](https://github.com/rvben/werkt/compare/v0.6.1...v0.6.2) - 2026-10-12
 
 ### Added
