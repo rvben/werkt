@@ -244,12 +244,16 @@ type RunControl struct {
 
 // NotificationRequest describes an operator-facing message without exposing a
 // delivery provider or its credentials to automation code. Key is idempotent
-// within a run; Werkt supplies the run URL, routing, retries, and audit trail.
+// within a run; Werkt supplies routing, retries, and audit trail. The message
+// opens the run unless the automation names where the operator should go
+// instead, such as the record it just changed.
 type NotificationRequest struct {
 	Key      string `json:"key"`
 	Title    string `json:"title"`
 	Body     string `json:"body"`
 	Priority string `json:"priority,omitempty"`
+	URL      string `json:"url,omitempty"`
+	URLTitle string `json:"urlTitle,omitempty"`
 }
 
 type DeferredRunRequest struct {

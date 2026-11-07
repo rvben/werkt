@@ -156,7 +156,7 @@ func telegramRequest(ctx context.Context, destination Destination, message Messa
 		"link_preview_options": map[string]bool{"is_disabled": true},
 	}
 	if message.URL != "" {
-		body["reply_markup"] = map[string]any{"inline_keyboard": [][]map[string]string{{{"text": "Open in Werkt", "url": message.URL}}}}
+		body["reply_markup"] = map[string]any{"inline_keyboard": [][]map[string]string{{{"text": message.LinkLabel(), "url": message.URL}}}}
 	}
 	encoded, _ := json.Marshal(body)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(server, "/")+"/bot"+url.PathEscape(token)+"/sendMessage", bytes.NewReader(encoded))
@@ -208,7 +208,7 @@ func pushoverRequest(ctx context.Context, destination Destination, message Messa
 	}
 	if message.URL != "" {
 		values.Set("url", message.URL)
-		values.Set("url_title", "Open in Werkt")
+		values.Set("url_title", message.LinkLabel())
 	}
 	if destination.Device != "" {
 		values.Set("device", destination.Device)

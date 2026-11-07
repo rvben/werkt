@@ -923,10 +923,17 @@ func (s *Store) CompleteRun(ctx context.Context, run domain.RunnableRun, workerI
 	}
 	for _, notification := range control.Notifications {
 		subjectID := run.ID + ":" + notification.Key
-		if err := enqueueNotificationEvent(ctx, tx, "automation.notification", run.AutomationID, subjectID, map[string]any{
+		payload := map[string]any{
 			"runId": run.ID, "key": notification.Key, "title": notification.Title,
 			"body": notification.Body, "priority": notification.Priority,
-		}); err != nil {
+		}
+		if notification.URL != "" {
+			payload["url"] = notification.URL
+		}
+		if notification.URLTitle != "" {
+			payload["urlTitle"] = notification.URLTitle
+		}
+		if err := enqueueNotificationEvent(ctx, tx, "automation.notification", run.AutomationID, subjectID, payload); err != nil {
 			return err
 		}
 		if err := insertAuditEvent(ctx, tx, "notification.requested", run.AutomationID, "run:"+run.ID, map[string]any{

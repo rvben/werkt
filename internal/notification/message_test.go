@@ -54,6 +54,35 @@ func TestRenderAutomationNotificationUsesRunLinkAndDeclaredPriority(t *testing.T
 	}
 }
 
+func TestRenderAutomationNotificationOpensTheLinkTheAutomationNamed(t *testing.T) {
+	payload := json.RawMessage(`{"runId":"run_42","title":"Sermon published","body":"Row 12.","url":"https://docs.example/sheet#gid=0&range=A12:D12","urlTitle":"Edit the archive row"}`)
+	message, err := Render("automation.notification", "sermon-onliner", "run_42:published", payload, "https://werkt.example/", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.URL != "https://docs.example/sheet#gid=0&range=A12:D12" || message.LinkLabel() != "Edit the archive row" {
+		t.Fatalf("message = %#v", message)
+	}
+}
+
+func TestRenderAutomationNotificationFallsBackToTheRunForALinkThatDoesNotPass(t *testing.T) {
+	for _, link := range []string{
+		"http://docs.example/sheet",
+		"https://operator@docs.example/sheet",
+		"javascript:alert(1)",
+		"/relative/path",
+	} {
+		encoded, _ := json.Marshal(map[string]string{"runId": "run_42", "title": "T", "body": "B", "url": link, "urlTitle": "Edit"})
+		message, err := Render("automation.notification", "sermon-onliner", "run_42:k", encoded, "https://werkt.example/", time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if message.URL != "https://werkt.example/app/?run=run_42&view=runs" || message.LinkLabel() != "Open in Werkt" {
+			t.Fatalf("link %q rendered as %#v", link, message)
+		}
+	}
+}
+
 func TestRenderRunFailureDoesNotExposeRuntimeError(t *testing.T) {
 	payload := json.RawMessage(`{"runId":"run_1","attempts":3,"error":"secret should never be here"}`)
 	message, err := Render("run.failed", "backup", "run_1", payload, "https://werkt.example", time.Now())

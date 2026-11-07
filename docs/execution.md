@@ -121,6 +121,17 @@ the outcome:
 {"notifications":[{"key":"recording.started","title":"Recording started","body":"The Sunday service recording has started.","priority":"default"}]}
 ```
 
+A message opens its run unless the automation names a better place: `url` is
+an absolute HTTPS link without credentials (at most 2048 bytes), and the
+optional `urlTitle` (at most 40 characters) labels it where the provider shows
+a button. Use it for the record the run just changed, so the operator lands
+where a correction is made rather than in a log. Werkt checks the link again
+when it renders the message and falls back to the run for one that fails.
+
+```json
+{"notifications":[{"key":"sermon.published","title":"Sermon published","body":"Archive row 12 now holds this sermon.","url":"https://docs.google.com/spreadsheets/d/EXAMPLE/edit#gid=0&range=A12:D12","urlTitle":"Edit the row"}]}
+```
+
 Control is read and persisted only after a zero exit, in the same database
 transaction as the run result and state commit. A failed attempt therefore
 cannot leave behind a timer, approval, or notification. Malformed data, past or overly distant

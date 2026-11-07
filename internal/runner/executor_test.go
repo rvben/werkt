@@ -245,6 +245,30 @@ func TestValidateRunControlAcceptsBoundedProviderNeutralNotifications(t *testing
 	}
 }
 
+func TestValidateRunControlAcceptsOnlyHTTPSNotificationLinks(t *testing.T) {
+	control, err := validateRunControl([]byte(`{"notifications":[{"key":"published","title":"Published","body":"Row 12.","url":" https://docs.example/sheet#gid=0&range=A12:D12 ","urlTitle":" Edit the archive row "}]}`), time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := control.Notifications[0]; got.URL != "https://docs.example/sheet#gid=0&range=A12:D12" || got.URLTitle != "Edit the archive row" {
+		t.Fatalf("notification = %#v", got)
+	}
+	for _, value := range []string{
+		`{"notifications":[{"key":"m","title":"T","body":"B","url":"http://docs.example/sheet"}]}`,
+		`{"notifications":[{"key":"m","title":"T","body":"B","url":"https://operator@docs.example/"}]}`,
+		`{"notifications":[{"key":"m","title":"T","body":"B","url":"javascript:alert(1)"}]}`,
+		`{"notifications":[{"key":"m","title":"T","body":"B","url":"/app/?view=runs"}]}`,
+		`{"notifications":[{"key":"m","title":"T","body":"B","url":"https://docs.example/a b"}]}`,
+		`{"notifications":[{"key":"m","title":"T","body":"B","urlTitle":"Edit"}]}`,
+		`{"notifications":[{"key":"m","title":"T","body":"B","url":"https://docs.example/","urlTitle":"` + strings.Repeat("x", 41) + `"}]}`,
+		`{"notifications":[{"key":"m","title":"T","body":"B","url":"https://docs.example/` + strings.Repeat("x", 2048) + `"}]}`,
+	} {
+		if _, err := validateRunControl([]byte(value), time.Now().UTC()); err == nil {
+			t.Fatalf("invalid notification link was accepted: %.120s", value)
+		}
+	}
+}
+
 func TestValidateRunControlChargesEscapedImageBytesToTheImageBudget(t *testing.T) {
 	now := time.Now().UTC()
 	image := approvalImage(48 * 1024)

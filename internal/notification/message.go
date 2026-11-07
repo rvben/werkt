@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/rvben/werkt/internal/domain"
 )
 
 type Message struct {
@@ -15,6 +17,7 @@ type Message struct {
 	Title        string     `json:"title"`
 	Body         string     `json:"body"`
 	URL          string     `json:"url"`
+	URLTitle     string     `json:"urlTitle,omitempty"`
 	Priority     string     `json:"priority"`
 	Tags         []string   `json:"tags"`
 	OccurredAt   time.Time  `json:"occurredAt"`
@@ -31,6 +34,8 @@ func Render(eventType, automationID, subjectID string, payload json.RawMessage, 
 		Description string    `json:"description"`
 		Status      string    `json:"status"`
 		ResolvedBy  string    `json:"resolvedBy"`
+		URL         string    `json:"url"`
+		URLTitle    string    `json:"urlTitle"`
 		ExpiresAt   time.Time `json:"expiresAt"`
 		Attempts    int       `json:"attempts"`
 	}
@@ -51,6 +56,14 @@ func Render(eventType, automationID, subjectID string, payload json.RawMessage, 
 		message.Title = fallback(data.Title, automationID)
 		message.Body = compactBody(data.Body, "Open Werkt to inspect this automation run.")
 		message.URL = runURL(publicURL, fallback(data.RunID, subjectID))
+		// The stored payload is checked again: a link that does not pass is
+		// replaced by the run, never delivered as written.
+		if link := strings.TrimSpace(data.URL); link != "" && domain.ValidateNotificationLink(link) == nil {
+			message.URL = link
+			if label := strings.TrimSpace(data.URLTitle); domain.ValidateNotificationLinkLabel(label, link) == nil {
+				message.URLTitle = label
+			}
+		}
 		message.Priority = fallback(data.Priority, "default")
 		message.Tags = []string{"automation"}
 	case "approval.requested":
@@ -94,6 +107,15 @@ func Render(eventType, automationID, subjectID string, payload json.RawMessage, 
 		return Message{}, fmt.Errorf("unsupported notification event %q", eventType)
 	}
 	return message, nil
+}
+
+// LinkLabel is what a provider's link button says: the automation's own label
+// for a link it chose, otherwise the Werkt page the message opens.
+func (m Message) LinkLabel() string {
+	if m.URLTitle != "" {
+		return m.URLTitle
+	}
+	return "Open in Werkt"
 }
 
 func approvalURL(publicURL string) string {

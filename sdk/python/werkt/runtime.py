@@ -129,8 +129,14 @@ class Context:
         title: str,
         body: str,
         priority: str = "default",
+        url: str | None = None,
+        url_title: str | None = None,
     ) -> None:
-        """Queue an operator notification after this run commits successfully."""
+        """Queue an operator notification after this run commits successfully.
+
+        The message opens the run unless `url` names an HTTPS page to open
+        instead, labelled `url_title` where the provider shows a button.
+        """
         if any(message["key"] == key for message in self.control.notifications):
             raise ValueError("notification keys must be unique within a run")
         if len(self.control.notifications) >= 8:
@@ -138,7 +144,14 @@ class Context:
         self._update_control(
             notifications=[
                 *self.control.notifications,
-                {"key": key, "title": title, "body": body, "priority": priority},
+                {
+                    "key": key,
+                    "title": title,
+                    "body": body,
+                    "priority": priority,
+                    **({"url": url} if url else {}),
+                    **({"urlTitle": url_title} if url_title else {}),
+                },
             ]
         )
 

@@ -99,6 +99,22 @@ class SDKTest(unittest.TestCase):
             value = json.loads(control_path.read_text())
             self.assertEqual(value["notifications"][0]["priority"], "default")
             self.assertEqual(value["notifications"][1]["key"], "recording.stopped")
+            self.assertNotIn("url", value["notifications"][0])
+
+    def test_notification_carries_the_link_the_automation_names(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            control_path = Path(directory) / "control.json"
+            context = Context("sermon", "rev_test", "run_test", control_path)
+            context.notify(
+                key="sermon.published",
+                title="Sermon published",
+                body="Archive row 12.",
+                url="https://docs.example/sheet#gid=0&range=A12:D12",
+                url_title="Edit the row",
+            )
+            message = json.loads(control_path.read_text())["notifications"][0]
+            self.assertEqual(message["url"], "https://docs.example/sheet#gid=0&range=A12:D12")
+            self.assertEqual(message["urlTitle"], "Edit the row")
 
     def test_durable_workflow_deduplicates_and_rejects_stale_steps(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

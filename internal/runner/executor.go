@@ -152,6 +152,14 @@ func validateRunControl(value []byte, now time.Time) (domain.RunControl, error) 
 		default:
 			return domain.RunControl{}, errors.New("notification.priority must be low, default, or high")
 		}
+		notification.URL = strings.TrimSpace(notification.URL)
+		notification.URLTitle = strings.TrimSpace(notification.URLTitle)
+		if err := domain.ValidateNotificationLink(notification.URL); err != nil {
+			return domain.RunControl{}, err
+		}
+		if err := domain.ValidateNotificationLinkLabel(notification.URLTitle, notification.URL); err != nil {
+			return domain.RunControl{}, err
+		}
 	}
 	return control, nil
 }

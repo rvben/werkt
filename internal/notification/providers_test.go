@@ -95,6 +95,51 @@ func TestSenderBuildsTelegramAndPushbulletContracts(t *testing.T) {
 	}
 }
 
+func TestSenderLabelsAnAutomationLinkWithItsOwnTitle(t *testing.T) {
+	message := sampleMessage()
+	message.URL = "https://docs.example/sheet#range=A12"
+	message.URLTitle = "Edit the archive row"
+	requests := 0
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		switch requests {
+		case 1:
+			if err := request.ParseForm(); err != nil {
+				t.Fatal(err)
+			}
+			if request.Form.Get("url") != message.URL || request.Form.Get("url_title") != "Edit the archive row" {
+				t.Fatalf("pushover form = %#v", request.Form)
+			}
+			return responseBody(http.StatusOK, `{"status":1,"request":"fixture"}`), nil
+		default:
+			body, _ := io.ReadAll(request.Body)
+			var payload struct {
+				ReplyMarkup struct {
+					InlineKeyboard [][]map[string]string `json:"inline_keyboard"`
+				} `json:"reply_markup"`
+			}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatal(err)
+			}
+			button := payload.ReplyMarkup.InlineKeyboard[0][0]
+			if button["text"] != "Edit the archive row" || button["url"] != message.URL {
+				t.Fatalf("telegram button = %#v", button)
+			}
+			return response(http.StatusOK), nil
+		}
+	})}
+	sender := NewSenderWithClient(staticSecrets{"pushover/app": "app-token", "pushover/user": "user-key", "telegram/token": "123:token"}, client)
+	if _, err := sender.Send(context.Background(), Destination{ID: "phone", Provider: "pushover", AppTokenSecret: "pushover/app", UserKeySecret: "pushover/user"}, message, "delivery_1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.Send(context.Background(), Destination{ID: "chat", Provider: "telegram", Server: "https://telegram.example", BotTokenSecret: "telegram/token", ChatID: "456"}, message, "delivery_2"); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d", requests)
+	}
+}
+
 func TestSenderBuildsPushoverContract(t *testing.T) {
 	expiresAt := time.Now().Add(30 * time.Minute)
 	message := sampleMessage()
