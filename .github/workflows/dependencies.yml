@@ -20,8 +20,8 @@ jobs:
       min-age: 7d
       max-bump: minor
       prepare-command: >-
-        rustup toolchain install stable --profile minimal --component clippy,rustfmt &&
-        rustup default stable
+        rustup toolchain install 1.100.0 --profile minimal --component clippy,rustfmt &&
+        rustup default 1.100.0
       validation-command: >-
         ./scripts/check-workflow-security.sh &&
         go vet ./... &&
