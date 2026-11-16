@@ -90,6 +90,36 @@ class InvestigationTests(unittest.TestCase):
         with self.assertRaises(inv.Unavailable):
             r.lookup("123", 42)
 
+    def _github(self, issue_payload):
+        responses = {"repos/example/project": {"id": 123, "full_name": "example/project"},
+                     "repos/example/project/issues/42": issue_payload}
+        def run(args):
+            if args[-2:] == ["--jq", ".sha"]:
+                return "b" * 40 + "\n"
+            value = responses[args[2]]
+            return value if isinstance(value, str) else json.dumps(value)
+        return run
+
+    def test_github_subject_for_an_issue(self):
+        subject, content = inv.github_subject("example/project", 42, run=self._github(
+            {"number": 42, "title": "t", "body": "b", "state": "open"}))
+        self.assertEqual((subject["repositoryId"], subject["issueNumber"], subject["expectedBaseSha"]), ("123", 42, "b" * 40))
+        self.assertEqual(content, {"title": "t", "body": "b", "state": "open"})
+
+    def test_pull_request_is_not_an_issue_rather_than_unavailable(self):
+        run = self._github({"number": 42, "title": "t", "body": "b", "state": "open", "pull_request": {"url": "u"}})
+        with self.assertRaises(inv.NotAnIssue) as caught:
+            inv.github_subject("example/project", 42, run=run)
+        self.assertNotIsInstance(caught.exception, inv.Unavailable)
+        self.assertIn("example/project#42 is a pull request", str(caught.exception))
+
+    def test_malformed_github_response_stays_unavailable(self):
+        for payload in ("not json", [], {"number": 41, "title": "t", "body": "b", "state": "open"},
+                        {"number": 41, "title": "t", "state": "open", "pull_request": {"url": "u"}},
+                        {"number": 42, "title": "t", "state": "open"}):
+            with self.assertRaises(inv.Unavailable):
+                inv.github_subject("example/project", 42, run=self._github(payload))
+
     def test_registry_pagination_must_be_complete_and_subject_matches(self):
         r = inv.Registry("https://example.com", "fixture")
         for page in ({"status":"none","items":[],"nextCursor":"again"},
