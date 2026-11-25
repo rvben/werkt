@@ -2,8 +2,11 @@ package domain
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 )
+
+var ErrRunnerCapacity = errors.New("runner capacity unavailable")
 
 const (
 	RunQueued    = "queued"

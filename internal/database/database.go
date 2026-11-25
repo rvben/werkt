@@ -942,6 +942,18 @@ func (s *Store) CompleteRun(ctx context.Context, run domain.RunnableRun, workerI
 			return err
 		}
 	}
+	if err := lockRunCapacityIncident(ctx, tx, run.AutomationID); err != nil {
+		return err
+	}
+	recovered, err := tx.Exec(ctx, `DELETE FROM run_capacity_incidents WHERE automation_id = $1`, run.AutomationID)
+	if err != nil {
+		return err
+	}
+	if recovered.RowsAffected() == 1 {
+		if err := insertAuditEvent(ctx, tx, "run.capacity_recovered", run.AutomationID, "run:"+run.ID, map[string]any{"runId": run.ID}); err != nil {
+			return err
+		}
+	}
 	return tx.Commit(ctx)
 }
 
@@ -982,12 +994,17 @@ func validStateObject(value json.RawMessage) bool {
 }
 
 func (s *Store) FailRun(ctx context.Context, run domain.Run, workerID, logs string, runErr error) error {
+	capacity := errors.Is(runErr, domain.ErrRunnerCapacity)
 	status := domain.RunFailed
 	availableAt := time.Now()
-	finishedAt := any(time.Now())
+	finishedAt := any(availableAt)
 	if run.Attempt < run.MaxAttempts {
 		status = domain.RunQueued
-		availableAt = time.Now().Add(retryDelay(run.Attempt))
+		delay := retryDelay(run.Attempt)
+		if capacity {
+			delay = min((2*time.Minute)*time.Duration(1<<min(max(run.Attempt-1, 0), 3)), 10*time.Minute)
+		}
+		availableAt = availableAt.Add(delay)
 		finishedAt = nil
 	}
 	tx, err := s.pool.Begin(ctx)
@@ -1007,18 +1024,37 @@ func (s *Store) FailRun(ctx context.Context, run domain.Run, workerID, logs stri
 		return ErrRunLeaseLost
 	}
 	if status == domain.RunFailed {
-		if err := enqueueNotificationEvent(ctx, tx, "run.failed", run.AutomationID, run.ID, map[string]any{
+		details := map[string]any{
 			"runId": run.ID, "attempts": run.Attempt,
-		}); err != nil {
-			return err
 		}
-		if err := insertAuditEvent(ctx, tx, "run.failed", run.AutomationID, "run:"+run.ID, map[string]any{
-			"runId": run.ID, "attempts": run.Attempt,
-		}); err != nil {
+		notify := true
+		if capacity {
+			details["reason"] = "runner_capacity"
+			if err := lockRunCapacityIncident(ctx, tx, run.AutomationID); err != nil {
+				return err
+			}
+			opened, err := tx.Exec(ctx, `INSERT INTO run_capacity_incidents (automation_id) VALUES ($1) ON CONFLICT DO NOTHING`, run.AutomationID)
+			if err != nil {
+				return err
+			}
+			notify = opened.RowsAffected() == 1
+		}
+		if notify {
+			if err := enqueueNotificationEvent(ctx, tx, "run.failed", run.AutomationID, run.ID, details); err != nil {
+				return err
+			}
+		}
+		if err := insertAuditEvent(ctx, tx, "run.failed", run.AutomationID, "run:"+run.ID, details); err != nil {
 			return err
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+func lockRunCapacityIncident(ctx context.Context, tx pgx.Tx, automationID string) error {
+	// Serialize opening and recovering one incident, including when it has no row yet.
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('run-capacity:' || $1, 0))`, automationID)
+	return err
 }
 
 // ReleaseRun hands a run the worker could not finish back to the queue for

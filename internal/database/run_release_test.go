@@ -98,6 +98,90 @@ func (f runFixture) row(t *testing.T, ctx context.Context) leaseRow {
 	return row
 }
 
+func TestRunnerCapacityDefersAndAlertsUntilSuccessfulRun(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	fixture := newRunFixture(t, ctx, 2)
+	const worker = "capacity-test"
+	acquire := func() *domain.RunnableRun {
+		t.Helper()
+		run, err := fixture.store.AcquireRun(ctx, worker, time.Minute)
+		if err != nil || run == nil {
+			t.Fatalf("acquire run=%#v err=%v", run, err)
+		}
+		return run
+	}
+	run := acquire()
+	revision := run.RevisionID
+	enqueue := func(key string) *domain.RunnableRun {
+		t.Helper()
+		id, created, err := fixture.store.EnqueueManualRun(ctx, "release-example", key, revision, json.RawMessage(`{}`), "agent:test")
+		if err != nil || !created {
+			t.Fatalf("enqueue created=%v err=%v", created, err)
+		}
+		fixture.runID = id
+		return acquire()
+	}
+	fail := func(run *domain.RunnableRun, failure error) {
+		t.Helper()
+		if err := fixture.store.FailRun(ctx, run.Run, worker, "", failure); err != nil {
+			t.Fatal(err)
+		}
+	}
+	makeDue := func() {
+		t.Helper()
+		if _, err := fixture.admin.Exec(ctx, `UPDATE runs SET available_at = now() WHERE id = $1`, fixture.runID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertEvents := func(capacity, other, recovered int) {
+		t.Helper()
+		var gotCapacity, gotOther, gotRecovered int
+		if err := fixture.admin.QueryRow(ctx, `SELECT count(*) FILTER (WHERE payload->>'reason' = 'runner_capacity'),
+			count(*) FILTER (WHERE payload->>'reason' IS NULL) FROM notification_events WHERE event_type = 'run.failed'`).Scan(&gotCapacity, &gotOther); err != nil {
+			t.Fatal(err)
+		}
+		if err := fixture.admin.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE action = 'run.capacity_recovered'`).Scan(&gotRecovered); err != nil {
+			t.Fatal(err)
+		}
+		if gotCapacity != capacity || gotOther != other || gotRecovered != recovered {
+			t.Fatalf("capacity alerts=%d, other alerts=%d, recoveries=%d, want %d, %d, %d", gotCapacity, gotOther, gotRecovered, capacity, other, recovered)
+		}
+	}
+
+	fail(run, domain.ErrRunnerCapacity)
+	if row := fixture.row(t, ctx); row.status != domain.RunQueued || row.availableIn < 115*time.Second || row.availableIn > 2*time.Minute {
+		t.Fatalf("first refused run = %+v, want queued for two minutes", row)
+	}
+	assertEvents(0, 0, 0)
+	makeDue()
+	fail(acquire(), domain.ErrRunnerCapacity)
+	assertEvents(1, 0, 0)
+	fail(enqueue("ongoing"), domain.ErrRunnerCapacity)
+	makeDue()
+	fail(acquire(), domain.ErrRunnerCapacity)
+	assertEvents(1, 0, 0)
+
+	other := errors.New("unrelated error")
+	fail(enqueue("unrelated"), other)
+	if row := fixture.row(t, ctx); row.status != domain.RunQueued || row.availableIn > time.Second {
+		t.Fatalf("regular failure = %+v, want existing one-second retry", row)
+	}
+	makeDue()
+	fail(acquire(), other)
+	assertEvents(1, 1, 0)
+
+	run = enqueue("recovered")
+	if err := fixture.store.CompleteRun(ctx, *run, worker, "", nil, nil, domain.RunControl{}); err != nil {
+		t.Fatal(err)
+	}
+	assertEvents(1, 1, 1)
+	fail(enqueue("new-incident"), domain.ErrRunnerCapacity)
+	makeDue()
+	fail(acquire(), domain.ErrRunnerCapacity)
+	assertEvents(2, 1, 1)
+}
+
 func TestReleaseRunRequeuesTheSameAttemptForImmediatePickup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

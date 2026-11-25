@@ -236,7 +236,7 @@ func (r *HuskerRunner) Execute(parent context.Context, run domain.RunnableRun) (
 		}
 	}
 	network := runtimeNetwork(run.Manifest.Runtime)
-	err = r.createVM(provisionContext, vmName, "werkt/"+run.ID, rootFS, network, run.Manifest.Runtime.Egress, lifetime)
+	err = r.createVM(provisionContext, vmName, "werkt/"+run.ID, rootFS, network, run.Manifest.Runtime.Egress, lifetime, true)
 	if mayOwnVM(err) {
 		defer r.cleanupVM(vmName) //nolint:errcheck // cleanupVM logs its own failure; husker's expiry is the backstop
 	}
@@ -421,7 +421,7 @@ func verifyHuskerImage(image imageResponse, name, reference string) error {
 	return nil
 }
 
-func (r *HuskerRunner) createVM(ctx context.Context, name, owner, rootFS, network string, egress []domain.EgressRule, lifetime time.Duration) error {
+func (r *HuskerRunner) createVM(ctx context.Context, name, owner, rootFS, network string, egress []domain.EgressRule, lifetime time.Duration, deferOnCapacity bool) error {
 	policy := make([]egressRuleRequest, len(egress))
 	for index, rule := range egress {
 		policy[index] = egressRuleRequest{
@@ -441,14 +441,22 @@ func (r *HuskerRunner) createVM(ctx context.Context, name, owner, rootFS, networ
 		ExpiresAfterSecs: durationSeconds(lifetime),
 		Owner:            owner,
 	}
-	return r.doJSON(ctx, http.MethodPost, "/v1/vms", request, http.StatusCreated, nil)
+	return r.sendJSONWithRetries(ctx, http.MethodPost, "/v1/vms", request, http.StatusCreated, nil, deferOnCapacity)
+}
+
+func huskerMemoryRefusal(err error) bool {
+	var apiErr *huskerAPIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusTooManyRequests && apiErr.Kind == "host_memory_reserve"
 }
 
 // mayOwnVM reports whether a VM may exist under the name a create request
 // asked for. A create that failed after reaching husker, or whose response was
-// lost, can still have made the VM, so only a name husker reports as already
-// taken is known not to be ours to delete.
+// lost, can still have made the VM. A capacity refusal happens before VM
+// creation, and an already taken name belongs to another request.
 func mayOwnVM(createErr error) bool {
+	if huskerMemoryRefusal(createErr) {
+		return false
+	}
 	var apiErr *huskerAPIError
 	return !errors.As(createErr, &apiErr) || apiErr.StatusCode != http.StatusConflict || apiErr.Kind != "vm_already_exists"
 }
@@ -613,11 +621,15 @@ func (r *HuskerRunner) ReapPriorAttempts(parent context.Context, run domain.Runn
 
 // doJSON sends one husker API call, retrying it within the caller's deadline
 // when that is safe. Husker rejects a rate-limited request before handling it,
-// so a 429 is retried for every method after the wait husker announces. A
+// so rate limits are retried after the wait husker announces. A
 // dropped connection or an unavailable gateway may hide a request husker
 // already acted on, so those are retried only for GET and DELETE, which can be
 // repeated without effect.
 func (r *HuskerRunner) doJSON(ctx context.Context, method, path string, requestBody any, expectedStatus int, responseBody any) error {
+	return r.sendJSONWithRetries(ctx, method, path, requestBody, expectedStatus, responseBody, false)
+}
+
+func (r *HuskerRunner) sendJSONWithRetries(ctx context.Context, method, path string, requestBody any, expectedStatus int, responseBody any, deferOnCapacity bool) error {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, r.requestCeiling)
@@ -632,6 +644,10 @@ func (r *HuskerRunner) doJSON(ctx context.Context, method, path string, requestB
 	}
 	for attempt := 1; ; attempt++ {
 		err := r.sendJSON(ctx, method, path, encoded, expectedStatus, responseBody)
+		// A scheduled run can wait in the durable queue. Other callers retry here.
+		if deferOnCapacity && huskerMemoryRefusal(err) {
+			return withContextErr(ctx, fmt.Errorf("%w: %w", domain.ErrRunnerCapacity, err))
+		}
 		delay, retry := r.retryDelay(ctx, method, attempt, err)
 		if !retry {
 			return withContextErr(ctx, err)

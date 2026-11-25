@@ -85,7 +85,7 @@ func (r *HuskerRunner) ensureToolImage(parent context.Context, environment *doma
 	}
 	vmName := "werkt-prepare-" + suffix
 	lifetime := timeout + r.cleanupTimeout + guestCommandGrace
-	err = r.createVM(ctx, vmName, "werkt/tools/"+environment.IdentityDigest, environment.BaseImage, "filtered", environment.PreparationEgress, lifetime)
+	err = r.createVM(ctx, vmName, "werkt/tools/"+environment.IdentityDigest, environment.BaseImage, "filtered", environment.PreparationEgress, lifetime, false)
 	if mayOwnVM(err) {
 		defer r.cleanupVM(vmName) //nolint:errcheck // cleanupVM logs its own failure; husker's expiry is the backstop
 	}

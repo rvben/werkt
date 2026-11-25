@@ -427,6 +427,30 @@ func newCreatorRunner(t *testing.T, husker *fakeHusker) *HuskerRunner {
 	return runner
 }
 
+func TestHuskerDefersRunWhenHostMemoryReserveRefusesCreation(t *testing.T) {
+	husker := &fakeHusker{t: t, createStatus: http.StatusTooManyRequests, createKind: "host_memory_reserve"}
+	err := vmCreators["run"](t, newCreatorRunner(t, husker))
+	if !errors.Is(err, domain.ErrRunnerCapacity) {
+		t.Fatalf("run error = %v, want runner capacity refusal", err)
+	}
+	created, deleted := husker.snapshot()
+	if len(created) != 1 || len(deleted) != 0 {
+		t.Fatalf("create requests = %v, deletes = %v, want one refused create and no delete", created, deleted)
+	}
+}
+
+func TestHuskerBuildStillRetriesWhenHostMemoryReserveRefusesCreation(t *testing.T) {
+	husker := &fakeHusker{t: t, createStatus: http.StatusTooManyRequests, createKind: "host_memory_reserve"}
+	err := vmCreators["build"](t, newCreatorRunner(t, husker))
+	if !huskerMemoryRefusal(err) || errors.Is(err, domain.ErrRunnerCapacity) {
+		t.Fatalf("build error = %v, want the original Husker response", err)
+	}
+	created, deleted := husker.snapshot()
+	if len(created) < 2 || len(deleted) != 0 {
+		t.Fatalf("create requests = %v, deletes = %v, want retries and no delete", created, deleted)
+	}
+}
+
 func TestEveryVMCreatorRemovesAVMWhoseCreationResponseWasLost(t *testing.T) {
 	for name, create := range vmCreators {
 		t.Run(name, func(t *testing.T) {
